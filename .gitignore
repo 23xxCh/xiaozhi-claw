@@ -1,0 +1,24 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+*.db
+*.sqlite3
+lan-backend.*.log
+htmlcov/
+.coverage
+
+# ESP-IDF generated output
+firmware/xiaozhi-esp32/build/
+firmware/xiaozhi-esp32/releases/
+firmware/xiaozhi-esp32/managed_components/
+firmware/xiaozhi-esp32/sdkconfig
+firmware/xiaozhi-esp32/sdkconfig.old
+
+# WeChat developer tool output
+miniapp/miniprogram_npm/

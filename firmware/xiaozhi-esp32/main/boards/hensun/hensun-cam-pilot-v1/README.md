@@ -1,0 +1,65 @@
+# Hensun CAM Pilot V1
+
+Commercial software-pilot identity for the seller's ESP32-S3-CAM V2.0
+expansion board. It is derived from the upstream
+`bread-compact-wifi-s3cam` pin map and the seller's v2.2.6 source package.
+
+## Enabled hardware
+
+- ESP32-S3 N16R8
+- digital I2S microphone on GPIO 1/2/42
+- simplex I2S speaker output on GPIO 39/40/41
+- ST7789 240x320 display
+- OV3660 camera using the seller-confirmed pin map
+- boot/chat button on GPIO 0
+- phone-friendly `Xiaozhi-XXXX` hotspot Wi-Fi provisioning
+
+## Original face prototype
+
+The pilot display uses lightweight LVGL vector primitives instead of copied
+bitmap assets. It includes 36 animated states: the original 12-state system and
+conversation baseline, 16 XiaoZhi emotion-protocol variants, and 8 product
+feedback states. Hold the BOOT/chat button for two seconds to run the complete
+43.2-second showcase; the existing single-click chat action is unchanged.
+Serial logs report the average and maximum LVGL face-update cost every 100
+frames so the 20 FPS set can be measured on the actual board.
+
+Camera previews temporarily cover the face and restore it when the preview
+expires. This keeps the camera available while testing the new expression
+system.
+
+The 36 states are connected to local device transitions, network
+notifications, XiaoZhi `llm.emotion`, and `alert.emotion`. See
+[`FACE_EVENT_CONTRACT.md`](FACE_EVENT_CONTRACT.md) for the canonical event
+names, compatibility aliases, hold times, payload examples, and safety
+boundary.
+
+The camera remains initialized and is available through XiaoZhi's camera MCP
+tool. The battery manager, power-save shutdown, GPIO lamp test and GPIO 48
+status LED are deliberately absent from this pilot build. This board has no
+audio codec or reference microphone, so it cannot satisfy the production
+full-duplex AEC gate.
+
+The board has two isolated firmware variants. `hensun-cam-official-v1` uses
+XiaoZhi's official bootstrap and is managed from the XiaoZhi console.
+`hensun-cam-selfhosted-v1` defaults to the reserved `.invalid` domain and must
+receive an approved Hensun bootstrap URL at build time. Their distinct OTA
+identities prevent one channel from silently updating the other.
+
+## Build
+
+Use ESP-IDF 6.0.2:
+
+```bash
+python scripts/build.py hensun/hensun-cam-pilot-v1 \
+  --name hensun-cam-official-v1 \
+  --language zh-CN \
+  --wake-word nihaoxiaozhi
+```
+
+For normal development, use the repository-level `scripts/build_firmware.ps1`
+wrapper because it validates and injects the self-hosted bootstrap URL without
+leaving that URL in the tracked board configuration.
+
+Do not flash `hensun-desk-v1` to this board. That identity targets the
+ESP32-S3-BOX-3 codec and display layout.

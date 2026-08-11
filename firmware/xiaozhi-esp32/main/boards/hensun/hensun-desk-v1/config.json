@@ -1,0 +1,15 @@
+{
+    "manufacturer": "hensun",
+    "type": "hensun-desk-v1",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "hensun-desk-v1",
+            "sdkconfig_append": [
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_SEND_WAKE_WORD_DATA=n",
+                "CONFIG_OTA_URL=\"https://api.hensun.invalid/v1/ota/\""
+            ]
+        }
+    ]
+}
