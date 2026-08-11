@@ -202,6 +202,39 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn('"content_blocked"', self.face_source)
         self.assertIn('"cloud_download"', self.face_source)
 
+    def test_supports_xiaozhi_standard_21_emotions(self):
+        standard_routes = {
+            "happy": "kHappy",
+            "laughing": "kLaughing",
+            "funny": "kFunny",
+            "sad": "kSad",
+            "angry": "kAngry",
+            "crying": "kCrying",
+            "loving": "kLoving",
+            "embarrassed": "kEmbarrassed",
+            "surprised": "kSurprised",
+            "shocked": "kShocked",
+            "thinking": "kThinking",
+            "winking": "kWinking",
+            "cool": "kConfident",
+            "relaxed": "kRelaxed",
+            "delicious": "kDelicious",
+            "kissy": "kLoving",
+            "confident": "kConfident",
+            "sleepy": "kSleepy",
+            "silly": "kSilly",
+            "confused": "kConfused",
+        }
+        for emotion, state in standard_routes.items():
+            self.assertRegex(
+                self.face_source,
+                rf'\{{"{emotion}",\s*HensunFaceState::{state}',
+            )
+            self.assertIn(f"`{emotion}`", self.event_contract)
+
+        self.assertIn('std::strcmp(emotion, "neutral") == 0', self.face_source)
+        self.assertIn("`neutral`", self.event_contract)
+
     def test_face_layer_preserves_camera_preview_and_hides_battery_ui(self):
         self.assertIn("LcdDisplay::SetPreviewImage", self.face_source)
         self.assertIn("preview_active_", self.face_source)

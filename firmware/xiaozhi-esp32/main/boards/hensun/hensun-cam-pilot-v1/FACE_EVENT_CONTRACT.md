@@ -51,6 +51,13 @@ display socket or text-keyword classifier is used.
 | Apology | `apology` | `llm.emotion` or product apology event |
 | Safe block | `safe_block` | Safety layer blocks content or a restricted action |
 
+The XiaoZhi standard 21-name emotion set is fully accepted: `neutral`, `happy`,
+`laughing`, `funny`, `sad`, `angry`, `crying`, `loving`, `embarrassed`,
+`surprised`, `shocked`, `thinking`, `winking`, `cool`, `relaxed`, `delicious`,
+`kissy`, `confident`, `sleepy`, `silly`, and `confused`. `cool` reuses the
+Confident face, `kissy` reuses the Loving face, and `neutral` restores the face
+for the current local device state.
+
 ## Cloud payloads
 
 Conversation emotion:
@@ -82,8 +89,9 @@ Safety block. The backend, not the ESP32, decides whether content is unsafe:
 }
 ```
 
-Supported compatibility aliases include `alarm`, `timer_done`, `reminder_due`,
-`warning`, `cancel`, `cloud_off`, `link`, `download`, `cloud_download`,
-`robot_2`, `content_blocked`, and `safety_block`. Unknown inputs are logged and
-fall back to the current local device state. Every accepted route logs its
-source, input, selected face and hold time for field-test auditing.
+Supported compatibility aliases include `cool`, `kissy`, `alarm`, `timer_done`,
+`reminder_due`, `warning`, `cancel`, `cloud_off`, `link`, `download`,
+`cloud_download`, `robot_2`, `content_blocked`, and `safety_block`. Unknown
+inputs are logged and fall back to the current local device state. Every
+accepted route logs its source, input, selected face and hold time for
+field-test auditing.
