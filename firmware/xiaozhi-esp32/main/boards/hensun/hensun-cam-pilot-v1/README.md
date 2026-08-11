@@ -14,13 +14,16 @@ expansion board. It is derived from the upstream
 - boot/chat button on GPIO 0
 - phone-friendly `Xiaozhi-XXXX` hotspot Wi-Fi provisioning
 
-## Original face prototype
+## Original 60-scene face prototype
 
 The pilot display uses lightweight LVGL vector primitives instead of copied
-bitmap assets. It includes 36 animated states: the original 12-state system and
-conversation baseline, 16 XiaoZhi emotion-protocol variants, and 8 product
-feedback states. Hold the BOOT/chat button for two seconds to run the complete
-43.2-second showcase; the existing single-click chat action is unchanged.
+bitmap assets. The original 12-state conversation baseline has been expanded
+into the 60-scene Hensun product vocabulary. The face is built from reusable
+glowing eyes, angled brows,
+cheeks, curved/open mouths and small status symbols; the HD art masters are not
+stored in firmware. Hold the BOOT/chat button for two seconds to run the
+complete 72-second showcase; the existing single-click chat action is
+unchanged.
 Serial logs report the average and maximum LVGL face-update cost every 100
 frames so the 20 FPS set can be measured on the actual board.
 
@@ -28,11 +31,15 @@ Camera previews temporarily cover the face and restore it when the preview
 expires. This keeps the camera available while testing the new expression
 system.
 
-The 36 states are connected to local device transitions, network
+The 60 scenes are connected to local device transitions, network
 notifications, XiaoZhi `llm.emotion`, and `alert.emotion`. See
 [`FACE_EVENT_CONTRACT.md`](FACE_EVENT_CONTRACT.md) for the canonical event
 names, compatibility aliases, hold times, payload examples, and safety
 boundary.
+
+Charging and battery scenes are reserved for future hardware and can be
+injected in the showcase or by a trusted product event, but this USB-powered
+CAM pilot does not generate battery events locally.
 
 The camera remains initialized and is available through XiaoZhi's camera MCP
 tool. The battery manager, power-save shutdown, GPIO lamp test and GPIO 48
