@@ -22,3 +22,6 @@ firmware/xiaozhi-esp32/sdkconfig.old
 
 # WeChat developer tool output
 miniapp/miniprogram_npm/
+web/node_modules/
+web/.next/
+web/.env.local

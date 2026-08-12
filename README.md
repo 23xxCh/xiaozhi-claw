@@ -15,12 +15,14 @@ plan:
   has two isolated release channels: `hensun-cam-official-v1` for XiaoZhi's
   cloud and `hensun-cam-selfhosted-v1` for Hensun's cloud. `hensun-desk-v1`
   remains the later ESP32-S3-BOX-3 full-duplex hardware gate.
-- A FastAPI modular monolith for factory registration, device bootstrap,
+- A FastAPI control plane for factory registration, device bootstrap,
   atomic account claim, quota, opt-in encrypted summary memory, OTA manifests,
-  audit events, and a XiaoZhi-compatible WebSocket control loop.
-- Development mock providers plus configurable ASR, TTS and OpenAI-compatible
-  LLM adapters. Model credentials stay on the server and are never flashed to
-  the ESP32.
+  audit events, agents, official model presets and staff roles.
+- An independent ASGI realtime gateway for XiaoZhi-compatible WSS, streaming
+  Qwen ASR, DeepSeek SSE, streaming Qwen TTS, abort and expression routing.
+- A responsive Next.js customer console and internal role-aware entry point.
+  Model credentials stay on the server and are never returned to the browser
+  or flashed to the ESP32.
 
 The WeChat mini program, provider-specific non-compatible speech adapters, payment callbacks,
 hardware validation, certification, regulatory filings, and production PKI are
@@ -64,6 +66,19 @@ For the current LAN pilot:
   -BootstrapUrl "http://192.168.5.49:8000/v1/device/xiaozhi-bootstrap"
 ```
 
+Factory provisioning writes each device's one-time credential into NVS after
+the firmware flash. Read the secret from the single-use factory response and
+enter it without placing it in shell history:
+
+```powershell
+$secret = Read-Host "Device secret" -AsSecureString
+.\scripts\flash_device_identity.ps1 -DeviceSecret $secret -Port COM6
+```
+
+The script writes only the 16 KiB NVS partition at `0x9000` and deletes the
+temporary plaintext image after flashing. Run it before customer Wi-Fi setup,
+because writing the factory NVS partition also clears prior Wi-Fi settings.
+
 Production must replace the LAN URLs with public `https://`/`wss://` endpoints.
 API keys belong only in the backend environment; do not put them into firmware,
 web pages or the mini program.
@@ -78,8 +93,33 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python -m uvicorn backend.app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs`. Development login and mock AI are disabled
+In a second terminal, start the realtime gateway:
+
+```powershell
+.\.venv\Scripts\python -m uvicorn backend.realtime.main:app --reload --port 8001
+```
+
+Start the web console:
+
+```powershell
+cd web
+npm install
+Copy-Item .env.example .env.local
+npm run dev
+```
+
+Open `http://127.0.0.1:3000` for the console and
+`http://127.0.0.1:8000/docs` for OpenAPI. Development login and mock AI are disabled
 automatically when `APP_ENV=production`.
+
+Run the database migration before either backend process in production:
+
+```powershell
+.\.venv\Scripts\python -m alembic upgrade head
+```
+
+For an existing pre-Alembic pilot database, back it up first, then run
+`python -m alembic stamp 20260812_00` once before `upgrade head`.
 
 Run the backend checks:
 

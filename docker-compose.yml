@@ -1,3 +1,14 @@
+x-backend-environment: &backend-environment
+  APP_ENV: development
+  DATABASE_URL: mysql+asyncmy://hensun:local-development-only@mysql:3306/hensun_desk
+  ADMIN_API_KEY: development-admin-change-me
+  JWT_SECRET: development-jwt-change-me
+  DEVICE_CREDENTIAL_PEPPER: development-device-pepper-change-me
+  MEMORY_MASTER_KEY: development-memory-key-change-me
+  PROVIDER_MODE: mock
+  DEVICE_WS_URL: ws://127.0.0.1:8001/v1/device/ws
+  CORS_ORIGINS: http://127.0.0.1:3000,http://localhost:3000
+
 services:
   mysql:
     image: mysql:8.4
@@ -16,24 +27,54 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
 
-  api:
+  migrate:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    environment:
-      APP_ENV: development
-      DATABASE_URL: mysql+asyncmy://hensun:local-development-only@mysql:3306/hensun_desk
-      ADMIN_API_KEY: development-admin-change-me
-      JWT_SECRET: development-jwt-change-me
-      DEVICE_CREDENTIAL_PEPPER: development-device-pepper-change-me
-      MEMORY_MASTER_KEY: development-memory-key-change-me
-      PROVIDER_MODE: mock
-    ports:
-      - "8000:8000"
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: *backend-environment
     depends_on:
       mysql:
         condition: service_healthy
 
+  control-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *backend-environment
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  realtime-gateway:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "uvicorn", "backend.realtime.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *backend-environment
+      GATEWAY_ID: gateway-local-1
+    ports:
+      - "8001:8001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        NEXT_PUBLIC_CONTROL_API_URL: http://127.0.0.1:8000
+    environment:
+      NEXT_PUBLIC_CONTROL_API_URL: http://127.0.0.1:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - control-api
+
 volumes:
   mysql-data:
-
