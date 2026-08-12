@@ -3,6 +3,7 @@
 
 #include "display/lcd_display.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -84,6 +85,7 @@ public:
     void SetEmotion(const char* emotion) override;
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
+    void SetSpeechLevel(uint8_t level);
     void StartShowcase();
 
 private:
@@ -91,6 +93,9 @@ private:
 
     void CreateFaceObjects();
     void TickAnimation();
+    void UpdateSpeechEnvelope();
+    void UpdateAmbientMotion();
+    uint32_t NextPseudoRandom();
     void RenderFace();
     void SetFaceStateLocked(HensunFaceState state);
     void ShowTransientStateLocked(HensunFaceState state, uint32_t duration_ms,
@@ -119,6 +124,16 @@ private:
     uint32_t animation_frame_ = 0;
     uint32_t showcase_frame_ = 0;
     uint32_t transient_frames_remaining_ = 0;
+    std::atomic<uint8_t> speech_level_{0};
+    std::atomic<uint32_t> speech_level_updated_ms_{0};
+    uint8_t speech_level_smoothed_ = 0;
+    uint32_t ambient_frame_ = 0;
+    uint32_t pseudo_random_state_ = 0x48A53C1Du;
+    uint32_t next_blink_frame_ = 60;
+    uint32_t next_gaze_frame_ = 40;
+    uint8_t blink_frames_remaining_ = 0;
+    int8_t gaze_target_x_ = 0;
+    int8_t gaze_x_ = 0;
     uint32_t render_samples_ = 0;
     int64_t render_total_us_ = 0;
     int64_t render_max_us_ = 0;

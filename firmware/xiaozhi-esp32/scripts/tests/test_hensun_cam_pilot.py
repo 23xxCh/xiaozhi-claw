@@ -27,6 +27,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.animation_spec = (BOARD / "FACE_ANIMATION_SPEC.md").read_text(
             encoding="utf-8"
         )
+        self.animation_v2_spec = (BOARD / "FACE_ANIMATION_V2_SPEC.md").read_text(
+            encoding="utf-8"
+        )
 
     def test_has_isolated_official_and_selfhosted_variants(self):
         self.assertEqual(self.config["manufacturer"], "hensun")
@@ -293,6 +296,51 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("at most 6 pixels", self.animation_spec)
         self.assertIn("no full-screen or high-frequency", self.animation_spec)
         self.assertIn("average LVGL face update below 8 ms", self.animation_spec)
+
+    def test_face_uses_real_speaker_pcm_for_lip_sync(self):
+        self.assertIn("class HensunAudioCodecSimplex", self.source)
+        self.assertRegex(
+            self.source,
+            r"void\s+OutputData\(std::vector<int16_t>&\s+data\)\s+override",
+        )
+        self.assertIn("kSpeechPcmSampleStride = 8", self.source)
+        self.assertIn("display_->SetSpeechLevel", self.source)
+        self.assertIn("AudioCodec::OutputData(data)", self.source)
+
+        self.assertIn("void SetSpeechLevel(uint8_t level)", self.face_header)
+        self.assertIn("std::atomic<uint8_t> speech_level_", self.face_header)
+        self.assertIn("std::atomic<uint32_t> speech_level_updated_ms_", self.face_header)
+        self.assertIn("UpdateSpeechEnvelope", self.face_source)
+        self.assertIn("kSpeechLevelStaleMs", self.face_source)
+        self.assertIn("kDeviceStateSpeaking", self.face_source)
+        self.assertIn("speech_level_smoothed_", self.face_source)
+        self.assertIn("Audio-reactive mouth", self.face_source)
+
+        self.assertIn("decoded PCM -> Hensun board codec sampler", self.animation_v2_spec)
+        self.assertIn("Silence closes", self.animation_v2_spec)
+        self.assertIn("never calls LVGL", self.animation_v2_spec)
+        self.assertIn("no heap allocation", self.animation_v2_spec)
+
+    def test_face_has_natural_blink_gaze_and_eased_entry(self):
+        for marker in (
+            "kBlinkClosedFrames = 3",
+            "NextPseudoRandom",
+            "UpdateAmbientMotion",
+            "blink_frames_remaining_",
+            "next_blink_frame_",
+            "gaze_target_x_",
+            "gaze_x_",
+            "EaseOutEntry",
+        ):
+            self.assertIn(marker, self.face_source + self.face_header)
+
+        self.assertNotIn(
+            "state_ == HensunFaceState::kIdleEntered && animation_frame_ % 100 >= 94",
+            self.face_source,
+        )
+        self.assertIn("three-frame blinks", self.animation_v2_spec)
+        self.assertIn("Ambient gaze is limited to two pixels", self.animation_v2_spec)
+        self.assertIn("integer ease-out entry motion", self.animation_v2_spec)
 
     def test_face_states_are_bound_to_real_event_inputs(self):
         canonical_inputs = [

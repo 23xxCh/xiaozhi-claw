@@ -31,6 +31,8 @@ The state-specific entry, breathing, glance, speaking, celebration, sleep,
 alert and status motion profiles are documented in
 [`FACE_ANIMATION_SPEC.md`](FACE_ANIMATION_SPEC.md). Safety and crisis scenes use
 the restrained profile without a looping bounce or shake.
+Audio-reactive mouth movement, natural blinking, ambient gaze and eased entry
+are documented in [`FACE_ANIMATION_V2_SPEC.md`](FACE_ANIMATION_V2_SPEC.md).
 Serial logs report the average and maximum LVGL face-update cost every 100
 frames so the 20 FPS set can be measured on the actual board.
 

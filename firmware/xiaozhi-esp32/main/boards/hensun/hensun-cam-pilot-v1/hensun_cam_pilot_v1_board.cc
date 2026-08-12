@@ -12,7 +12,55 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 
+#include <algorithm>
+
 #define TAG "HensunCamPilotV1Board"
+
+namespace {
+
+constexpr size_t kSpeechPcmSampleStride = 8;
+constexpr uint32_t kSpeechNoiseFloor = 180;
+constexpr uint32_t kSpeechReferenceAmplitude = 5000;
+
+class HensunAudioCodecSimplex final : public NoAudioCodecSimplex {
+public:
+    using NoAudioCodecSimplex::NoAudioCodecSimplex;
+
+    void SetDisplay(HensunFaceDisplay* display) {
+        display_ = display;
+    }
+
+    void OutputData(std::vector<int16_t>& data) override {
+        uint64_t amplitude_sum = 0;
+        size_t sample_count = 0;
+        for (size_t index = 0; index < data.size(); index += kSpeechPcmSampleStride) {
+            const int32_t sample = data[index];
+            amplitude_sum += static_cast<uint32_t>(sample < 0 ? -sample : sample);
+            ++sample_count;
+        }
+
+        uint8_t level = 0;
+        if (sample_count > 0) {
+            const uint32_t mean_amplitude = static_cast<uint32_t>(amplitude_sum / sample_count);
+            if (mean_amplitude > kSpeechNoiseFloor) {
+                const uint32_t scaled =
+                    (mean_amplitude - kSpeechNoiseFloor) * 100 /
+                    (kSpeechReferenceAmplitude - kSpeechNoiseFloor);
+                level = static_cast<uint8_t>(std::min<uint32_t>(100, scaled));
+            }
+        }
+        if (display_ != nullptr) {
+            display_->SetSpeechLevel(level);
+        }
+
+        AudioCodec::OutputData(data);
+    }
+
+private:
+    HensunFaceDisplay* display_ = nullptr;
+};
+
+}  // namespace
 
 class HensunCamPilotV1Board : public WifiBoard {
 private:
@@ -123,7 +171,7 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
-        static NoAudioCodecSimplex audio_codec(
+        static HensunAudioCodecSimplex audio_codec(
             AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_SPK_GPIO_BCLK,
@@ -132,6 +180,7 @@ public:
             AUDIO_I2S_MIC_GPIO_SCK,
             AUDIO_I2S_MIC_GPIO_WS,
             AUDIO_I2S_MIC_GPIO_DIN);
+        audio_codec.SetDisplay(display_);
         return &audio_codec;
     }
 

@@ -18,6 +18,14 @@ namespace {
 constexpr char kTag[] = "HensunFace";
 constexpr uint32_t kAnimationPeriodMs = 50;
 constexpr uint32_t kEntryAnimationFrames = 8;
+constexpr uint32_t kSpeechLevelStaleMs = 180;
+constexpr uint8_t kSpeechAttackPerFrame = 28;
+constexpr uint8_t kSpeechReleasePerFrame = 14;
+constexpr uint8_t kBlinkClosedFrames = 3;
+constexpr uint32_t kBlinkMinIntervalFrames = 70;
+constexpr uint32_t kBlinkIntervalRangeFrames = 71;
+constexpr uint32_t kGazeMinIntervalFrames = 40;
+constexpr uint32_t kGazeIntervalRangeFrames = 41;
 constexpr uint32_t kShowcaseStateFrames = 24;  // 1.2 seconds at 20 FPS.
 constexpr uint8_t kShowcaseSceneCount = 60;
 static_assert(kShowcaseSceneCount == static_cast<uint8_t>(HensunFaceState::kCount));
@@ -210,6 +218,15 @@ int TriangleWave(uint32_t frame, uint32_t period, int amplitude) {
     return -amplitude + static_cast<int>(distance * amplitude * 2 / half_period);
 }
 
+int EaseOutEntry(uint32_t frame, int initial_offset) {
+    if (frame >= kEntryAnimationFrames) {
+        return 0;
+    }
+    const uint32_t remaining = kEntryAnimationFrames - frame;
+    return static_cast<int>(remaining * remaining * initial_offset /
+                            (kEntryAnimationFrames * kEntryAnimationFrames));
+}
+
 MotionFamily MotionFamilyForState(HensunFaceState state) {
     switch (state) {
         case HensunFaceState::kListeningStarted: return MotionFamily::kListen;
@@ -298,10 +315,9 @@ FaceMotion MotionForState(HensunFaceState state, uint32_t frame) {
     FaceMotion motion;
     const bool entering = frame < kEntryAnimationFrames;
     if (entering) {
-        motion.face_y = static_cast<int>(
-            (kEntryAnimationFrames - frame) * 6 / kEntryAnimationFrames);
-        motion.symbol_scale = static_cast<uint16_t>(224 + frame * 4);
-        motion.symbol_opacity = static_cast<lv_opa_t>(175 + frame * 7);
+        motion.face_y = EaseOutEntry(frame, 6);
+        motion.symbol_scale = static_cast<uint16_t>(256 - EaseOutEntry(frame, 32));
+        motion.symbol_opacity = static_cast<lv_opa_t>(230 - EaseOutEntry(frame, 55));
     }
 
     switch (MotionFamilyForState(state)) {
@@ -448,7 +464,8 @@ void HensunFaceDisplay::SetupUI() {
     CreateFaceObjects();
     SetFaceStateLocked(StateFromDevice());
     animation_timer_ = lv_timer_create(AnimationTimerCallback, kAnimationPeriodMs, this);
-    ESP_LOGI(kTag, "Company-derived 60-scene face ready with 9 motion families at 20 FPS");
+    ESP_LOGI(kTag,
+             "Company-derived 60-scene face ready with audio-reactive animation at 20 FPS");
 }
 
 void HensunFaceDisplay::CreateFaceObjects() {
@@ -611,6 +628,11 @@ void HensunFaceDisplay::StartShowcase() {
     ESP_LOGI(kTag, "Starting 60-scene display showcase");
 }
 
+void HensunFaceDisplay::SetSpeechLevel(uint8_t level) {
+    speech_level_.store(std::min<uint8_t>(100, level));
+    speech_level_updated_ms_.store(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+}
+
 void HensunFaceDisplay::AnimationTimerCallback(lv_timer_t* timer) {
     auto* display = static_cast<HensunFaceDisplay*>(lv_timer_get_user_data(timer));
     display->TickAnimation();
@@ -656,8 +678,64 @@ void HensunFaceDisplay::TickAnimation() {
         }
     }
 
+    UpdateSpeechEnvelope();
+    UpdateAmbientMotion();
     ++animation_frame_;
     RenderFace();
+}
+
+void HensunFaceDisplay::UpdateSpeechEnvelope() {
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    const uint32_t updated_ms = speech_level_updated_ms_.load();
+    const uint8_t target = updated_ms != 0 && now_ms - updated_ms <= kSpeechLevelStaleMs
+                               ? speech_level_.load()
+                               : 0;
+
+    if (target > speech_level_smoothed_) {
+        const uint8_t difference = target - speech_level_smoothed_;
+        speech_level_smoothed_ += std::min<uint8_t>(difference, kSpeechAttackPerFrame);
+    } else {
+        const uint8_t difference = speech_level_smoothed_ - target;
+        speech_level_smoothed_ -= std::min<uint8_t>(difference, kSpeechReleasePerFrame);
+    }
+}
+
+uint32_t HensunFaceDisplay::NextPseudoRandom() {
+    pseudo_random_state_ = pseudo_random_state_ * 1664525u + 1013904223u;
+    return pseudo_random_state_;
+}
+
+void HensunFaceDisplay::UpdateAmbientMotion() {
+    ++ambient_frame_;
+
+    if (blink_frames_remaining_ > 0) {
+        --blink_frames_remaining_;
+    }
+    if (ambient_frame_ >= next_blink_frame_) {
+        blink_frames_remaining_ = kBlinkClosedFrames;
+        next_blink_frame_ = ambient_frame_ + kBlinkMinIntervalFrames +
+                            NextPseudoRandom() % kBlinkIntervalRangeFrames;
+    }
+
+    const MotionFamily family = MotionFamilyForState(state_);
+    const bool allow_gaze = family == MotionFamily::kCalm ||
+                            family == MotionFamily::kListen ||
+                            family == MotionFamily::kSpeak ||
+                            family == MotionFamily::kCelebrate ||
+                            family == MotionFamily::kStatus;
+    if (!allow_gaze) {
+        gaze_target_x_ = 0;
+    } else if (ambient_frame_ >= next_gaze_frame_) {
+        gaze_target_x_ = static_cast<int8_t>(NextPseudoRandom() % 5) - 2;
+        next_gaze_frame_ = ambient_frame_ + kGazeMinIntervalFrames +
+                           NextPseudoRandom() % kGazeIntervalRangeFrames;
+    }
+
+    if (gaze_x_ < gaze_target_x_) {
+        ++gaze_x_;
+    } else if (gaze_x_ > gaze_target_x_) {
+        --gaze_x_;
+    }
 }
 
 void HensunFaceDisplay::SetFaceStateLocked(HensunFaceState state) {
@@ -729,11 +807,11 @@ void HensunFaceDisplay::RenderFace() {
 
     const int64_t started_us = esp_timer_get_time();
     const int pulse = static_cast<int>(animation_frame_ % 20);
-    const bool blink = state_ == HensunFaceState::kIdleEntered && animation_frame_ % 100 >= 94;
+    const bool blink = blink_frames_remaining_ > 0;
     const FaceMotion motion = MotionForState(state_, animation_frame_);
 
     int eye_width = 50;
-    int eye_height = blink ? 7 : 68;
+    int eye_height = 68;
     int eye_x = 48;
     int eye_y = -18;
     int brow_y = -65;
@@ -1279,8 +1357,34 @@ void HensunFaceDisplay::RenderFace() {
         mouth_style = MouthStyle::kOpen;
     }
 
+    // Audio-reactive mouth: real speaker PCM wins over the synthetic scene cadence.
+    const bool device_speaking =
+        Application::GetInstance().GetDeviceState() == kDeviceStateSpeaking;
+    if (device_speaking) {
+        const bool restrained = MotionFamilyForState(state_) == MotionFamily::kRestrained;
+        const uint8_t effective_level =
+            restrained ? std::min<uint8_t>(55, speech_level_smoothed_)
+                       : speech_level_smoothed_;
+        if (effective_level > 4) {
+            mouth_style = MouthStyle::kOpen;
+            mouth_width = 28 + effective_level * 12 / 100;
+            mouth_height = 7 + effective_level * 22 / 100;
+        } else {
+            mouth_style = MouthStyle::kFlat;
+            mouth_width = 28;
+            mouth_height = 7;
+        }
+    }
+    const int mouth_motion_y = device_speaking ? 0 : motion.mouth_y;
+
     left_eye_height = left_eye_height == 0 ? eye_height : left_eye_height;
     right_eye_height = right_eye_height == 0 ? eye_height : right_eye_height;
+    pupil_shift += gaze_x_;
+    if (blink) {
+        left_eye_height = std::min(left_eye_height, 7);
+        right_eye_height = std::min(right_eye_height, 7);
+        show_highlights = false;
+    }
     const int left_glow_height = left_eye_height + (left_eye_height > 12 ? 12 : 5);
     const int right_glow_height = right_eye_height + (right_eye_height > 12 ? 12 : 5);
     Place(left_eye_glow_, eye_width + 12, left_glow_height,
@@ -1326,7 +1430,7 @@ void HensunFaceDisplay::RenderFace() {
         lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         Place(mouth_arc_, mouth_width + 8, std::max(26, mouth_height + 20),
-              mouth_x + motion.face_x, mouth_y + motion.face_y + motion.mouth_y);
+              mouth_x + motion.face_x, mouth_y + motion.face_y + mouth_motion_y);
         if (mouth_style == MouthStyle::kSmile) {
             lv_arc_set_bg_angles(mouth_arc_, 25, 155);
         } else {
@@ -1337,7 +1441,7 @@ void HensunFaceDisplay::RenderFace() {
         lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         Place(mouth_, mouth_width, mouth_height, mouth_x + motion.face_x,
-              mouth_y + motion.face_y + motion.mouth_y);
+              mouth_y + motion.face_y + mouth_motion_y);
         lv_obj_set_style_bg_color(
             mouth_, lv_color_hex(mouth_style == MouthStyle::kOpen ? kBackgroundColor : main_color),
             0);
