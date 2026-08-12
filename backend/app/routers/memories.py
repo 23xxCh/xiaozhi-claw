@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
 from ..db import get_session
-from ..dependencies import require_user
+from ..dependencies import require_adult_user
 from ..models import Device, MemorySummary, User
 from ..schemas import MemoryResponse, MemoryUpsertRequest
 from ..security import decrypt_memory, encrypt_memory
@@ -32,7 +32,7 @@ def _response(memory: MemorySummary, request: Request) -> MemoryResponse:
 async def list_memories(
     device_id: str,
     request: Request,
-    user: User = Depends(require_user),
+    user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemoryResponse]:
     await _owned_device(session, user, device_id)
@@ -52,7 +52,7 @@ async def upsert_memory(
     key: str,
     payload: MemoryUpsertRequest,
     request: Request,
-    user: User = Depends(require_user),
+    user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> MemoryResponse:
     if key != payload.key:
@@ -94,7 +94,7 @@ async def upsert_memory(
 async def delete_memory(
     device_id: str,
     key: str,
-    user: User = Depends(require_user),
+    user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await _owned_device(session, user, device_id)
@@ -120,7 +120,7 @@ async def delete_memory(
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_all_memories(
     device_id: str,
-    user: User = Depends(require_user),
+    user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await _owned_device(session, user, device_id)

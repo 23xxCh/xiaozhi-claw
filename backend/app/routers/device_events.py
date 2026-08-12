@@ -1,17 +1,28 @@
+import json
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
 from ..db import get_session
-from ..dependencies import require_admin
-from ..models import Device
+from ..dependencies import require_admin_or_staff
+from ..models import Device, DeviceCommand, DeviceCommandStatus, StaffRole
 from ..schemas import DeviceFaceEventRequest, DeviceFaceEventResponse
 
 router = APIRouter(
     prefix="/v1/admin/device-events",
     tags=["device-events"],
-    dependencies=[Depends(require_admin)],
+    dependencies=[
+        Depends(
+            require_admin_or_staff(
+                StaffRole.SUPERADMIN,
+                StaffRole.ENGINEERING,
+                StaffRole.SUPPORT,
+            )
+        )
+    ],
 )
 
 
@@ -37,11 +48,19 @@ async def send_face_event(
     else:
         event_message = {"type": "llm", "emotion": payload.event.value}
 
+    command = DeviceCommand(
+        device_id=device.id,
+        command_type=payload.message_type,
+        payload_json=json.dumps(event_message, ensure_ascii=False, separators=(",", ":")),
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    session.add(command)
     delivered = await request.app.state.device_connections.send_json(
         device.serial_number, event_message
     )
-    if not delivered:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="device is offline")
+    if delivered:
+        command.status = DeviceCommandStatus.DELIVERED.value
+        command.delivered_at = datetime.now(UTC)
 
     add_audit_event(
         session,
@@ -60,5 +79,6 @@ async def send_face_event(
         serial_number=device.serial_number,
         event=payload.event,
         message_type=payload.message_type,
-        delivered=True,
+        delivered=delivered,
+        queued=not delivered,
     )

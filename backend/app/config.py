@@ -42,6 +42,36 @@ class Settings(BaseSettings):
     trial_days: int = 30
     trial_monthly_turns: int = 600
     free_monthly_turns: int = 60
+    gateway_id: str = "gateway-local-1"
+    command_poll_interval_seconds: float = 0.5
+    device_offline_after_seconds: int = 90
+    max_device_audio_queue_frames: int = 100
+    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
+    web_app_url: str = "http://localhost:3000"
+    session_cookie_secure: bool = False
+    wechat_web_app_id: str = ""
+    wechat_web_app_secret: str = ""
+    wechat_web_redirect_uri: str = ""
+    qwen_realtime_asr_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    qwen_realtime_tts_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    qwen_realtime_asr_model: str = "qwen3-asr-flash-realtime"
+    qwen_realtime_tts_model: str = "qwen3-tts-flash-realtime"
+    fallback_enabled: bool = True
+    fallback_api_key: str = ""
+    fallback_asr_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    fallback_asr_model: str = "qwen3-asr-flash"
+    fallback_llm_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    fallback_llm_model: str = "qwen3.7-flash"
+    fallback_tts_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/"
+        "multimodal-generation/generation"
+    )
+    fallback_tts_model: str = "qwen3-tts-flash"
+    fallback_tts_voice: str = "Cherry"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":
@@ -79,6 +109,8 @@ class Settings(BaseSettings):
             return self
         if self.provider_mode != "custom":
             raise ValueError("Production must use custom AI providers")
+        if self.fallback_enabled and not (self.fallback_api_key or self.asr_api_key):
+            raise ValueError("Production fallback requires a DashScope API key")
         provider_urls = [self.asr_url, self.tts_url, self.llm_url]
         if any(not url.startswith("https://") for url in provider_urls):
             raise ValueError("Production model endpoints must use HTTPS")
@@ -88,6 +120,8 @@ class Settings(BaseSettings):
             raise ValueError("DEVICE_WS_URL must use WSS in production")
         if not self.ota_signing_public_key:
             raise ValueError("OTA_SIGNING_PUBLIC_KEY is required in production")
+        if not self.session_cookie_secure:
+            raise ValueError("SESSION_COOKIE_SECURE must be enabled in production")
         return self
 
 

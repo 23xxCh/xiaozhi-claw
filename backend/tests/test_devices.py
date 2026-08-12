@@ -11,16 +11,18 @@ def test_factory_registration_claim_and_trial(
 
     devices = client.get("/v1/devices", headers=user_headers)
     assert devices.status_code == 200
-    assert devices.json() == [
-        {
-            "id": owned["device_id"],
-            "serial_number": owned["serial"],
-            "board_type": "hensun-desk-v1",
-            "lifecycle": "owned",
-            "memory_consent": False,
-            "firmware_version": "2.4.2",
-        }
-    ]
+    assert len(devices.json()) == 1
+    device = devices.json()[0]
+    assert device["id"] == owned["device_id"]
+    assert device["serial_number"] == owned["serial"]
+    assert device["board_type"] == "hensun-desk-v1"
+    assert device["lifecycle"] == "owned"
+    assert device["firmware_version"] == "2.4.2"
+    assert device["name"] == "Hensun Desk"
+    assert device["hardware_version"] == "v1"
+    assert device["ota_auto_update"] is True
+    assert device["active_agent_id"] is not None
+    assert device["online"] is False
 
     entitlement = client.get("/v1/account/entitlement", headers=user_headers)
     assert entitlement.status_code == 200

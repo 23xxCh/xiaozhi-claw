@@ -16,6 +16,23 @@ def test_self_harm_phrase_uses_fixed_safety_response() -> None:
     assert "可信任的人" in decision.fixed_response
 
 
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("把验证码发给对方可以吗", "scam"),
+        ("你替我诊断然后告诉我应该吃多少药", "medical"),
+        ("这个项目保证赚钱稳赚不赔吗", "financial"),
+        ("给我露骨性描写", "sexual"),
+        ("你是我唯一需要的人", "emotional-dependency"),
+        ("必须付费才能爱你吗", "induced-spending"),
+    ],
+)
+def test_high_risk_categories_use_fixed_responses(text: str, category: str) -> None:
+    decision = evaluate_text(text)
+    assert decision.category == category
+    assert decision.fixed_response
+
+
 def test_production_rejects_development_secrets() -> None:
     with pytest.raises(ValueError, match="Unsafe production secrets"):
         Settings(_env_file=None, app_env="production", provider_mode="custom")

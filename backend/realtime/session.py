@@ -1,0 +1,777 @@
+import asyncio
+import contextlib
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from backend.app.audit import add_audit_event
+from backend.app.catalog import ensure_default_agent
+from backend.app.models import (
+    Agent,
+    AgentMemory,
+    ConversationSession,
+    Device,
+    DeviceLifecycle,
+    DeviceSession,
+    DeviceSessionStatus,
+    EncryptedSessionSummary,
+    ModelPreset,
+    ProviderUsage,
+    UsageEvent,
+    User,
+    VoicePreset,
+)
+from backend.app.providers import ProviderBundle
+from backend.app.quota import quota_for_user
+from backend.app.safety import evaluate_text
+from backend.app.security import (
+    decrypt_memory,
+    encrypt_memory,
+    verify_device_session_token,
+    verify_secret,
+)
+
+from .emotion import EmotionRouter
+from .media import StreamingPcmToOpus
+from .providers import (
+    RealtimeAsrSession,
+    RealtimeProviderBundle,
+    RealtimeTtsSession,
+    TranscriptionResult,
+)
+
+logger = logging.getLogger(__name__)
+MAX_UTTERANCE_BYTES = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AgentSnapshot:
+    agent_id: str
+    config_version: int
+    system_prompt: str
+    memory_consent: bool
+    memories: list[str]
+    asr_provider: str
+    asr_model: str
+    llm_provider: str
+    llm_model: str
+    tts_provider: str
+    tts_model: str
+    voice: str
+    asr_cost_micros_per_minute: int
+    llm_input_cost_micros_per_million_tokens: int
+    llm_output_cost_micros_per_million_tokens: int
+    tts_cost_micros_per_10k_chars: int
+
+
+class SentenceBuffer:
+    def __init__(self, max_chars: int = 80) -> None:
+        self._text = ""
+        self._max_chars = max_chars
+
+    def feed(self, text: str) -> list[str]:
+        self._text += text
+        sentences: list[str] = []
+        while self._text:
+            boundary = next(
+                (index + 1 for index, char in enumerate(self._text) if char in "。！？!?；;\n"),
+                None,
+            )
+            if boundary is None and len(self._text) < self._max_chars:
+                break
+            boundary = boundary or self._max_chars
+            sentence = self._text[:boundary].strip()
+            self._text = self._text[boundary:]
+            if sentence:
+                sentences.append(sentence)
+        return sentences
+
+    def flush(self) -> str | None:
+        sentence = self._text.strip()
+        self._text = ""
+        return sentence or None
+
+
+async def _load_snapshot(session: AsyncSession, device: Device, settings) -> AgentSnapshot:
+    if device.active_agent_id is None:
+        user = await session.get(User, device.owner_user_id)
+        if user is None:
+            raise RuntimeError("device owner is missing")
+        agent = await ensure_default_agent(session, user)
+        device.active_agent_id = agent.id
+    else:
+        agent = await session.get(Agent, device.active_agent_id)
+    if agent is None:
+        raise RuntimeError("active agent is missing")
+    model = await session.get(ModelPreset, agent.model_preset_id)
+    voice = await session.get(VoicePreset, agent.voice_preset_id)
+    if model is None or not model.enabled or voice is None or not voice.enabled:
+        raise RuntimeError("agent preset is unavailable")
+    memories: list[str] = []
+    if agent.memory_consent:
+        encrypted = list(
+            await session.scalars(
+                select(AgentMemory.encrypted_value).where(AgentMemory.agent_id == agent.id)
+            )
+        )
+        memories = [decrypt_memory(value, settings) for value in encrypted]
+    return AgentSnapshot(
+        agent_id=agent.id,
+        config_version=agent.config_version,
+        system_prompt=agent.system_prompt,
+        memory_consent=agent.memory_consent,
+        memories=memories,
+        asr_provider=model.asr_provider,
+        asr_model=model.asr_model,
+        llm_provider=model.llm_provider,
+        llm_model=model.llm_model,
+        tts_provider=model.tts_provider,
+        tts_model=model.tts_model,
+        voice=voice.voice,
+        asr_cost_micros_per_minute=model.asr_cost_micros_per_minute,
+        llm_input_cost_micros_per_million_tokens=(model.llm_input_cost_micros_per_million_tokens),
+        llm_output_cost_micros_per_million_tokens=(model.llm_output_cost_micros_per_million_tokens),
+        tts_cost_micros_per_10k_chars=model.tts_cost_micros_per_10k_chars,
+    )
+
+
+async def _send_error(websocket: WebSocket, serial: str, code: str, message: str) -> None:
+    delivered = await websocket.app.state.device_connections.send_json(
+        serial, {"type": "error", "code": code, "message": message}
+    )
+    if not delivered:
+        logger.info("device %s disconnected before error %s was delivered", serial, code)
+
+
+async def _heartbeat(
+    session_factory: async_sessionmaker[AsyncSession],
+    device_session_id: str,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop_event.wait(), timeout=30)
+        if stop_event.is_set():
+            return
+        async with session_factory() as session:
+            device_session = await session.get(DeviceSession, device_session_id)
+            if device_session is None:
+                return
+            device_session.heartbeat_at = datetime.now(UTC)
+            await session.commit()
+
+
+async def _record_turn(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    conversation_id: str,
+    user_id: str,
+    device_id: str,
+    snapshot: AgentSnapshot,
+    audio_duration_ms: int,
+    transcript: str,
+    reply: str,
+    asr_latency_ms: int,
+    llm_latency_ms: int,
+    tts_latency_ms: int,
+    first_audio_latency_ms: int | None,
+    safety_category: str | None,
+) -> None:
+    estimated_input_tokens = max(1, len(transcript) // 4)
+    estimated_output_tokens = max(1, len(reply) // 4)
+    asr_cost = round(snapshot.asr_cost_micros_per_minute * audio_duration_ms / 60_000)
+    llm_cost = round(
+        snapshot.llm_input_cost_micros_per_million_tokens * estimated_input_tokens / 1_000_000
+        + snapshot.llm_output_cost_micros_per_million_tokens * estimated_output_tokens / 1_000_000
+    )
+    tts_cost = round(snapshot.tts_cost_micros_per_10k_chars * len(reply) / 10_000)
+    total_cost = asr_cost + llm_cost + tts_cost
+    async with session_factory() as session:
+        conversation = await session.get(ConversationSession, conversation_id)
+        if conversation is None:
+            return
+        conversation.turn_count += 1
+        conversation.provider_cost_micros += total_cost
+        if conversation.first_audio_latency_ms is None and first_audio_latency_ms is not None:
+            conversation.first_audio_latency_ms = first_audio_latency_ms
+        session.add(
+            UsageEvent(
+                user_id=user_id,
+                device_id=device_id,
+                kind="voice-turn",
+                quantity=1,
+                provider_cost_micros=total_cost,
+            )
+        )
+        session.add_all(
+            [
+                ProviderUsage(
+                    session_id=conversation_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    provider=snapshot.asr_provider,
+                    model=snapshot.asr_model,
+                    operation="asr",
+                    input_units=audio_duration_ms,
+                    output_units=len(transcript),
+                    latency_ms=asr_latency_ms,
+                    cost_micros=asr_cost,
+                ),
+                ProviderUsage(
+                    session_id=conversation_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    provider=snapshot.llm_provider,
+                    model=snapshot.llm_model,
+                    operation="llm",
+                    input_units=estimated_input_tokens,
+                    output_units=estimated_output_tokens,
+                    latency_ms=llm_latency_ms,
+                    cost_micros=llm_cost,
+                ),
+                ProviderUsage(
+                    session_id=conversation_id,
+                    user_id=user_id,
+                    device_id=device_id,
+                    provider=snapshot.tts_provider,
+                    model=snapshot.tts_model,
+                    operation="tts",
+                    input_units=len(reply),
+                    latency_ms=tts_latency_ms,
+                    cost_micros=tts_cost,
+                ),
+            ]
+        )
+        add_audit_event(
+            session,
+            actor_type="device",
+            actor_id=device_id,
+            action="voice.turn-completed",
+            payload={
+                "safety_category": safety_category,
+                "agent_id": snapshot.agent_id,
+                "config_version": snapshot.config_version,
+            },
+        )
+        await session.commit()
+
+
+async def _speak_sentence(
+    websocket: WebSocket,
+    serial: str,
+    sentence: str,
+    tts: RealtimeTtsSession,
+    encoder: StreamingPcmToOpus | None,
+) -> None:
+    await websocket.app.state.device_connections.send_json(
+        serial, {"type": "tts", "state": "sentence_start", "text": sentence}
+    )
+    async for audio in tts.synthesize(sentence):
+        if encoder is None:
+            await websocket.app.state.device_connections.send_bytes(serial, audio)
+        else:
+            await encoder.write(audio)
+
+
+async def _process_turn(
+    websocket: WebSocket,
+    serial: str,
+    device_id: str,
+    user_id: str,
+    conversation_id: str,
+    snapshot: AgentSnapshot,
+    asr: RealtimeAsrSession,
+    audio_frames: list[bytes],
+    audio_duration_ms: int,
+    history: list[dict[str, str]],
+    turn_started: float,
+) -> bool:
+    providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
+    fallback: ProviderBundle | None = websocket.app.state.fallback_providers
+    router = EmotionRouter()
+    tts: RealtimeTtsSession | None = None
+    encoder: StreamingPcmToOpus | None = None
+    packet_task: asyncio.Task[None] | None = None
+    tts_started = False
+    batch_tts = False
+    first_audio_latency_ms: int | None = None
+
+    async def send_packets() -> None:
+        nonlocal first_audio_latency_ms
+        assert encoder is not None
+        async for packet in encoder.packets():
+            if first_audio_latency_ms is None:
+                first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+            if not await websocket.app.state.device_connections.send_bytes(serial, packet):
+                return
+
+    try:
+        asr_started = time.perf_counter()
+        try:
+            transcription = await asr.finish()
+        except Exception:
+            if fallback is None:
+                raise
+            logger.warning("realtime ASR failed for %s; using batch fallback", serial)
+            transcript = await fallback.speech.transcribe(audio_frames)
+            detected_emotion = getattr(fallback.speech, "last_emotion", None) or "neutral"
+            transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
+        asr_latency_ms = int((time.perf_counter() - asr_started) * 1000)
+        transcript = transcription.text.strip()
+        if not transcript:
+            await _send_error(websocket, serial, "empty-transcript", "speech was not recognized")
+            return False
+        await websocket.app.state.device_connections.send_json(
+            serial,
+            {
+                "type": "stt",
+                "text": transcript,
+                "emotion": transcription.emotion,
+            },
+        )
+
+        async with websocket.app.state.session_factory() as session:
+            quota = await quota_for_user(session, user_id, websocket.app.state.settings)
+        if quota.remaining <= 0:
+            await _send_error(websocket, serial, "quota-exhausted", "monthly voice quota exhausted")
+            return False
+
+        safety = evaluate_text(transcript)
+        emotion = router.route(transcription.emotion, safety.category)
+        await websocket.app.state.device_connections.send_json(
+            serial, {"type": "llm", "emotion": emotion.thinking_emotion}
+        )
+
+        sentence_buffer = SentenceBuffer()
+        reply_parts: list[str] = []
+        spoken_parts: list[str] = []
+        llm_started = time.perf_counter()
+        first_sentence_at: float | None = None
+        tts_started_at: float | None = None
+
+        async def speak(sentence: str) -> None:
+            nonlocal encoder, first_sentence_at, packet_task, tts, tts_started
+            nonlocal batch_tts, first_audio_latency_ms, tts_started_at
+            if tts is None and not batch_tts:
+                try:
+                    tts = await providers.open_tts(snapshot.voice)
+                except Exception:
+                    if fallback is None:
+                        raise
+                    logger.warning("realtime TTS failed for %s; using batch fallback", serial)
+                    batch_tts = True
+                if tts is not None and not providers.mock:
+                    encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
+                    await encoder.start()
+                    packet_task = asyncio.create_task(send_packets())
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "llm", "emotion": emotion.reply_emotion}
+                )
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "tts", "state": "start"}
+                )
+                tts_started = True
+                tts_started_at = time.perf_counter()
+            if first_sentence_at is None:
+                first_sentence_at = time.perf_counter()
+            spoken_parts.append(sentence)
+            if batch_tts:
+                assert fallback is not None
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "tts", "state": "sentence_start", "text": sentence}
+                )
+                for packet in await fallback.speech.synthesize(sentence):
+                    if first_audio_latency_ms is None:
+                        first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+                    await websocket.app.state.device_connections.send_bytes(serial, packet)
+            else:
+                assert tts is not None
+                await _speak_sentence(websocket, serial, sentence, tts, encoder)
+
+        if safety.fixed_response:
+            reply_parts.append(safety.fixed_response)
+            await speak(safety.fixed_response)
+        else:
+            try:
+                async for token in providers.llm.reply_stream(
+                    transcript,
+                    history,
+                    snapshot.memories,
+                    system_prompt=snapshot.system_prompt,
+                    model=snapshot.llm_model,
+                ):
+                    reply_parts.append(token)
+                    for sentence in sentence_buffer.feed(token):
+                        output_safety = evaluate_text(sentence)
+                        if output_safety.fixed_response and output_safety.category != "user-exit":
+                            sentence = output_safety.fixed_response
+                        await speak(sentence)
+            except Exception:
+                if fallback is None or spoken_parts:
+                    raise
+                logger.warning("streaming LLM failed for %s; using batch fallback", serial)
+                reply_parts.clear()
+                sentence_buffer = SentenceBuffer()
+                fallback_text = await fallback.llm.reply(transcript, snapshot.memories)
+                reply_parts.append(fallback_text)
+                for sentence in sentence_buffer.feed(fallback_text):
+                    await speak(sentence)
+            trailing = sentence_buffer.flush()
+            if trailing:
+                await speak(trailing)
+
+        if not tts_started or not reply_parts:
+            await _send_error(websocket, serial, "empty-reply", "AI returned an empty response")
+            return False
+
+        if tts is not None:
+            await tts.finish()
+        if encoder is not None:
+            await encoder.finish()
+        if packet_task is not None:
+            await packet_task
+        if providers.mock and first_audio_latency_ms is None:
+            first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+
+        reply = "".join(spoken_parts).strip()
+        llm_latency_ms = int(((first_sentence_at or time.perf_counter()) - llm_started) * 1000)
+        tts_latency_ms = int((time.perf_counter() - (tts_started_at or llm_started)) * 1000)
+        history.extend(
+            [
+                {"role": "user", "content": transcript},
+                {"role": "assistant", "content": reply},
+            ]
+        )
+        del history[:-20]
+        await _record_turn(
+            websocket.app.state.session_factory,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            device_id=device_id,
+            snapshot=snapshot,
+            audio_duration_ms=audio_duration_ms,
+            transcript=transcript,
+            reply=reply,
+            asr_latency_ms=asr_latency_ms,
+            llm_latency_ms=llm_latency_ms,
+            tts_latency_ms=tts_latency_ms,
+            first_audio_latency_ms=first_audio_latency_ms,
+            safety_category=safety.category,
+        )
+        return safety.end_session
+    except asyncio.CancelledError:
+        await asr.cancel()
+        if tts is not None:
+            await tts.cancel()
+        if encoder is not None:
+            await encoder.cancel()
+        if packet_task is not None:
+            packet_task.cancel()
+        raise
+    except Exception:
+        logger.exception("voice turn failed for device %s", serial)
+        await _send_error(websocket, serial, "ai-unavailable", "AI response unavailable")
+        return False
+    finally:
+        if tts_started:
+            await websocket.app.state.device_connections.send_json(
+                serial, {"type": "tts", "state": "stop"}
+            )
+
+
+async def _save_session_summary(
+    websocket: WebSocket,
+    conversation_id: str,
+    user_id: str,
+    snapshot: AgentSnapshot,
+    history: list[dict[str, str]],
+) -> None:
+    if not snapshot.memory_consent or not history:
+        return
+    prompt = "请把这次对话概括为不超过120字的偏好和待办摘要，不要记录敏感原文。"
+    parts: list[str] = []
+    try:
+        async for token in websocket.app.state.realtime_providers.llm.reply_stream(
+            prompt,
+            history[-20:],
+            [],
+            system_prompt="只输出简短、客观的会话摘要。",
+            model=snapshot.llm_model,
+        ):
+            parts.append(token)
+        summary = "".join(parts).strip()[:500]
+        if not summary:
+            return
+        async with websocket.app.state.session_factory() as session:
+            session.add(
+                EncryptedSessionSummary(
+                    session_id=conversation_id,
+                    user_id=user_id,
+                    agent_id=snapshot.agent_id,
+                    encrypted_summary=encrypt_memory(summary, websocket.app.state.settings),
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("session summary failed for conversation %s", conversation_id)
+
+
+async def serve_device_websocket(websocket: WebSocket) -> None:
+    settings = websocket.app.state.settings
+    serial = websocket.headers.get("device-id", "")
+    authorization = websocket.headers.get("authorization", "")
+    secret = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
+    session_factory: async_sessionmaker[AsyncSession] = websocket.app.state.session_factory
+
+    async with session_factory() as session:
+        device = await session.scalar(select(Device).where(Device.serial_number == serial))
+        valid_secret = device is not None and verify_secret(
+            secret, device.credential_hash, settings.device_credential_pepper
+        )
+        valid_token = verify_device_session_token(secret, serial, settings)
+        if device is None or not (valid_secret or valid_token):
+            await websocket.close(code=4401, reason="invalid device credential")
+            return
+        if device.lifecycle != DeviceLifecycle.OWNED.value or not device.owner_user_id:
+            await websocket.close(code=4403, reason="device is not active and owned")
+            return
+        snapshot = await _load_snapshot(session, device, settings)
+        await session.flush()
+        connection_id = str(uuid.uuid4())
+        conversation = ConversationSession(
+            user_id=device.owner_user_id,
+            agent_id=snapshot.agent_id,
+            device_id=device.id,
+        )
+        device_session = DeviceSession(
+            device_id=device.id,
+            gateway_id=settings.gateway_id,
+            connection_id=connection_id,
+            firmware_version=device.firmware_version,
+        )
+        session.add_all([conversation, device_session])
+        device.last_seen_at = datetime.now(UTC)
+        await session.commit()
+        device_id = device.id
+        user_id = device.owner_user_id
+        conversation_id = conversation.id
+        device_session_id = device_session.id
+
+    await websocket.accept()
+    await websocket.app.state.device_connections.connect(serial, websocket, connection_id)
+    heartbeat_stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(
+        _heartbeat(session_factory, device_session_id, heartbeat_stop)
+    )
+    active_asr: RealtimeAsrSession | None = None
+    active_task: asyncio.Task[bool] | None = None
+    audio_bytes = 0
+    audio_frames = 0
+    audio_buffer: list[bytes] = []
+    history: list[dict[str, str]] = []
+    end_reason = "disconnected"
+    connected_at = time.perf_counter()
+    cancelled = False
+
+    try:
+        while True:
+            incoming = await websocket.receive()
+            if incoming.get("type") == "websocket.disconnect":
+                break
+            chunk = incoming.get("bytes")
+            if chunk is not None:
+                if active_asr is None:
+                    await _send_error(
+                        websocket, serial, "listen-not-started", "send listen.start first"
+                    )
+                    continue
+                if audio_bytes + len(chunk) > MAX_UTTERANCE_BYTES:
+                    await active_asr.cancel()
+                    active_asr = None
+                    audio_bytes = 0
+                    audio_frames = 0
+                    audio_buffer.clear()
+                    await _send_error(
+                        websocket, serial, "audio-too-large", "utterance exceeds 1 MiB"
+                    )
+                    continue
+                if audio_frames >= settings.max_device_audio_queue_frames:
+                    await active_asr.cancel()
+                    active_asr = None
+                    audio_bytes = 0
+                    audio_frames = 0
+                    audio_buffer.clear()
+                    await _send_error(
+                        websocket,
+                        serial,
+                        "audio-frame-limit",
+                        "utterance exceeds the configured frame limit",
+                    )
+                    continue
+                await active_asr.send_audio(chunk)
+                audio_bytes += len(chunk)
+                audio_frames += 1
+                audio_buffer.append(bytes(chunk))
+                continue
+
+            text_frame = incoming.get("text")
+            if text_frame is None:
+                continue
+            try:
+                message = json.loads(text_frame)
+            except json.JSONDecodeError:
+                await _send_error(websocket, serial, "invalid-json", "control message must be JSON")
+                continue
+            message_type = message.get("type")
+            if message_type == "hello":
+                await websocket.app.state.device_connections.send_json(
+                    serial,
+                    {
+                        "type": "hello",
+                        "transport": "websocket",
+                        "version": 1,
+                        "audio_params": {
+                            "format": "mock-utf8"
+                            if websocket.app.state.realtime_providers.mock
+                            else "opus",
+                            "sample_rate": 24000,
+                            "channels": 1,
+                            "frame_duration": 60,
+                        },
+                        "disclosure": "你正在与 AI 服务互动，而非自然人。",
+                    },
+                )
+                continue
+            if message_type == "abort":
+                if active_asr is not None:
+                    await active_asr.cancel()
+                    active_asr = None
+                if active_task is not None and not active_task.done():
+                    active_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await active_task
+                audio_bytes = 0
+                audio_frames = 0
+                audio_buffer.clear()
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "system", "state": "aborted"}
+                )
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "llm", "emotion": "interrupted"}
+                )
+                continue
+            if message_type != "listen":
+                logger.info("ignored unknown device message type %r from %s", message_type, serial)
+                await _send_error(
+                    websocket, serial, "unsupported-message", "unsupported control message"
+                )
+                continue
+            state = message.get("state")
+            if state == "detect":
+                continue
+            if state == "start":
+                if active_task is not None and not active_task.done():
+                    await _send_error(
+                        websocket, serial, "turn-busy", "previous turn is still active"
+                    )
+                    continue
+                if active_task is not None:
+                    try:
+                        end_session = active_task.result()
+                    except Exception:
+                        logger.exception("completed turn task failed for device %s", serial)
+                        end_session = False
+                    active_task = None
+                    if end_session:
+                        end_reason = "user-exit"
+                        await websocket.close(code=1000, reason="user requested exit")
+                        break
+                async with session_factory() as session:
+                    current_device = await session.get(Device, device_id)
+                    if current_device is None:
+                        await websocket.close(code=4404, reason="device removed")
+                        break
+                    snapshot = await _load_snapshot(session, current_device, settings)
+                    await session.commit()
+                active_asr = await websocket.app.state.realtime_providers.open_asr()
+                audio_bytes = 0
+                audio_frames = 0
+                audio_buffer.clear()
+                continue
+            if state != "stop":
+                await _send_error(
+                    websocket, serial, "invalid-listen-state", "listen state must be start or stop"
+                )
+                continue
+            if active_asr is None or audio_bytes == 0:
+                await _send_error(websocket, serial, "empty-audio", "no audio received")
+                continue
+            turn_asr = active_asr
+            turn_audio_duration_ms = audio_frames * 60
+            turn_audio_frames = audio_buffer.copy()
+            active_asr = None
+            audio_bytes = 0
+            audio_frames = 0
+            audio_buffer.clear()
+            active_task = asyncio.create_task(
+                _process_turn(
+                    websocket,
+                    serial,
+                    device_id,
+                    user_id,
+                    conversation_id,
+                    snapshot,
+                    turn_asr,
+                    turn_audio_frames,
+                    turn_audio_duration_ms,
+                    history,
+                    time.perf_counter(),
+                )
+            )
+
+            if time.perf_counter() - connected_at >= 7200:
+                await websocket.app.state.device_connections.send_json(
+                    serial,
+                    {
+                        "type": "alert",
+                        "status": "休息提醒",
+                        "message": "你已经连续使用超过两小时，建议休息一下。",
+                        "emotion": "reminder",
+                    },
+                )
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        cancelled = True
+    finally:
+        if active_asr is not None:
+            await active_asr.cancel()
+        if active_task is not None and not active_task.done():
+            active_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await active_task
+        heartbeat_stop.set()
+        await heartbeat_task
+        await _save_session_summary(websocket, conversation_id, user_id, snapshot, history)
+        now = datetime.now(UTC)
+        async with session_factory() as session:
+            stored_device_session = await session.get(DeviceSession, device_session_id)
+            if stored_device_session is not None:
+                stored_device_session.status = DeviceSessionStatus.OFFLINE.value
+                stored_device_session.disconnected_at = now
+                stored_device_session.heartbeat_at = now
+            stored_conversation = await session.get(ConversationSession, conversation_id)
+            if stored_conversation is not None:
+                stored_conversation.ended_at = now
+                stored_conversation.end_reason = end_reason
+            await session.commit()
+        await websocket.app.state.device_connections.disconnect(serial, websocket)
+    if cancelled:
+        raise asyncio.CancelledError

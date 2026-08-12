@@ -30,10 +30,7 @@ async def test_ffmpeg_normalizer_produces_playable_opus_packets() -> None:
         output.setnchannels(1)
         output.setsampwidth(2)
         output.setframerate(24000)
-        samples = [
-            int(6000 * math.sin(2 * math.pi * 440 * index / 24000))
-            for index in range(7200)
-        ]
+        samples = [int(6000 * math.sin(2 * math.pi * 440 * index / 24000)) for index in range(7200)]
         output.writeframes(b"".join(struct.pack("<h", sample) for sample in samples))
 
     packets = await FfmpegOpusNormalizer("ffmpeg").normalize_tts(wav_buffer.getvalue())

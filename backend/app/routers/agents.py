@@ -1,0 +1,205 @@
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..audit import add_audit_event
+from ..catalog import ensure_catalog, ensure_default_agent
+from ..db import get_session
+from ..dependencies import require_adult_user
+from ..models import (
+    Agent,
+    AgentMemory,
+    Device,
+    EncryptedSessionSummary,
+    ModelPreset,
+    User,
+    VoicePreset,
+)
+from ..schemas import AgentCreateRequest, AgentResponse, AgentUpdateRequest
+
+router = APIRouter(prefix="/v1/agents", tags=["agents"])
+
+
+async def owned_agent(session: AsyncSession, user: User, agent_id: str) -> Agent:
+    agent = await session.get(Agent, agent_id)
+    if agent is None or agent.owner_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
+    return agent
+
+
+async def _response(session: AsyncSession, agent: Agent) -> AgentResponse:
+    device_count = await session.scalar(
+        select(func.count()).select_from(Device).where(Device.active_agent_id == agent.id)
+    )
+    return AgentResponse(
+        id=agent.id,
+        name=agent.name,
+        avatar_url=agent.avatar_url,
+        system_prompt=agent.system_prompt,
+        model_preset_id=agent.model_preset_id,
+        voice_preset_id=agent.voice_preset_id,
+        memory_consent=agent.memory_consent,
+        tools=json.loads(agent.tools_json or "{}"),
+        config_version=agent.config_version,
+        device_count=int(device_count or 0),
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+    )
+
+
+async def _validate_presets(
+    session: AsyncSession, model_preset_id: str, voice_preset_id: str
+) -> None:
+    model = await session.get(ModelPreset, model_preset_id)
+    voice = await session.get(VoicePreset, voice_preset_id)
+    if model is None or not model.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="model preset unavailable"
+        )
+    if voice is None or not voice.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="voice preset unavailable"
+        )
+
+
+@router.get("", response_model=list[AgentResponse])
+async def list_agents(
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AgentResponse]:
+    await ensure_default_agent(session, user)
+    await session.commit()
+    agents = list(
+        await session.scalars(
+            select(Agent).where(Agent.owner_user_id == user.id).order_by(Agent.created_at)
+        )
+    )
+    return [await _response(session, agent) for agent in agents]
+
+
+@router.post("", response_model=AgentResponse)
+async def create_agent(
+    payload: AgentCreateRequest,
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> AgentResponse:
+    await ensure_catalog(session)
+    await _validate_presets(session, payload.model_preset_id, payload.voice_preset_id)
+    agent = Agent(
+        owner_user_id=user.id,
+        name=payload.name,
+        avatar_url=str(payload.avatar_url) if payload.avatar_url else None,
+        system_prompt=payload.system_prompt,
+        model_preset_id=payload.model_preset_id,
+        voice_preset_id=payload.voice_preset_id,
+    )
+    session.add(agent)
+    await session.flush()
+    add_audit_event(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="agent.created",
+        payload={"agent_id": agent.id},
+    )
+    await session.commit()
+    return await _response(session, agent)
+
+
+@router.get("/{agent_id}", response_model=AgentResponse)
+async def get_agent(
+    agent_id: str,
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> AgentResponse:
+    return await _response(session, await owned_agent(session, user, agent_id))
+
+
+@router.patch("/{agent_id}", response_model=AgentResponse)
+async def update_agent(
+    agent_id: str,
+    payload: AgentUpdateRequest,
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> AgentResponse:
+    agent = await owned_agent(session, user, agent_id)
+    model_id = payload.model_preset_id or agent.model_preset_id
+    voice_id = payload.voice_preset_id or agent.voice_preset_id
+    await _validate_presets(session, model_id, voice_id)
+    if payload.name is not None:
+        agent.name = payload.name
+    if payload.avatar_url is not None:
+        agent.avatar_url = str(payload.avatar_url)
+    if payload.system_prompt is not None:
+        agent.system_prompt = payload.system_prompt
+    if payload.model_preset_id is not None:
+        agent.model_preset_id = payload.model_preset_id
+    if payload.voice_preset_id is not None:
+        agent.voice_preset_id = payload.voice_preset_id
+    if payload.memory_consent is not None:
+        agent.memory_consent = payload.memory_consent
+        if not payload.memory_consent:
+            await session.execute(delete(AgentMemory).where(AgentMemory.agent_id == agent.id))
+            await session.execute(
+                delete(EncryptedSessionSummary).where(EncryptedSessionSummary.agent_id == agent.id)
+            )
+    if payload.tools is not None:
+        agent.tools_json = json.dumps(payload.tools, ensure_ascii=False, sort_keys=True)
+    agent.config_version += 1
+    add_audit_event(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="agent.updated",
+        payload={"agent_id": agent.id, "config_version": agent.config_version},
+    )
+    await session.commit()
+    return await _response(session, agent)
+
+
+@router.put("/{agent_id}/devices/{device_id}", response_model=AgentResponse)
+async def assign_device(
+    agent_id: str,
+    device_id: str,
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> AgentResponse:
+    agent = await owned_agent(session, user, agent_id)
+    device = await session.get(Device, device_id)
+    if device is None or device.owner_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+    device.active_agent_id = agent.id
+    add_audit_event(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="device.agent-assigned",
+        payload={"device_id": device.id, "agent_id": agent.id},
+    )
+    await session.commit()
+    return await _response(session, agent)
+
+
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    agent_id: str,
+    user: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    agent = await owned_agent(session, user, agent_id)
+    assigned = await session.scalar(
+        select(func.count()).select_from(Device).where(Device.active_agent_id == agent.id)
+    )
+    if assigned:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="agent still has devices")
+    await session.delete(agent)
+    add_audit_event(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="agent.deleted",
+        payload={"agent_id": agent.id},
+    )
+    await session.commit()

@@ -280,3 +280,32 @@ def create_providers(settings: Settings) -> ProviderBundle:
         OpenAICompatibleLlmProvider(settings),
         "opus",
     )
+
+
+def create_fallback_providers(settings: Settings) -> ProviderBundle | None:
+    """Build the bounded batch fallback without exposing provider routes to clients."""
+    if not settings.fallback_enabled:
+        return None
+    if settings.provider_mode == "mock":
+        return create_providers(settings)
+    api_key = settings.fallback_api_key or settings.asr_api_key
+    if not api_key:
+        return None
+    fallback = settings.model_copy(
+        update={
+            "provider_mode": "custom",
+            "asr_protocol": "qwen-chat-completions",
+            "asr_url": settings.fallback_asr_url,
+            "asr_api_key": api_key,
+            "asr_model": settings.fallback_asr_model,
+            "llm_url": settings.fallback_llm_url,
+            "llm_api_key": api_key,
+            "llm_model": settings.fallback_llm_model,
+            "tts_protocol": "dashscope-generation",
+            "tts_url": settings.fallback_tts_url,
+            "tts_api_key": api_key,
+            "tts_model": settings.fallback_tts_model,
+            "tts_voice": settings.fallback_tts_voice,
+        }
+    )
+    return create_providers(fallback)
