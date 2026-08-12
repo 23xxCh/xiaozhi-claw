@@ -111,7 +111,8 @@ private:
     lv_obj_t* mouth_arc_ = nullptr;
     lv_obj_t* left_cheek_ = nullptr;
     lv_obj_t* right_cheek_ = nullptr;
-    lv_obj_t* accent_label_ = nullptr;
+    lv_obj_t* symbol_image_ = nullptr;
+    const lv_image_dsc_t* current_symbol_image_ = nullptr;
     lv_timer_t* animation_timer_ = nullptr;
 
     HensunFaceState state_ = HensunFaceState::kBootReady;

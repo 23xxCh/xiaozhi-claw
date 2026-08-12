@@ -187,6 +187,57 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("lv_arc_create", self.face_source)
         self.assertNotRegex(self.face_source, r"\.(?:png|gif|jpg|jpeg)\b")
 
+    def test_company_expression_package_drives_device_native_symbols(self):
+        catalog_path = BOARD / "hensun_face_catalog.json"
+        assets_header_path = BOARD / "hensun_face_assets.h"
+        assets_source_path = BOARD / "hensun_face_assets.c"
+        generator_path = BOARD / "tools/generate_face_assets.py"
+        provenance_path = BOARD / "ASSET_PROVENANCE.md"
+
+        for path in (
+            catalog_path,
+            assets_header_path,
+            assets_source_path,
+            generator_path,
+            provenance_path,
+        ):
+            self.assertTrue(path.is_file(), path)
+
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        scenes = catalog["scenes"]
+        symbols = sorted({scene["symbol"] for scene in scenes if scene["symbol"] != "none"})
+        self.assertEqual(catalog["source"]["style_version"], "HENSUN_FACE_V1.0")
+        self.assertEqual(
+            catalog["source"]["manifest_sha256"],
+            "ef297b34bb0d7e33915392513b2142d5a9b47bac912bd87e2f2b4151c79693a6",
+        )
+        self.assertEqual(len(scenes), 60)
+        self.assertEqual(len(symbols), 36)
+        self.assertEqual([scene["id"] for scene in scenes], [f"{i:03d}" for i in range(1, 61)])
+
+        assets_header = assets_header_path.read_text(encoding="utf-8")
+        assets_source = assets_source_path.read_text(encoding="utf-8")
+        provenance = provenance_path.read_text(encoding="utf-8")
+        self.assertIn("#define HENSUN_FACE_SCENE_COUNT 60", assets_header)
+        self.assertIn("#define HENSUN_FACE_SYMBOL_COUNT 36", assets_header)
+        self.assertIn("LV_COLOR_FORMAT_A4", assets_source)
+        self.assertIn("HensunFaceSceneImage", assets_header)
+        self.assertIn("HensunFaceSceneAccentRgb", assets_header)
+        for symbol in symbols:
+            c_name = f"hensun_symbol_{symbol}"
+            self.assertIn(f"LV_IMAGE_DECLARE({c_name})", assets_header)
+            self.assertIn(f"const lv_image_dsc_t {c_name}", assets_source)
+
+        self.assertIn("lv_image_create", self.face_source)
+        self.assertIn("HensunFaceSceneImage(state_)", self.face_source)
+        self.assertIn("HensunFaceSceneAccentRgb(state_)", self.face_source)
+        self.assertNotIn("accent_label_", self.face_header)
+        self.assertNotIn("lv_label_create(face_layer_)", self.face_source)
+        self.assertNotIn("lv_label_set_text(accent_label_", self.face_source)
+
+        self.assertIn("--check", generator_path.read_text(encoding="utf-8"))
+        self.assertIn("product owner confirmed", provenance)
+
     def test_face_states_are_bound_to_real_event_inputs(self):
         canonical_inputs = [
             "listening_started", "positive_response", "clarification_needed",

@@ -1,0 +1,490 @@
+{
+  "source": {
+    "package": "HensunAI-60场景表情开发包-V1.0",
+    "style_version": "HENSUN_FACE_V1.0",
+    "manifest_sha256": "ef297b34bb0d7e33915392513b2142d5a9b47bac912bd87e2f2b4151c79693a6",
+    "derivation": "48x48 LVGL A4 local symbol components"
+  },
+  "scenes": [
+    {
+      "id": "001",
+      "name": "专注倾听",
+      "event": "LISTENING_STARTED",
+      "symbol": "listen",
+      "accent": "cyan",
+      "source_asset_sha256": "1a89c6a1fc7cf962e87531b05033e9ec9e5dfdcb292ea282fb61d054fef9bce5"
+    },
+    {
+      "id": "002",
+      "name": "开心回应",
+      "event": "POSITIVE_RESPONSE",
+      "symbol": "sparkles",
+      "accent": "cyan",
+      "source_asset_sha256": "dc8c3dcabcc8ec06cb78c6a3095110622a1edeeaeddb000952262df261e3e469"
+    },
+    {
+      "id": "003",
+      "name": "疑惑思考",
+      "event": "CLARIFICATION_NEEDED",
+      "symbol": "thought",
+      "accent": "cyan",
+      "source_asset_sha256": "f72808293cf3d70930d9a67d993fe2d4e08e41e79a3b49135be2de975de9b0b2"
+    },
+    {
+      "id": "004",
+      "name": "深度思考",
+      "event": "PROCESSING_STARTED",
+      "symbol": "thought",
+      "accent": "blue",
+      "source_asset_sha256": "147cbbf364de85d101a303662d5eef518ff6a83d964fe6a012407632f9fb7d89"
+    },
+    {
+      "id": "005",
+      "name": "请你确认",
+      "event": "CONFIRMATION_REQUIRED",
+      "symbol": "confirm_ring",
+      "accent": "amber",
+      "source_asset_sha256": "0109f8a9a88443bf89848c2d8b77fb77c98b29f8467e2f0691153f186cfb778c"
+    },
+    {
+      "id": "006",
+      "name": "没有听清",
+      "event": "ASR_LOW_CONFIDENCE",
+      "symbol": "listen",
+      "accent": "cyan",
+      "source_asset_sha256": "b2bca1b1927f03566ff9babbd453c645c11a1fa85a543455ffcd71fdc59c77de"
+    },
+    {
+      "id": "007",
+      "name": "环境太吵",
+      "event": "NOISY_ENVIRONMENT",
+      "symbol": "noise",
+      "accent": "amber",
+      "source_asset_sha256": "6cdf3e60600b4403d7482a4c3c3edac6ddfb677159bab3e1f2e3539c837df6fd"
+    },
+    {
+      "id": "008",
+      "name": "等你继续",
+      "event": "USER_CONTINUE_EXPECTED",
+      "symbol": "ellipsis",
+      "accent": "cyan",
+      "source_asset_sha256": "f40f3788ce7419aa3c52d98e43cf2e11e37742315e37cc8e9ff2d68c114793ff"
+    },
+    {
+      "id": "009",
+      "name": "被用户打断",
+      "event": "USER_INTERRUPTED_ASSISTANT",
+      "symbol": "listen",
+      "accent": "cyan",
+      "source_asset_sha256": "cf8399d77e937a2ea3801aab97094e543d5514620529f23ebb88d5185c7994a6"
+    },
+    {
+      "id": "010",
+      "name": "开机欢迎",
+      "event": "BOOT_READY",
+      "symbol": "startup",
+      "accent": "mint",
+      "source_asset_sha256": "4ced635340f2045f750fec98a34029ca247e0105aa14feef73f5b7a195acf2b1"
+    },
+    {
+      "id": "011",
+      "name": "唤醒响应",
+      "event": "WAKE_WORD_DETECTED",
+      "symbol": "listen",
+      "accent": "cyan",
+      "source_asset_sha256": "44dc671739d1e279f28cf81bb38002cd8cc4bceac7bfa0c0e5b08be6c007b517"
+    },
+    {
+      "id": "012",
+      "name": "待机呼吸",
+      "event": "IDLE_ENTERED",
+      "symbol": "none",
+      "accent": "cyan",
+      "source_asset_sha256": "883875a16804d6068a4a42b7bb33e446ebd722ae5fb1004b592402add887db4c"
+    },
+    {
+      "id": "013",
+      "name": "首次配对引导",
+      "event": "PAIRING_MODE_ENTERED",
+      "symbol": "pairing",
+      "accent": "mint",
+      "source_asset_sha256": "7765bb0a4db55aabb7a9ac333c350093ca2a17187d5a21145575882ea7a037f0"
+    },
+    {
+      "id": "014",
+      "name": "网络连接成功",
+      "event": "NETWORK_CONNECTED",
+      "symbol": "wifi",
+      "accent": "mint",
+      "source_asset_sha256": "353ab3bebb56d6696004d3b56fbbef2cd7870e6f71eea4eec822ab172185c416"
+    },
+    {
+      "id": "015",
+      "name": "正在充电",
+      "event": "CHARGING_STARTED",
+      "symbol": "battery_charge",
+      "accent": "mint",
+      "source_asset_sha256": "7d22dc9fb44ca10477fe5fd053215419362aca2bdcc2b04ff21bcf0883120766"
+    },
+    {
+      "id": "016",
+      "name": "充电完成",
+      "event": "CHARGE_COMPLETE",
+      "symbol": "battery_done",
+      "accent": "mint",
+      "source_asset_sha256": "a8c849821ab57d94c5ce9ea2e60e29e0cce951c893e740d1385b0b127256a3a3"
+    },
+    {
+      "id": "017",
+      "name": "进入休眠",
+      "event": "SLEEP_ENTERED",
+      "symbol": "moon",
+      "accent": "blue",
+      "source_asset_sha256": "2a2b1a26c48b572603647e2e03f1f431a053ca8c80af26069dc80c4a9eeeb060"
+    },
+    {
+      "id": "018",
+      "name": "偷偷轻笑",
+      "event": "MILD_AMUSEMENT",
+      "symbol": "sparkles",
+      "accent": "pink",
+      "source_asset_sha256": "3c8ca846331b2927dae424a7e761eff508b083417aa09a5724827d5bcf38a64a"
+    },
+    {
+      "id": "019",
+      "name": "开怀大笑",
+      "event": "STRONG_AMUSEMENT",
+      "symbol": "sparkles",
+      "accent": "amber",
+      "source_asset_sha256": "08bea14622adf695326846b8ce226037cd6e2607cc1b1866e9163dd32b7bf422"
+    },
+    {
+      "id": "020",
+      "name": "惊喜发现",
+      "event": "POSITIVE_SURPRISE",
+      "symbol": "sparkles",
+      "accent": "amber",
+      "source_asset_sha256": "52b1bed15cb8d6c3193b0526519bfa350604dcadd0d1c1180a3845cb9723c252"
+    },
+    {
+      "id": "021",
+      "name": "害羞受夸",
+      "event": "COMPLIMENT_RECEIVED",
+      "symbol": "heart",
+      "accent": "pink",
+      "source_asset_sha256": "8eafde3bb888e41b26fd12bc8cc51569c208994857ec5fdf5e04f13d50d5bf4c"
+    },
+    {
+      "id": "022",
+      "name": "庆祝成就",
+      "event": "ACHIEVEMENT_CELEBRATION",
+      "symbol": "confetti",
+      "accent": "amber",
+      "source_asset_sha256": "9a18ecea7d8c87236115cf2896efcd5a694d51a59410e83c8fd0514486dc615f"
+    },
+    {
+      "id": "023",
+      "name": "为你加油",
+      "event": "ENCOURAGEMENT_REQUESTED",
+      "symbol": "arrow_up",
+      "accent": "mint",
+      "source_asset_sha256": "eb1d3406efaf6134a235441fd37535b17865cb6a8569f410d1e4b905a989c210"
+    },
+    {
+      "id": "024",
+      "name": "真诚感谢",
+      "event": "THANKS_RECEIVED",
+      "symbol": "heart",
+      "accent": "pink",
+      "source_asset_sha256": "a9400506f26e3a3aa4e40ec3bb8834f0a7b1668e134352dbd8f45ca1e5384690"
+    },
+    {
+      "id": "025",
+      "name": "爱心回应",
+      "event": "AFFECTION_RECEIVED",
+      "symbol": "heart",
+      "accent": "pink",
+      "source_asset_sha256": "10156adcc714a1477d9c25bb99aa5a013c9e8cfa6a9c3003ceed1cc7dff22f79"
+    },
+    {
+      "id": "026",
+      "name": "好奇期待",
+      "event": "CURIOSITY_ENGAGED",
+      "symbol": "question",
+      "accent": "amber",
+      "source_asset_sha256": "e33251ae3a444532e58030f73eab6f927bde3440b6342b6e6d7b8590a152cf22"
+    },
+    {
+      "id": "027",
+      "name": "察觉难过",
+      "event": "SADNESS_DETECTED",
+      "symbol": "none",
+      "accent": "blue",
+      "source_asset_sha256": "47245503dd23f55b89c550aef88c58f9d7bd8222cf6ad673e74029aea343b43e"
+    },
+    {
+      "id": "028",
+      "name": "温柔安慰",
+      "event": "COMFORT_MODE_ENTERED",
+      "symbol": "hug",
+      "accent": "pink",
+      "source_asset_sha256": "22ddffafe67de92015714e62e94d63658b5e942eb3a9f82b1fc615e01fe78c37"
+    },
+    {
+      "id": "029",
+      "name": "担心关切",
+      "event": "WORRY_DETECTED",
+      "symbol": "none",
+      "accent": "amber",
+      "source_asset_sha256": "94c24c59c5fcc89d9f3c407f4e4000215ad8420b07154b43159e87743bd6f3c8"
+    },
+    {
+      "id": "030",
+      "name": "生气降温",
+      "event": "ANGER_DETECTED",
+      "symbol": "breath",
+      "accent": "blue",
+      "source_asset_sha256": "156ac0c877ff14050b62e8851efa651dc1e10f51a62b1191583f38eb5457ad32"
+    },
+    {
+      "id": "031",
+      "name": "害怕安抚",
+      "event": "FEAR_DETECTED",
+      "symbol": "shield",
+      "accent": "mint",
+      "source_asset_sha256": "358fe6b3a00a80b8a37b6e78979edc1d6fb84ba71dd7b8f4b1aa2f21a4574c2a"
+    },
+    {
+      "id": "032",
+      "name": "孤独陪伴",
+      "event": "LONELINESS_DETECTED",
+      "symbol": "heart",
+      "accent": "mint",
+      "source_asset_sha256": "cbdfbcf69d85a8a85247dc49468f973c10876812f749d701a9d65a0410fb9276"
+    },
+    {
+      "id": "033",
+      "name": "疲惫关怀",
+      "event": "FATIGUE_DETECTED",
+      "symbol": "thought",
+      "accent": "blue",
+      "source_asset_sha256": "dd2f49c1e222da26f7301208b140d78e575a3d60d7dd949618acae64394c04f4"
+    },
+    {
+      "id": "034",
+      "name": "委屈共情",
+      "event": "UNFAIRNESS_DISTRESS",
+      "symbol": "teardrop",
+      "accent": "blue",
+      "source_asset_sha256": "696d2d757ad2ea2c38d4abfd583fb1f0a5bf01bb1c13219aecd74dc0a02535fb"
+    },
+    {
+      "id": "035",
+      "name": "遗憾失落",
+      "event": "DISAPPOINTMENT_DETECTED",
+      "symbol": "teardrop",
+      "accent": "blue",
+      "source_asset_sha256": "9925730bcdb625ba34991acc45bd8dbde980c3729aba243f5bb4e96c00d4cfc0"
+    },
+    {
+      "id": "036",
+      "name": "机器人道歉",
+      "event": "ASSISTANT_APOLOGY_REQUIRED",
+      "symbol": "none",
+      "accent": "blue",
+      "source_asset_sha256": "34fcce4cd33fc333a5ec629dd68317da47568c0248571113d2bfe0043fa5ffc2"
+    },
+    {
+      "id": "037",
+      "name": "初次见面",
+      "event": "FIRST_INTERACTION",
+      "symbol": "greeting",
+      "accent": "pink",
+      "source_asset_sha256": "2eb0f4b412d246d5f545f83071183a40fb1b8194b843bc96d479eed4de36f917"
+    },
+    {
+      "id": "038",
+      "name": "早安问候",
+      "event": "MORNING_GREETING",
+      "symbol": "sun",
+      "accent": "amber",
+      "source_asset_sha256": "a4dd171c41c8105550b7bf9ef42df56e3b5fd05404e9ea2c3890c0c91d6d484f"
+    },
+    {
+      "id": "039",
+      "name": "午间问候",
+      "event": "NOON_GREETING",
+      "symbol": "thought",
+      "accent": "blue",
+      "source_asset_sha256": "0012afab6643d586decbec330b02a5f8793b2e3c8539221785b6f124b1078c9c"
+    },
+    {
+      "id": "040",
+      "name": "晚安入睡",
+      "event": "BEDTIME_GREETING",
+      "symbol": "moon",
+      "accent": "blue",
+      "source_asset_sha256": "a6143b3d95de5b81db364ab38d2fefc861a8dd69b2c7a909a3bba9ff0bc97934"
+    },
+    {
+      "id": "041",
+      "name": "久别重逢",
+      "event": "RETURN_AFTER_ABSENCE",
+      "symbol": "sparkles",
+      "accent": "amber",
+      "source_asset_sha256": "49244cc2f31dd400069ccb2e19f3a913c5c3b322e15bee6ca4c932ac78981058"
+    },
+    {
+      "id": "042",
+      "name": "生日祝福",
+      "event": "BIRTHDAY_GREETING",
+      "symbol": "confetti",
+      "accent": "pink",
+      "source_asset_sha256": "9b5fee3af87e74f1081f0da52c4d2ce4595949fe1aa453ed578a4601c3e12de0"
+    },
+    {
+      "id": "043",
+      "name": "节日祝福",
+      "event": "HOLIDAY_GREETING",
+      "symbol": "confetti",
+      "accent": "amber",
+      "source_asset_sha256": "3737763dbf87fd944a8b8f8705438448419b7f03496da784e9ac271ecca77f3a"
+    },
+    {
+      "id": "044",
+      "name": "吃饭关心",
+      "event": "MEAL_CHECK_IN",
+      "symbol": "meal",
+      "accent": "amber",
+      "source_asset_sha256": "9309aa55b1b6b278737250a4ef4bfdc14ddd0ba23aab69c7a73c51aab9837e92"
+    },
+    {
+      "id": "045",
+      "name": "提醒创建成功",
+      "event": "REMINDER_CREATED",
+      "symbol": "check",
+      "accent": "mint",
+      "source_asset_sha256": "380c20c6b5b07e31ce9ccba44bfb93ed5e07b202d89e00e86f757b2956d3b4cf"
+    },
+    {
+      "id": "046",
+      "name": "提醒时间到",
+      "event": "REMINDER_DUE",
+      "symbol": "bell",
+      "accent": "amber",
+      "source_asset_sha256": "bd6afa6567d22190884dbf630b023ca8e04ea4556b1c326f2dcb1ee797f27359"
+    },
+    {
+      "id": "047",
+      "name": "计时已经开始",
+      "event": "TIMER_STARTED",
+      "symbol": "clock",
+      "accent": "blue",
+      "source_asset_sha256": "3d934d650668132faf9ddd47ca91c6c25be2b484ca9be687c79cadaadafb0f28"
+    },
+    {
+      "id": "048",
+      "name": "计时结束",
+      "event": "TIMER_FINISHED",
+      "symbol": "timer_done",
+      "accent": "mint",
+      "source_asset_sha256": "ef8b9753e856e7fe4dbd4f583beeb23e80e6e5993c269fd5d1b8842100f721ac"
+    },
+    {
+      "id": "049",
+      "name": "闹钟响起",
+      "event": "ALARM_TRIGGERED",
+      "symbol": "bell",
+      "accent": "amber",
+      "source_asset_sha256": "8a5534d1d501199a2b851bf8953a05b7c32b85269625b619feed14b203ab0f5f"
+    },
+    {
+      "id": "050",
+      "name": "音量已调整",
+      "event": "VOLUME_CHANGED",
+      "symbol": "volume",
+      "accent": "blue",
+      "source_asset_sha256": "2491beaec11fc259d718a337368a9596a8072389b3c31770f1049833c8ddbe48"
+    },
+    {
+      "id": "051",
+      "name": "模式切换完成",
+      "event": "MODE_CHANGED",
+      "symbol": "mode",
+      "accent": "mint",
+      "source_asset_sha256": "5d8e72da2329c815879f44c2fcfa149ce33de7c6f691b17e73887ec54446dcd7"
+    },
+    {
+      "id": "052",
+      "name": "查询结果来了",
+      "event": "QUERY_RESULT_READY",
+      "symbol": "search",
+      "accent": "blue",
+      "source_asset_sha256": "a85d6dcca57d7d9e021a51cf7b2565a7c52a9b10e4a4f1628fc72af1fc2cf0a6"
+    },
+    {
+      "id": "053",
+      "name": "网络不可用",
+      "event": "NETWORK_UNAVAILABLE",
+      "symbol": "wifi_broken",
+      "accent": "amber",
+      "source_asset_sha256": "f75138b40df297445d016ae258d6b7c7d3afa18f7a953c14945da57d6b7f9b3e"
+    },
+    {
+      "id": "054",
+      "name": "云服务繁忙",
+      "event": "CLOUD_SERVICE_UNAVAILABLE",
+      "symbol": "service_busy",
+      "accent": "amber",
+      "source_asset_sha256": "8ecda49479dcb97e79e848ca5a7ade444056918edeb79d1ecceaa047b64816cc"
+    },
+    {
+      "id": "055",
+      "name": "电量偏低",
+      "event": "BATTERY_LOW",
+      "symbol": "battery_low",
+      "accent": "red",
+      "source_asset_sha256": "bfa4983fdcadde34059f6ecccc668b1e43e64afef697ba3f2b77f8a3a48b8a5e"
+    },
+    {
+      "id": "056",
+      "name": "电量极低",
+      "event": "BATTERY_CRITICAL",
+      "symbol": "battery_critical",
+      "accent": "red",
+      "source_asset_sha256": "e3e13817f0fa02f3f29a0b50300e766b4e77ac37b4ff9cbbe74f0d29de8f0450"
+    },
+    {
+      "id": "057",
+      "name": "设备温度过高",
+      "event": "DEVICE_OVERHEAT",
+      "symbol": "thermometer",
+      "accent": "red",
+      "source_asset_sha256": "76ebc92367646660e343dd9136204b131c4e0c9ccbeb1cc3dca61e887bae21a4"
+    },
+    {
+      "id": "058",
+      "name": "麦克风异常",
+      "event": "MICROPHONE_FAULT",
+      "symbol": "mic_broken",
+      "accent": "amber",
+      "source_asset_sha256": "d13a5671d3ed062cb59f71983e52c2df9bfc0ecd634da101f95cc8caaf5bc30d"
+    },
+    {
+      "id": "059",
+      "name": "内容安全拒答",
+      "event": "CONTENT_SAFETY_BLOCKED",
+      "symbol": "shield",
+      "accent": "blue",
+      "source_asset_sha256": "35686792cfe1c96a099f2b450910a47b095bceb8c3304e9017a809aa8182b2ff"
+    },
+    {
+      "id": "060",
+      "name": "用户危机介入",
+      "event": "USER_CRISIS_DETECTED",
+      "symbol": "none",
+      "accent": "cyan",
+      "source_asset_sha256": "65adf1d785441130686e06866d8d34c48639434ef43041d4214c32d81e8b4f95"
+    }
+  ]
+}

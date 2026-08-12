@@ -1,5 +1,7 @@
 #include "hensun_face_display.h"
 
+#include "hensun_face_assets.h"
+
 #include "application.h"
 #include "assets/lang_config.h"
 
@@ -190,6 +192,14 @@ void Place(lv_obj_t* object, int width, int height, int x, int y) {
     lv_obj_align(object, LV_ALIGN_CENTER, x, y);
 }
 
+const lv_image_dsc_t* HensunFaceSceneImage(HensunFaceState state) {
+    return HensunFaceSceneImageByIndex(static_cast<uint8_t>(state));
+}
+
+uint32_t HensunFaceSceneAccentRgb(HensunFaceState state) {
+    return HensunFaceSceneAccentRgbByIndex(static_cast<uint8_t>(state));
+}
+
 }  // namespace
 
 HensunFaceDisplay::HensunFaceDisplay(esp_lcd_panel_io_handle_t panel_io,
@@ -292,12 +302,11 @@ void HensunFaceDisplay::CreateFaceObjects() {
     StyleShape(left_cheek_, kPinkColor, LV_OPA_80);
     StyleShape(right_cheek_, kPinkColor, LV_OPA_80);
 
-    accent_label_ = lv_label_create(face_layer_);
-    lv_obj_set_width(accent_label_, 64);
-    lv_obj_set_style_text_align(accent_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(accent_label_, lv_color_hex(kCyanColor), 0);
-    lv_label_set_text(accent_label_, "");
-    lv_obj_align(accent_label_, LV_ALIGN_CENTER, 70, -78);
+    symbol_image_ = lv_image_create(face_layer_);
+    lv_obj_remove_flag(symbol_image_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(symbol_image_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(symbol_image_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(symbol_image_, LV_ALIGN_CENTER, 72, -78);
 }
 
 void HensunFaceDisplay::SetStatus(const char* status) {
@@ -544,7 +553,7 @@ void HensunFaceDisplay::RenderFace() {
     int left_brow_rotation = 0;
     int right_brow_rotation = 0;
     uint32_t main_color = kCyanColor;
-    uint32_t accent_color = kCyanColor;
+    uint32_t accent_color = HensunFaceSceneAccentRgb(state_);
     const char* accent = "";
     bool show_highlights = !blink;
     bool show_cheeks = false;
@@ -1142,9 +1151,22 @@ void HensunFaceDisplay::RenderFace() {
         lv_obj_add_flag(right_cheek_, LV_OBJ_FLAG_HIDDEN);
     }
 
-    lv_label_set_text(accent_label_, accent);
-    lv_obj_set_style_text_color(accent_label_, lv_color_hex(accent_color), 0);
-    lv_obj_set_style_text_opa(accent_label_, static_cast<lv_opa_t>(150 + pulse * 5), 0);
+    const lv_image_dsc_t* scene_image = HensunFaceSceneImage(state_);
+    if (scene_image == nullptr) {
+        current_symbol_image_ = nullptr;
+        lv_obj_add_flag(symbol_image_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        if (current_symbol_image_ != scene_image) {
+            current_symbol_image_ = scene_image;
+            lv_image_set_src(symbol_image_, scene_image);
+        }
+        lv_obj_set_style_image_recolor(symbol_image_, lv_color_hex(accent_color), 0);
+        lv_obj_set_style_image_recolor_opa(symbol_image_, LV_OPA_COVER, 0);
+        lv_obj_set_style_image_opa(
+            symbol_image_, static_cast<lv_opa_t>(185 + std::min(pulse, 20 - pulse) * 6), 0);
+        lv_obj_align(symbol_image_, LV_ALIGN_CENTER, 72, -78 + (pulse >= 10 ? 1 : 0));
+        lv_obj_remove_flag(symbol_image_, LV_OBJ_FLAG_HIDDEN);
+    }
 
     const int64_t render_us = esp_timer_get_time() - started_us;
     render_total_us_ += render_us;
