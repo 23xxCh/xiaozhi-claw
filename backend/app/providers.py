@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -93,6 +94,128 @@ class OpenAICompatibleSpeechProvider:
         return await self.normalizer.normalize_tts(response.content)
 
 
+def _append_path(url: str, path: str) -> str:
+    """Accept either a full endpoint or a provider base URL."""
+    normalized = url.rstrip("/")
+    if normalized.endswith(path):
+        return normalized
+    return f"{normalized}{path}"
+
+
+def _message_text(message: object) -> str:
+    if isinstance(message, str):
+        return message
+    if isinstance(message, list):
+        return "".join(
+            str(item.get("text", ""))
+            for item in message
+            if isinstance(item, dict) and item.get("type") in {None, "text"}
+        )
+    return ""
+
+
+def _message_emotion(message: object) -> str | None:
+    if not isinstance(message, dict):
+        return None
+    annotations = message.get("annotations")
+    if not isinstance(annotations, list):
+        return None
+    for annotation in annotations:
+        if isinstance(annotation, dict) and annotation.get("emotion"):
+            return str(annotation["emotion"])
+    return None
+
+
+class QwenDashScopeSpeechProvider:
+    """Batch Qwen ASR via OpenAI compatibility and TTS via DashScope native API."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        client: httpx.AsyncClient | None = None,
+        normalizer: TtsAudioNormalizer | None = None,
+    ) -> None:
+        self.settings = settings
+        self.client = client
+        self.normalizer = normalizer or FfmpegOpusNormalizer(settings.ffmpeg_path)
+        self.last_emotion: str | None = None
+
+    async def _post(self, url: str, **kwargs: object) -> httpx.Response:
+        if self.client is not None:
+            return await self.client.post(url, **kwargs)
+        async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
+            return await client.post(url, **kwargs)
+
+    async def _get(self, url: str) -> httpx.Response:
+        if self.client is not None:
+            return await self.client.get(url)
+        async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
+            return await client.get(url)
+
+    async def transcribe(self, audio_frames: list[bytes]) -> str:
+        ogg_audio = opus_packets_to_ogg(
+            audio_frames,
+            input_sample_rate=16000,
+            frame_duration_ms=60,
+        )
+        data_uri = "data:audio/ogg;base64," + base64.b64encode(ogg_audio).decode("ascii")
+        response = await self._post(
+            _append_path(self.settings.asr_url, "/chat/completions"),
+            headers={"Authorization": f"Bearer {self.settings.asr_api_key}"},
+            json={
+                "model": self.settings.asr_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": data_uri, "format": "ogg"},
+                            }
+                        ],
+                    }
+                ],
+                "stream": False,
+                "asr_options": {"language": "zh", "enable_itn": True},
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        self.last_emotion = _message_emotion(message)
+        content = message.get("content") if isinstance(message, dict) else ""
+        return _message_text(content).strip()
+
+    async def synthesize(self, text: str) -> list[bytes]:
+        response = await self._post(
+            self.settings.tts_url,
+            headers={"Authorization": f"Bearer {self.settings.tts_api_key}"},
+            json={
+                "model": self.settings.tts_model,
+                "input": {
+                    "text": text,
+                    "voice": self.settings.tts_voice,
+                    "language_type": self.settings.tts_language_type,
+                },
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        audio = payload.get("output", {}).get("audio", {})
+        audio_data = str(audio.get("data") or "")
+        if audio_data:
+            raw_audio = base64.b64decode(audio_data)
+        else:
+            audio_url = str(audio.get("url") or "")
+            if not audio_url:
+                raise RuntimeError("DashScope TTS response did not contain audio data or URL")
+            audio_response = await self._get(audio_url)
+            audio_response.raise_for_status()
+            raw_audio = audio_response.content
+        return await self.normalizer.normalize_tts(raw_audio)
+
+
 class OpenAICompatibleLlmProvider:
     def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None) -> None:
         self.settings = settings
@@ -100,9 +223,13 @@ class OpenAICompatibleLlmProvider:
 
     async def _post(self, **kwargs: object) -> httpx.Response:
         if self.client is not None:
-            return await self.client.post(self.settings.llm_url, **kwargs)
+            return await self.client.post(
+                _append_path(self.settings.llm_url, "/chat/completions"), **kwargs
+            )
         async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
-            return await client.post(self.settings.llm_url, **kwargs)
+            return await client.post(
+                _append_path(self.settings.llm_url, "/chat/completions"), **kwargs
+            )
 
     async def reply(self, text: str, memories: list[str]) -> str:
         memory_block = "\n".join(f"- {item}" for item in memories[:10])
@@ -140,8 +267,16 @@ class ProviderBundle:
 def create_providers(settings: Settings) -> ProviderBundle:
     if settings.provider_mode == "mock":
         return ProviderBundle(MockSpeechProvider(), MockLlmProvider(), "mock-utf8")
+    uses_dashscope_speech = (
+        settings.asr_protocol == "qwen-chat-completions"
+        or settings.tts_protocol == "dashscope-generation"
+    )
+    if uses_dashscope_speech:
+        speech = QwenDashScopeSpeechProvider(settings)
+    else:
+        speech = OpenAICompatibleSpeechProvider(settings)
     return ProviderBundle(
-        OpenAICompatibleSpeechProvider(settings),
+        speech,
         OpenAICompatibleLlmProvider(settings),
         "opus",
     )

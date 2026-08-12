@@ -18,16 +18,21 @@ def test_self_harm_phrase_uses_fixed_safety_response() -> None:
 
 def test_production_rejects_development_secrets() -> None:
     with pytest.raises(ValueError, match="Unsafe production secrets"):
-        Settings(app_env="production", provider_mode="custom")
+        Settings(_env_file=None, app_env="production", provider_mode="custom")
 
 
 def test_custom_provider_requires_all_model_endpoints() -> None:
     with pytest.raises(ValueError, match="Missing custom provider settings"):
-        Settings(provider_mode="custom", asr_url="https://asr.example/v1/audio/transcriptions")
+        Settings(
+            _env_file=None,
+            provider_mode="custom",
+            asr_url="https://asr.example/v1/audio/transcriptions",
+        )
 
 
 def test_custom_provider_accepts_separate_asr_tts_and_llm_models() -> None:
     settings = Settings(
+        _env_file=None,
         provider_mode="custom",
         asr_url="https://asr.example/v1/audio/transcriptions",
         asr_api_key="asr-secret",

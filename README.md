@@ -45,10 +45,14 @@ the Wi-Fi credentials. Device activation and agent configuration remain in
 ### 2. Hensun self-hosted edition
 
 Copy `.env.example` to `.env`, set `PROVIDER_MODE=custom`, then configure the
-separate ASR, TTS and LLM URLs, keys and model names. The ASR endpoint must use
-the OpenAI transcription multipart shape, the TTS endpoint must use the OpenAI
-speech JSON shape, and the LLM endpoint must accept Chat Completions JSON. TTS
-audio is normalized with FFmpeg before it reaches the device.
+separate ASR, TTS and LLM URLs, keys and model names. The default provider
+protocols are OpenAI-compatible transcription, speech and Chat Completions.
+For the current Qwen/DeepSeek pilot, use `ASR_PROTOCOL=qwen-chat-completions`
+with the DashScope compatible base URL and `TTS_PROTOCOL=dashscope-generation`
+with DashScope's native generation endpoint. Qwen's OpenAI-compatible ASR is
+the batch `qwen3-asr-flash` model; `qwen3-asr-flash-realtime` remains a separate
+WebSocket adapter and is not silently treated as HTTP. TTS audio is normalized
+with FFmpeg before it reaches the device.
 
 For the current LAN pilot:
 

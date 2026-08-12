@@ -18,13 +18,18 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = 30
     ffmpeg_path: str = "ffmpeg"
 
+    asr_protocol: Literal["openai-transcriptions", "qwen-chat-completions"] = (
+        "openai-transcriptions"
+    )
     asr_url: str = ""
     asr_api_key: str = ""
     asr_model: str = ""
+    tts_protocol: Literal["openai-speech", "dashscope-generation"] = "openai-speech"
     tts_url: str = ""
     tts_api_key: str = ""
     tts_model: str = ""
     tts_voice: str = ""
+    tts_language_type: str = "Chinese"
     tts_response_format: str = "mp3"
     llm_url: str = ""
     llm_api_key: str = ""
