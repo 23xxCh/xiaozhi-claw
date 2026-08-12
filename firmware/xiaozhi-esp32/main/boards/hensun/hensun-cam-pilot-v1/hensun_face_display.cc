@@ -17,6 +17,7 @@ namespace {
 
 constexpr char kTag[] = "HensunFace";
 constexpr uint32_t kAnimationPeriodMs = 50;
+constexpr uint32_t kEntryAnimationFrames = 8;
 constexpr uint32_t kShowcaseStateFrames = 24;  // 1.2 seconds at 20 FPS.
 constexpr uint8_t kShowcaseSceneCount = 60;
 static_assert(kShowcaseSceneCount == static_cast<uint8_t>(HensunFaceState::kCount));
@@ -41,6 +42,31 @@ enum class MouthStyle : uint8_t {
     kFlat,
     kOpen,
     kFrown,
+};
+
+enum class MotionFamily : uint8_t {
+    kCalm,
+    kListen,
+    kThink,
+    kSpeak,
+    kCelebrate,
+    kSleep,
+    kAlert,
+    kStatus,
+    kRestrained,
+};
+
+struct FaceMotion {
+    int face_x = 0;
+    int face_y = 0;
+    int eye_shift_x = 0;
+    int mouth_y = 0;
+    int cheek_y = 0;
+    int symbol_x = 0;
+    int symbol_y = 0;
+    uint16_t symbol_scale = LV_SCALE_NONE;
+    int16_t symbol_rotation = 0;
+    lv_opa_t symbol_opacity = 230;
 };
 
 // Canonical names are sent by the Hensun cloud in llm.emotion or alert.emotion.
@@ -177,6 +203,173 @@ bool StartsWith(const char* text, const char* prefix) {
     return std::strncmp(text, prefix, std::strlen(prefix)) == 0;
 }
 
+int TriangleWave(uint32_t frame, uint32_t period, int amplitude) {
+    const uint32_t half_period = period / 2;
+    const uint32_t phase = frame % period;
+    const uint32_t distance = phase <= half_period ? phase : period - phase;
+    return -amplitude + static_cast<int>(distance * amplitude * 2 / half_period);
+}
+
+MotionFamily MotionFamilyForState(HensunFaceState state) {
+    switch (state) {
+        case HensunFaceState::kListeningStarted: return MotionFamily::kListen;
+        case HensunFaceState::kWakeWordDetected: return MotionFamily::kListen;
+        case HensunFaceState::kAsrLowConfidence:
+        case HensunFaceState::kUserContinueExpected:
+            return MotionFamily::kListen;
+
+        case HensunFaceState::kProcessingStarted: return MotionFamily::kThink;
+        case HensunFaceState::kClarificationNeeded: return MotionFamily::kThink;
+        case HensunFaceState::kConfirmationRequired:
+        case HensunFaceState::kNoisyEnvironment:
+        case HensunFaceState::kCuriosityEngaged:
+            return MotionFamily::kThink;
+
+        case HensunFaceState::kQueryResultReady: return MotionFamily::kSpeak;
+
+        case HensunFaceState::kPositiveResponse: return MotionFamily::kCelebrate;
+        case HensunFaceState::kAchievementCelebration: return MotionFamily::kCelebrate;
+        case HensunFaceState::kMildAmusement:
+        case HensunFaceState::kStrongAmusement:
+        case HensunFaceState::kPositiveSurprise:
+        case HensunFaceState::kComplimentReceived:
+        case HensunFaceState::kEncouragementRequested:
+        case HensunFaceState::kThanksReceived:
+        case HensunFaceState::kAffectionReceived:
+        case HensunFaceState::kFirstInteraction:
+        case HensunFaceState::kReturnAfterAbsence:
+        case HensunFaceState::kBirthdayGreeting:
+        case HensunFaceState::kHolidayGreeting:
+            return MotionFamily::kCelebrate;
+
+        case HensunFaceState::kSleepEntered: return MotionFamily::kSleep;
+        case HensunFaceState::kFatigueDetected:
+        case HensunFaceState::kBedtimeGreeting:
+            return MotionFamily::kSleep;
+
+        case HensunFaceState::kAlarmTriggered: return MotionFamily::kAlert;
+        case HensunFaceState::kReminderDue: return MotionFamily::kAlert;
+        case HensunFaceState::kUserInterruptedAssistant:
+        case HensunFaceState::kAngerDetected:
+        case HensunFaceState::kNetworkUnavailable:
+        case HensunFaceState::kCloudServiceUnavailable:
+        case HensunFaceState::kBatteryCritical:
+        case HensunFaceState::kDeviceOverheat:
+        case HensunFaceState::kMicrophoneFault:
+            return MotionFamily::kAlert;
+
+        case HensunFaceState::kPairingModeEntered: return MotionFamily::kStatus;
+        case HensunFaceState::kChargingStarted: return MotionFamily::kStatus;
+        case HensunFaceState::kBootReady:
+        case HensunFaceState::kNetworkConnected:
+        case HensunFaceState::kChargeComplete:
+        case HensunFaceState::kMealCheckIn:
+        case HensunFaceState::kReminderCreated:
+        case HensunFaceState::kTimerStarted:
+        case HensunFaceState::kTimerFinished:
+        case HensunFaceState::kVolumeChanged:
+        case HensunFaceState::kModeChanged:
+        case HensunFaceState::kBatteryLow:
+            return MotionFamily::kStatus;
+
+        case HensunFaceState::kContentSafetyBlocked: return MotionFamily::kRestrained;
+        case HensunFaceState::kUserCrisisDetected: return MotionFamily::kRestrained;
+        case HensunFaceState::kSadnessDetected:
+        case HensunFaceState::kWorryDetected:
+        case HensunFaceState::kFearDetected:
+        case HensunFaceState::kLonelinessDetected:
+        case HensunFaceState::kUnfairnessDistress:
+        case HensunFaceState::kDisappointmentDetected:
+        case HensunFaceState::kAssistantApologyRequired:
+            return MotionFamily::kRestrained;
+
+        case HensunFaceState::kIdleEntered:
+        case HensunFaceState::kComfortModeEntered:
+        case HensunFaceState::kMorningGreeting:
+        case HensunFaceState::kNoonGreeting:
+            return MotionFamily::kCalm;
+        case HensunFaceState::kCount:
+            return MotionFamily::kRestrained;
+    }
+    return MotionFamily::kRestrained;
+}
+
+FaceMotion MotionForState(HensunFaceState state, uint32_t frame) {
+    FaceMotion motion;
+    const bool entering = frame < kEntryAnimationFrames;
+    if (entering) {
+        motion.face_y = static_cast<int>(
+            (kEntryAnimationFrames - frame) * 6 / kEntryAnimationFrames);
+        motion.symbol_scale = static_cast<uint16_t>(224 + frame * 4);
+        motion.symbol_opacity = static_cast<lv_opa_t>(175 + frame * 7);
+    }
+
+    switch (MotionFamilyForState(state)) {
+        case MotionFamily::kCalm:
+            motion.face_y += TriangleWave(frame, 80, 1);
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(256 + TriangleWave(frame, 64, 3));
+            }
+            break;
+        case MotionFamily::kListen:
+            motion.face_y += TriangleWave(frame, 40, 1);
+            motion.eye_shift_x = TriangleWave(frame, 48, 2);
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(256 + TriangleWave(frame, 32, 8));
+                motion.symbol_opacity = static_cast<lv_opa_t>(230 + TriangleWave(frame, 40, 20));
+            }
+            break;
+        case MotionFamily::kThink:
+            motion.eye_shift_x = TriangleWave(frame, 32, 4);
+            motion.symbol_y = TriangleWave(frame, 40, 2);
+            motion.symbol_rotation = static_cast<int16_t>(TriangleWave(frame, 48, 30));
+            break;
+        case MotionFamily::kSpeak:
+            motion.face_y += TriangleWave(frame, 16, 1);
+            motion.mouth_y = TriangleWave(frame, 8, 2);
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(256 + TriangleWave(frame, 16, 5));
+            }
+            break;
+        case MotionFamily::kCelebrate: {
+            const int lift = (TriangleWave(frame, 20, 2) + 2) / 2;
+            motion.face_y -= lift;
+            motion.cheek_y = -lift;
+            motion.symbol_y = -lift;
+            motion.symbol_rotation = static_cast<int16_t>(TriangleWave(frame, 24, 40));
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(264 + TriangleWave(frame, 20, 8));
+            }
+            break;
+        }
+        case MotionFamily::kSleep:
+            motion.face_y += TriangleWave(frame, 80, 1);
+            motion.symbol_y = TriangleWave(frame, 80, 2);
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(256 + TriangleWave(frame, 80, 3));
+            }
+            break;
+        case MotionFamily::kAlert:
+            motion.face_x = ((frame / 2) % 2 == 0) ? -2 : 2;
+            motion.symbol_x = -motion.face_x;
+            motion.symbol_rotation = static_cast<int16_t>(motion.face_x < 0 ? -60 : 60);
+            if (!entering) {
+                motion.symbol_scale = 264;
+            }
+            break;
+        case MotionFamily::kStatus:
+            if (!entering) {
+                motion.symbol_scale = static_cast<uint16_t>(256 + TriangleWave(frame, 40, 6));
+                motion.symbol_opacity = static_cast<lv_opa_t>(235 + TriangleWave(frame, 40, 15));
+            }
+            break;
+        case MotionFamily::kRestrained:
+            motion.symbol_opacity = entering ? motion.symbol_opacity : 230;
+            break;
+    }
+    return motion;
+}
+
 void StyleShape(lv_obj_t* object, uint32_t color, lv_opa_t opacity = LV_OPA_COVER) {
     lv_obj_remove_style_all(object);
     lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
@@ -255,7 +448,7 @@ void HensunFaceDisplay::SetupUI() {
     CreateFaceObjects();
     SetFaceStateLocked(StateFromDevice());
     animation_timer_ = lv_timer_create(AnimationTimerCallback, kAnimationPeriodMs, this);
-    ESP_LOGI(kTag, "Original 60-scene face set ready at 20 FPS");
+    ESP_LOGI(kTag, "Company-derived 60-scene face ready with 9 motion families at 20 FPS");
 }
 
 void HensunFaceDisplay::CreateFaceObjects() {
@@ -537,6 +730,7 @@ void HensunFaceDisplay::RenderFace() {
     const int64_t started_us = esp_timer_get_time();
     const int pulse = static_cast<int>(animation_frame_ % 20);
     const bool blink = state_ == HensunFaceState::kIdleEntered && animation_frame_ % 100 >= 94;
+    const FaceMotion motion = MotionForState(state_, animation_frame_);
 
     int eye_width = 50;
     int eye_height = blink ? 7 : 68;
@@ -1089,10 +1283,14 @@ void HensunFaceDisplay::RenderFace() {
     right_eye_height = right_eye_height == 0 ? eye_height : right_eye_height;
     const int left_glow_height = left_eye_height + (left_eye_height > 12 ? 12 : 5);
     const int right_glow_height = right_eye_height + (right_eye_height > 12 ? 12 : 5);
-    Place(left_eye_glow_, eye_width + 12, left_glow_height, -eye_x, eye_y);
-    Place(right_eye_glow_, eye_width + 12, right_glow_height, eye_x, eye_y);
-    Place(left_eye_, eye_width, left_eye_height, -eye_x, eye_y);
-    Place(right_eye_, eye_width, right_eye_height, eye_x, eye_y);
+    Place(left_eye_glow_, eye_width + 12, left_glow_height,
+          -eye_x + motion.face_x + motion.eye_shift_x, eye_y + motion.face_y);
+    Place(right_eye_glow_, eye_width + 12, right_glow_height,
+          eye_x + motion.face_x + motion.eye_shift_x, eye_y + motion.face_y);
+    Place(left_eye_, eye_width, left_eye_height,
+          -eye_x + motion.face_x + motion.eye_shift_x, eye_y + motion.face_y);
+    Place(right_eye_, eye_width, right_eye_height,
+          eye_x + motion.face_x + motion.eye_shift_x, eye_y + motion.face_y);
     lv_obj_set_style_bg_color(left_eye_, lv_color_hex(main_color), 0);
     lv_obj_set_style_bg_color(right_eye_, lv_color_hex(main_color), 0);
     lv_obj_set_style_bg_color(left_eye_glow_, lv_color_hex(main_color), 0);
@@ -1101,8 +1299,12 @@ void HensunFaceDisplay::RenderFace() {
     lv_obj_set_style_bg_opa(left_eye_glow_, glow_opacity, 0);
     lv_obj_set_style_bg_opa(right_eye_glow_, glow_opacity, 0);
 
-    Place(left_highlight_, 12, 17, -eye_x - 9 + pupil_shift, eye_y - 17);
-    Place(right_highlight_, 12, 17, eye_x - 9 + pupil_shift, eye_y - 17);
+    Place(left_highlight_, 12, 17,
+          -eye_x - 9 + pupil_shift + motion.face_x + motion.eye_shift_x,
+          eye_y - 17 + motion.face_y);
+    Place(right_highlight_, 12, 17,
+          eye_x - 9 + pupil_shift + motion.face_x + motion.eye_shift_x,
+          eye_y - 17 + motion.face_y);
     if (show_highlights) {
         lv_obj_remove_flag(left_highlight_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(right_highlight_, LV_OBJ_FLAG_HIDDEN);
@@ -1112,9 +1314,9 @@ void HensunFaceDisplay::RenderFace() {
     }
 
     Place(left_brow_, state_ == HensunFaceState::kUserInterruptedAssistant ? 44 : 28, 5,
-          -eye_x, brow_y);
+          -eye_x + motion.face_x + motion.eye_shift_x, brow_y + motion.face_y);
     Place(right_brow_, state_ == HensunFaceState::kUserInterruptedAssistant ? 44 : 28, 5,
-          eye_x, brow_y);
+          eye_x + motion.face_x + motion.eye_shift_x, brow_y + motion.face_y);
     lv_obj_set_style_bg_color(left_brow_, lv_color_hex(main_color), 0);
     lv_obj_set_style_bg_color(right_brow_, lv_color_hex(main_color), 0);
     lv_obj_set_style_transform_rotation(left_brow_, left_brow_rotation, 0);
@@ -1123,7 +1325,8 @@ void HensunFaceDisplay::RenderFace() {
     if (mouth_style == MouthStyle::kSmile || mouth_style == MouthStyle::kFrown) {
         lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
-        Place(mouth_arc_, mouth_width + 8, std::max(26, mouth_height + 20), mouth_x, mouth_y);
+        Place(mouth_arc_, mouth_width + 8, std::max(26, mouth_height + 20),
+              mouth_x + motion.face_x, mouth_y + motion.face_y + motion.mouth_y);
         if (mouth_style == MouthStyle::kSmile) {
             lv_arc_set_bg_angles(mouth_arc_, 25, 155);
         } else {
@@ -1133,7 +1336,8 @@ void HensunFaceDisplay::RenderFace() {
     } else {
         lv_obj_add_flag(mouth_arc_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
-        Place(mouth_, mouth_width, mouth_height, mouth_x, mouth_y);
+        Place(mouth_, mouth_width, mouth_height, mouth_x + motion.face_x,
+              mouth_y + motion.face_y + motion.mouth_y);
         lv_obj_set_style_bg_color(
             mouth_, lv_color_hex(mouth_style == MouthStyle::kOpen ? kBackgroundColor : main_color),
             0);
@@ -1141,8 +1345,10 @@ void HensunFaceDisplay::RenderFace() {
         lv_obj_set_style_border_color(mouth_, lv_color_hex(main_color), 0);
     }
 
-    Place(left_cheek_, 22, 7, -72, 47);
-    Place(right_cheek_, 22, 7, 72, 47);
+    Place(left_cheek_, 22, 7, -72 + motion.face_x,
+          47 + motion.face_y + motion.cheek_y);
+    Place(right_cheek_, 22, 7, 72 + motion.face_x,
+          47 + motion.face_y + motion.cheek_y);
     if (show_cheeks) {
         lv_obj_remove_flag(left_cheek_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(right_cheek_, LV_OBJ_FLAG_HIDDEN);
@@ -1162,9 +1368,12 @@ void HensunFaceDisplay::RenderFace() {
         }
         lv_obj_set_style_image_recolor(symbol_image_, lv_color_hex(accent_color), 0);
         lv_obj_set_style_image_recolor_opa(symbol_image_, LV_OPA_COVER, 0);
-        lv_obj_set_style_image_opa(
-            symbol_image_, static_cast<lv_opa_t>(185 + std::min(pulse, 20 - pulse) * 6), 0);
-        lv_obj_align(symbol_image_, LV_ALIGN_CENTER, 72, -78 + (pulse >= 10 ? 1 : 0));
+        lv_obj_set_style_image_opa(symbol_image_, motion.symbol_opacity, 0);
+        lv_image_set_scale(symbol_image_, motion.symbol_scale);
+        lv_image_set_rotation(symbol_image_, motion.symbol_rotation);
+        lv_obj_align(symbol_image_, LV_ALIGN_CENTER,
+                     72 + motion.face_x + motion.symbol_x,
+                     -78 + motion.face_y + motion.symbol_y);
         lv_obj_remove_flag(symbol_image_, LV_OBJ_FLAG_HIDDEN);
     }
 

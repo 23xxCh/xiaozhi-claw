@@ -24,6 +24,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.event_contract = (BOARD / "FACE_EVENT_CONTRACT.md").read_text(
             encoding="utf-8"
         )
+        self.animation_spec = (BOARD / "FACE_ANIMATION_SPEC.md").read_text(
+            encoding="utf-8"
+        )
 
     def test_has_isolated_official_and_selfhosted_variants(self):
         self.assertEqual(self.config["manufacturer"], "hensun")
@@ -179,7 +182,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("OnLongPress", self.source)
         self.assertIn("kAnimationPeriodMs = 50", self.face_source)
         self.assertIn("kShowcaseSceneCount = 60", self.face_source)
-        self.assertIn("Original 60-scene face set", self.face_source)
+        self.assertIn("Company-derived 60-scene face", self.face_source)
         self.assertIn("Starting 60-scene display showcase", self.face_source)
         self.assertIn("60-scene display showcase complete", self.face_source)
         self.assertIn("LVGL face update avg=", self.face_source)
@@ -237,6 +240,59 @@ class HensunCamPilotBoardTests(unittest.TestCase):
 
         self.assertIn("--check", generator_path.read_text(encoding="utf-8"))
         self.assertIn("product owner confirmed", provenance)
+
+    def test_face_has_bounded_state_specific_motion_profiles(self):
+        self.assertIn("kEntryAnimationFrames = 8", self.face_source)
+        self.assertIn("struct FaceMotion", self.face_source)
+        self.assertIn("MotionFamily MotionFamilyForState", self.face_source)
+        self.assertIn("FaceMotion MotionForState", self.face_source)
+
+        motion_routes = self.face_source.split(
+            "MotionFamily MotionFamilyForState", 1
+        )[1].split("FaceMotion MotionForState", 1)[0]
+        expected_routes = {
+            "kListeningStarted": "kListen",
+            "kWakeWordDetected": "kListen",
+            "kProcessingStarted": "kThink",
+            "kClarificationNeeded": "kThink",
+            "kQueryResultReady": "kSpeak",
+            "kPositiveResponse": "kCelebrate",
+            "kAchievementCelebration": "kCelebrate",
+            "kSleepEntered": "kSleep",
+            "kAlarmTriggered": "kAlert",
+            "kPairingModeEntered": "kStatus",
+            "kChargingStarted": "kStatus",
+            "kContentSafetyBlocked": "kRestrained",
+            "kUserCrisisDetected": "kRestrained",
+        }
+        for state, family in expected_routes.items():
+            self.assertRegex(
+                motion_routes,
+                rf"HensunFaceState::{state}:.*?MotionFamily::{family}",
+            )
+
+        motion_states = re.findall(r"case HensunFaceState::(k[A-Za-z0-9]+):", motion_routes)
+        enum_states = re.findall(
+            r"^\s+(k[A-Za-z0-9]+)(?:\s*=\s*0)?,?$", self.face_header, re.MULTILINE
+        )
+        self.assertEqual(len(motion_states), len(set(motion_states)))
+        self.assertEqual(set(motion_states), set(enum_states))
+
+        for api in (
+            "lv_image_set_scale",
+            "lv_image_set_rotation",
+            "motion.face_x",
+            "motion.face_y",
+            "motion.eye_shift_x",
+            "motion.mouth_y",
+            "motion.cheek_y",
+        ):
+            self.assertIn(api, self.face_source)
+
+        self.assertIn("existing 50 ms timer period (20 FPS)", self.animation_spec)
+        self.assertIn("at most 6 pixels", self.animation_spec)
+        self.assertIn("no full-screen or high-frequency", self.animation_spec)
+        self.assertIn("average LVGL face update below 8 ms", self.animation_spec)
 
     def test_face_states_are_bound_to_real_event_inputs(self):
         canonical_inputs = [

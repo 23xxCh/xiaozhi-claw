@@ -27,6 +27,10 @@ source hash, authorization statement and deterministic regeneration command.
 Hold the BOOT/chat button for two seconds to run the
 complete 72-second showcase; the existing single-click chat action is
 unchanged.
+The state-specific entry, breathing, glance, speaking, celebration, sleep,
+alert and status motion profiles are documented in
+[`FACE_ANIMATION_SPEC.md`](FACE_ANIMATION_SPEC.md). Safety and crisis scenes use
+the restrained profile without a looping bounce or shake.
 Serial logs report the average and maximum LVGL face-update cost every 100
 frames so the 20 FPS set can be measured on the actual board.
 
