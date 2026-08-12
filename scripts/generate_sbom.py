@@ -8,7 +8,6 @@ import tomllib
 import uuid
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "sbom.cdx.json"
 
@@ -79,10 +78,11 @@ def _firmware_components() -> list[dict[str, object]]:
 
 def main() -> None:
     components = _python_components() + _web_components() + _firmware_components()
+    identity = "\n".join(str(item["bom-ref"]) for item in components)
     bom = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
-        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "serialNumber": f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, identity)}",
         "version": 1,
         "metadata": {
             "component": {
