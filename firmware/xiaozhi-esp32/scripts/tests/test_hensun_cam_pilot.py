@@ -183,6 +183,8 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("HensunFaceDisplay", self.source)
         self.assertIn("StartShowcase", self.source)
         self.assertIn("OnLongPress", self.source)
+        self.assertIn("OnDoubleClick", self.source)
+        self.assertIn("EnterWifiConfigMode", self.source)
         self.assertIn("kAnimationPeriodMs = 50", self.face_source)
         self.assertIn("kShowcaseSceneCount = 60", self.face_source)
         self.assertIn("Company-derived 60-scene face", self.face_source)

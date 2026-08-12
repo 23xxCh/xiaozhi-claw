@@ -18,7 +18,7 @@
                 "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=y",
                 "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=n",
                 "CONFIG_SEND_WAKE_WORD_DATA=n",
-                "CONFIG_OTA_URL=\"https://api.hensun.invalid/v1/device/bootstrap\""
+                "CONFIG_OTA_URL=\"https://api.hensun.invalid/v1/device/xiaozhi-bootstrap\""
             ]
         }
     ]

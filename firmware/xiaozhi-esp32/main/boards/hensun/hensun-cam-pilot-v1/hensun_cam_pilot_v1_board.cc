@@ -124,6 +124,9 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnLongPress([this]() {
+            EnterWifiConfigMode();
+        });
+        boot_button_.OnDoubleClick([this]() {
             display_->StartShowcase();
         });
     }
