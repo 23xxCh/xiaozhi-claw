@@ -7,8 +7,10 @@ from backend.app.catalog import ensure_catalog
 from backend.app.config import get_settings
 from backend.app.db import Base, create_engine, create_session_factory
 from backend.app.device_connections import DeviceConnectionManager
+from backend.app.pricing import backfill_unpriced_provider_usage
 from backend.app.providers import create_fallback_providers
 from backend.app.routers import device_ws, health
+from backend.app.runtime_state import RuntimeStateReaper, reconcile_stale_runtime_state
 
 from .commands import DeviceCommandDispatcher
 from .providers import create_realtime_providers
@@ -26,17 +28,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await connection.run_sync(Base.metadata.create_all)
     async with app.state.session_factory() as session:
         await ensure_catalog(session)
+        await backfill_unpriced_provider_usage(session)
         await session.commit()
+    await reconcile_stale_runtime_state(
+        app.state.session_factory,
+        offline_after_seconds=settings.device_offline_after_seconds,
+    )
     dispatcher = DeviceCommandDispatcher(
         app.state.session_factory,
         app.state.device_connections,
         settings.command_poll_interval_seconds,
     )
     dispatcher.start()
+    reaper = RuntimeStateReaper(
+        app.state.session_factory,
+        offline_after_seconds=settings.device_offline_after_seconds,
+    )
+    reaper.start()
     try:
         yield
     finally:
         await dispatcher.stop()
+        await reaper.stop()
         await engine.dispose()
 
 

@@ -183,6 +183,7 @@ async def _record_turn(
     tts_latency_ms: int,
     first_audio_latency_ms: int | None,
     safety_category: str | None,
+    fallback_operations: set[str],
 ) -> None:
     estimated_input_tokens = max(1, len(transcript) // 4)
     estimated_output_tokens = max(1, len(reply) // 4)
@@ -223,6 +224,7 @@ async def _record_turn(
                     output_units=len(transcript),
                     latency_ms=asr_latency_ms,
                     cost_micros=asr_cost,
+                    error_code=("fallback-batch" if "asr" in fallback_operations else None),
                 ),
                 ProviderUsage(
                     session_id=conversation_id,
@@ -235,6 +237,7 @@ async def _record_turn(
                     output_units=estimated_output_tokens,
                     latency_ms=llm_latency_ms,
                     cost_micros=llm_cost,
+                    error_code=("fallback-batch" if "llm" in fallback_operations else None),
                 ),
                 ProviderUsage(
                     session_id=conversation_id,
@@ -246,6 +249,7 @@ async def _record_turn(
                     input_units=len(reply),
                     latency_ms=tts_latency_ms,
                     cost_micros=tts_cost,
+                    error_code=("fallback-batch" if "tts" in fallback_operations else None),
                 ),
             ]
         )
@@ -258,6 +262,7 @@ async def _record_turn(
                 "safety_category": safety_category,
                 "agent_id": snapshot.agent_id,
                 "config_version": snapshot.config_version,
+                "fallback_operations": sorted(fallback_operations),
             },
         )
         await session.commit()
@@ -302,6 +307,7 @@ async def _process_turn(
     tts_started = False
     batch_tts = False
     first_audio_latency_ms: int | None = None
+    fallback_operations: set[str] = set()
 
     async def send_packets() -> None:
         nonlocal first_audio_latency_ms
@@ -320,6 +326,7 @@ async def _process_turn(
             if fallback is None:
                 raise
             logger.warning("realtime ASR failed for %s; using batch fallback", serial)
+            fallback_operations.add("asr")
             transcript = await fallback.speech.transcribe(audio_frames)
             detected_emotion = getattr(fallback.speech, "last_emotion", None) or "neutral"
             transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
@@ -366,6 +373,7 @@ async def _process_turn(
                     if fallback is None:
                         raise
                     logger.warning("realtime TTS failed for %s; using batch fallback", serial)
+                    fallback_operations.add("tts")
                     batch_tts = True
                 if tts is not None and not providers.mock:
                     encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
@@ -417,6 +425,7 @@ async def _process_turn(
                 if fallback is None or spoken_parts:
                     raise
                 logger.warning("streaming LLM failed for %s; using batch fallback", serial)
+                fallback_operations.add("llm")
                 reply_parts.clear()
                 sentence_buffer = SentenceBuffer()
                 fallback_text = await fallback.llm.reply(transcript, snapshot.memories)
@@ -464,6 +473,7 @@ async def _process_turn(
             tts_latency_ms=tts_latency_ms,
             first_audio_latency_ms=first_audio_latency_ms,
             safety_category=safety.category,
+            fallback_operations=fallback_operations,
         )
         return safety.end_session
     except asyncio.CancelledError:

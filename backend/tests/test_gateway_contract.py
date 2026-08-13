@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from backend.app.models import ConversationSession, ProviderUsage
 from backend.realtime.emotion import EmotionRouter
@@ -180,6 +181,24 @@ def test_realtime_asr_failure_uses_bounded_batch_fallback(
         assert stt["type"] == "stt"
         assert stt["text"] == "备用识别"
         assert stt["emotion"] == "neutral"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["state"] == "start"
+        assert websocket.receive_json()["state"] == "sentence_start"
+        websocket.receive_bytes()
+        assert websocket.receive_json()["state"] == "stop"
+
+    async def load_asr_usage() -> ProviderUsage | None:
+        async with client.app.state.session_factory() as session:
+            return await session.scalar(
+                select(ProviderUsage)
+                .where(ProviderUsage.operation == "asr")
+                .order_by(ProviderUsage.created_at.desc())
+            )
+
+    usage = asyncio.run(load_asr_usage())
+    assert usage is not None
+    assert usage.error_code == "fallback-batch"
 
 
 def test_first_audio_frame_can_implicitly_start_listening(

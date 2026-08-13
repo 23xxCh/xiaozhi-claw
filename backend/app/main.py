@@ -11,6 +11,7 @@ from .catalog import ensure_catalog
 from .config import Settings, get_settings
 from .db import Base, create_engine, create_session_factory
 from .device_connections import DeviceConnectionManager
+from .pricing import backfill_unpriced_provider_usage
 from .providers import create_fallback_providers, create_providers
 from .routers import (
     agent_memories,
@@ -30,6 +31,7 @@ from .routers import (
     vision,
     xiaozhi_bootstrap,
 )
+from .runtime_state import RuntimeStateReaper, reconcile_stale_runtime_state
 
 
 def create_app(settings: Settings | None = None, *, include_device_gateway: bool = True) -> FastAPI:
@@ -45,8 +47,14 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
                 await connection.run_sync(Base.metadata.create_all)
         async with app.state.session_factory() as session:
             await ensure_catalog(session)
+            await backfill_unpriced_provider_usage(session)
             await session.commit()
+        await reconcile_stale_runtime_state(
+            app.state.session_factory,
+            offline_after_seconds=resolved.device_offline_after_seconds,
+        )
         dispatcher = None
+        reaper = None
         if include_device_gateway:
             dispatcher = DeviceCommandDispatcher(
                 app.state.session_factory,
@@ -54,11 +62,18 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
                 resolved.command_poll_interval_seconds,
             )
             dispatcher.start()
+            reaper = RuntimeStateReaper(
+                app.state.session_factory,
+                offline_after_seconds=resolved.device_offline_after_seconds,
+            )
+            reaper.start()
         try:
             yield
         finally:
             if dispatcher is not None:
                 await dispatcher.stop()
+            if reaper is not None:
+                await reaper.stop()
             await engine.dispose()
 
     app = FastAPI(

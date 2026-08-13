@@ -1,7 +1,9 @@
 import json
+import math
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
@@ -9,11 +11,15 @@ from ..db import get_session
 from ..dependencies import require_admin, require_staff
 from ..models import (
     AuditEvent,
+    ConversationSession,
     Device,
     DeviceLifecycle,
+    DeviceSession,
+    DeviceSessionStatus,
     ProviderUsage,
     StaffRole,
     StaffUser,
+    UsageEvent,
     User,
 )
 from ..schemas import (
@@ -31,6 +37,14 @@ from ..schemas import (
 from ..security import create_staff_access_token, hash_secret, new_device_secret
 
 router = APIRouter(prefix="/v1/admin", tags=["staff"])
+
+
+def _percentile(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(len(ordered) * percentile) - 1)
+    return ordered[index]
 
 
 def _response(staff: StaffUser) -> StaffResponse:
@@ -125,6 +139,139 @@ async def admin_overview(
         "users": int(users or 0),
         "devices": int(devices or 0),
         "owned_devices": int(owned or 0),
+    }
+
+
+@router.get("/metrics")
+async def admin_metrics(
+    request: Request,
+    _: StaffUser = Depends(
+        require_staff(StaffRole.SUPERADMIN, StaffRole.ENGINEERING, StaffRole.SUPPORT)
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    now = datetime.now(UTC)
+    since_24h = now - timedelta(hours=24)
+    since_7d = now - timedelta(days=7)
+    since_30d = now - timedelta(days=30)
+    offline_cutoff = now - timedelta(
+        seconds=request.app.state.settings.device_offline_after_seconds
+    )
+
+    voice_turns_24h = await session.scalar(
+        select(func.sum(UsageEvent.quantity)).where(
+            UsageEvent.kind == "voice-turn",
+            UsageEvent.created_at >= since_24h,
+        )
+    )
+    active_users_7d = await session.scalar(
+        select(func.count(func.distinct(UsageEvent.user_id))).where(
+            UsageEvent.kind == "voice-turn",
+            UsageEvent.created_at >= since_7d,
+        )
+    )
+    active_devices_7d = await session.scalar(
+        select(func.count(func.distinct(UsageEvent.device_id))).where(
+            UsageEvent.kind == "voice-turn",
+            UsageEvent.created_at >= since_7d,
+        )
+    )
+    active_users_30d = await session.scalar(
+        select(func.count(func.distinct(UsageEvent.user_id))).where(
+            UsageEvent.kind == "voice-turn",
+            UsageEvent.created_at >= since_30d,
+        )
+    )
+    online_devices = await session.scalar(
+        select(func.count(func.distinct(DeviceSession.device_id))).where(
+            DeviceSession.status == DeviceSessionStatus.ONLINE.value,
+            DeviceSession.heartbeat_at >= offline_cutoff,
+        )
+    )
+    stale_online_sessions = await session.scalar(
+        select(func.count()).select_from(DeviceSession).where(
+            DeviceSession.status == DeviceSessionStatus.ONLINE.value,
+            DeviceSession.heartbeat_at < offline_cutoff,
+        )
+    )
+    unfinished_conversations = await session.scalar(
+        select(func.count()).select_from(ConversationSession).where(
+            ConversationSession.ended_at.is_(None),
+            ConversationSession.started_at < offline_cutoff,
+        )
+    )
+    latencies = list(
+        await session.scalars(
+            select(ConversationSession.first_audio_latency_ms).where(
+                ConversationSession.started_at >= since_30d,
+                ConversationSession.first_audio_latency_ms.is_not(None),
+            )
+        )
+    )
+
+    fallback_condition = ProviderUsage.error_code.like("fallback-%")
+    error_condition = and_(
+        ProviderUsage.error_code.is_not(None),
+        ~fallback_condition,
+    )
+    provider_rows = (
+        await session.execute(
+            select(
+                ProviderUsage.operation,
+                func.count(ProviderUsage.id),
+                func.avg(ProviderUsage.latency_ms),
+                func.sum(ProviderUsage.cost_micros),
+                func.sum(case((error_condition, 1), else_=0)),
+                func.sum(case((fallback_condition, 1), else_=0)),
+            )
+            .where(ProviderUsage.created_at >= since_30d)
+            .group_by(ProviderUsage.operation)
+        )
+    ).all()
+    provider_latency = [
+        {
+            "operation": operation,
+            "requests": int(requests or 0),
+            "average_latency_ms": round(float(average_latency or 0)),
+            "cost_micros": int(cost or 0),
+            "errors": int(errors or 0),
+            "fallbacks": int(fallbacks or 0),
+        }
+        for operation, requests, average_latency, cost, errors, fallbacks in provider_rows
+    ]
+    provider_requests = sum(item["requests"] for item in provider_latency)
+    provider_cost = sum(item["cost_micros"] for item in provider_latency)
+    provider_errors = sum(item["errors"] for item in provider_latency)
+    provider_fallbacks = sum(item["fallbacks"] for item in provider_latency)
+    firmware_rows = (
+        await session.execute(
+            select(Device.firmware_version, func.count(Device.id))
+            .group_by(Device.firmware_version)
+            .order_by(func.count(Device.id).desc())
+        )
+    ).all()
+    return {
+        "generated_at": now,
+        "voice_turns_24h": int(voice_turns_24h or 0),
+        "active_users_7d": int(active_users_7d or 0),
+        "active_devices_7d": int(active_devices_7d or 0),
+        "online_devices": int(online_devices or 0),
+        "stale_online_sessions": int(stale_online_sessions or 0),
+        "unfinished_conversations": int(unfinished_conversations or 0),
+        "first_audio_p50_ms": _percentile(latencies, 0.50),
+        "first_audio_p95_ms": _percentile(latencies, 0.95),
+        "provider_requests_30d": provider_requests,
+        "provider_errors_30d": provider_errors,
+        "provider_fallbacks_30d": provider_fallbacks,
+        "provider_cost_micros_30d": provider_cost,
+        "cost_per_active_user_micros_30d": (
+            provider_cost // int(active_users_30d) if active_users_30d else 0
+        ),
+        "provider_latency": provider_latency,
+        "firmware_versions": [
+            {"version": version, "devices": int(devices or 0)}
+            for version, devices in firmware_rows
+        ],
     }
 
 
