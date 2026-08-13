@@ -16,17 +16,22 @@ export default function DevicesPage() {
 
   async function load() {
     const [deviceList, agentList] = await Promise.all([api<Device[]>("/v1/devices"), api<Agent[]>("/v1/agents")]);
-    setDevices(deviceList); setAgents(agentList); setReady(true);
+    setDevices(deviceList); setAgents(agentList); setReady(true); setError(null);
   }
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api<Device[]>("/v1/devices"), api<Agent[]>("/v1/agents")])
-      .then(([deviceList, agentList]) => {
+    async function refresh() {
+      try {
+        const [deviceList, agentList] = await Promise.all([api<Device[]>("/v1/devices"), api<Agent[]>("/v1/agents")]);
         if (cancelled) return;
-        setDevices(deviceList); setAgents(agentList); setReady(true);
-      })
-      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : "加载失败"); });
-    return () => { cancelled = true; };
+        setDevices(deviceList); setAgents(agentList); setReady(true); setError(null);
+      } catch (reason) {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "控制面暂不可用");
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 5_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
   async function claim(event: FormEvent) {
@@ -48,7 +53,9 @@ export default function DevicesPage() {
   return (
     <>
       <header className="page-head"><div><h2>设备与绑定</h2><p>Wi‑Fi 密码只写入设备 NVS；网页只处理 6 位账户绑定码。</p></div></header>
-      <ErrorMessage message={error} />{message ? <div className="success">{message}</div> : null}
+      <ErrorMessage message={error} />
+      {error ? <button className="button secondary" type="button" onClick={() => void load()}>重新连接</button> : null}
+      {message ? <div className="success">{message}</div> : null}
       <div className="grid two" style={{ marginTop: 18 }}>
         <form className="card stack" onSubmit={claim}>
           <h2>绑定新设备</h2>

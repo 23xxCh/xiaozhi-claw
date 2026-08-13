@@ -7,7 +7,9 @@ import { api } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [openid, setOpenid] = useState("wx-local-adult");
+  const [openid, setOpenid] = useState(
+    process.env.NEXT_PUBLIC_DEV_OPENID ?? "wx-local-adult",
+  );
   const [error, setError] = useState<string | null>(null);
   const developmentLogin = process.env.NEXT_PUBLIC_ENABLE_DEV_LOGIN === "true";
 

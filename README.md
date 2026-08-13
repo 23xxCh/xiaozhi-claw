@@ -112,6 +112,18 @@ Open `http://127.0.0.1:3000` for the console and
 `http://127.0.0.1:8000/docs` for OpenAPI. Development login and mock AI are disabled
 automatically when `APP_ENV=production`.
 
+For the verified LAN pilot on the Hensun development computer, start or stop all three
+processes with:
+
+```powershell
+.\scripts\start_local_pilot.ps1
+.\scripts\stop_local_pilot.ps1
+```
+
+The launcher migrates the configured database, creates a production web build, records
+only exact child PIDs under the ignored `run/` directory, and opens the LAN console after
+all readiness probes pass.
+
 Run the database migration before either backend process in production:
 
 ```powershell
