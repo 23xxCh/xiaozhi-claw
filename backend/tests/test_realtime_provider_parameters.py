@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 
@@ -13,6 +14,7 @@ from backend.realtime.providers import (
     QwenRealtimeTtsSession,
     RealtimeProviderError,
 )
+from backend.realtime.session import SentenceBuffer
 
 
 @pytest.mark.asyncio
@@ -93,6 +95,31 @@ async def test_qwen_realtime_tts_session_includes_selected_speech_rate(monkeypat
     assert update["type"] == "session.update"
     assert update["session"]["voice"] == "Cherry"
     assert update["session"]["speech_rate"] == 1.2
+
+
+@pytest.mark.asyncio
+async def test_qwen_tts_provider_timeout_does_not_count_slow_audio_consumer() -> None:
+    socket = _FakeRealtimeSocket(
+        [
+            {"type": "response.audio.delta", "delta": base64.b64encode(b"pcm").decode()},
+            {"type": "response.done"},
+        ]
+    )
+    session = QwenRealtimeTtsSession(socket, event_timeout_seconds=0.01)
+
+    chunks: list[bytes] = []
+    async for chunk in session.synthesize("较长回复"):
+        chunks.append(chunk)
+        await asyncio.sleep(0.02)
+
+    assert chunks == [b"pcm"]
+
+
+def test_sentence_buffer_releases_unpunctuated_first_audio_promptly() -> None:
+    buffer = SentenceBuffer()
+
+    assert buffer.feed("短" * 35) == []
+    assert buffer.feed("句") == ["短" * 35 + "句"]
 
 
 @pytest.mark.asyncio

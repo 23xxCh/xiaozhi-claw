@@ -82,7 +82,7 @@ class AgentSnapshot:
 
 
 class SentenceBuffer:
-    def __init__(self, max_chars: int = 80) -> None:
+    def __init__(self, max_chars: int = 36) -> None:
         self._text = ""
         self._max_chars = max_chars
 

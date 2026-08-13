@@ -259,8 +259,14 @@ class DeepSeekStreamingLlmProvider:
 
 
 class QwenRealtimeTtsSession:
-    def __init__(self, websocket: ClientConnection) -> None:
+    def __init__(
+        self,
+        websocket: ClientConnection,
+        *,
+        event_timeout_seconds: float = 30.0,
+    ) -> None:
         self.websocket = websocket
+        self.event_timeout_seconds = event_timeout_seconds
         self.closed = False
 
     @classmethod
@@ -279,7 +285,10 @@ class QwenRealtimeTtsSession:
             open_timeout=settings.provider_timeout_seconds,
             max_size=2 * 1024 * 1024,
         )
-        session = cls(websocket)
+        session = cls(
+            websocket,
+            event_timeout_seconds=settings.provider_timeout_seconds,
+        )
         await websocket.send(
             json.dumps(
                 {
@@ -322,15 +331,19 @@ class QwenRealtimeTtsSession:
                 {"event_id": f"event_{uuid.uuid4().hex}", "type": "input_text_buffer.commit"}
             )
         )
-        async with asyncio.timeout(30):
-            while True:
+        while True:
+            # Time out provider silence, not downstream playback backpressure.
+            # This generator pauses at each yield while FFmpeg/device queues
+            # consume audio at playback speed, which can legitimately exceed
+            # the provider timeout for a longer reply.
+            async with asyncio.timeout(self.event_timeout_seconds):
                 event = json.loads(await self.websocket.recv())
-                event_type = event.get("type")
-                _raise_if_provider_error(event, "qwen-tts")
-                if event_type == "response.audio.delta":
-                    yield base64.b64decode(str(event.get("delta") or ""))
-                if event_type == "response.done":
-                    return
+            event_type = event.get("type")
+            _raise_if_provider_error(event, "qwen-tts")
+            if event_type == "response.audio.delta":
+                yield base64.b64decode(str(event.get("delta") or ""))
+            if event_type == "response.done":
+                return
 
     async def finish(self) -> None:
         if self.closed:
