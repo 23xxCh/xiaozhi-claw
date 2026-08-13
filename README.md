@@ -54,7 +54,11 @@ with the DashScope compatible base URL and `TTS_PROTOCOL=dashscope-generation`
 with DashScope's native generation endpoint. Qwen's OpenAI-compatible ASR is
 the batch `qwen3-asr-flash` model; `qwen3-asr-flash-realtime` remains a separate
 WebSocket adapter and is not silently treated as HTTP. TTS audio is normalized
-with FFmpeg before it reaches the device.
+with FFmpeg before it reaches the device. The self-hosted firmware and gateway
+also use a `reply_id` playback handshake: the device acknowledges `state=ready`
+before 60 ms Opus frames are paced downstream, and acknowledges `state=drained`
+only after its decoder and speaker queues are empty. Messages without
+`reply_id` retain the upstream XiaoZhi behavior for official-cloud compatibility.
 
 For the current LAN pilot:
 

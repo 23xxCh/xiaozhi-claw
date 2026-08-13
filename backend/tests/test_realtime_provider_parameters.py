@@ -1,11 +1,18 @@
+import base64
 import json
 
 import httpx
 import pytest
 
+from backend.app.audio_formats import ogg_opus_packets
 from backend.app.config import Settings
 from backend.realtime import providers as realtime_providers
-from backend.realtime.providers import DeepSeekStreamingLlmProvider, QwenRealtimeTtsSession
+from backend.realtime.providers import (
+    DeepSeekStreamingLlmProvider,
+    QwenRealtimeAsrSession,
+    QwenRealtimeTtsSession,
+    RealtimeProviderError,
+)
 
 
 @pytest.mark.asyncio
@@ -50,14 +57,15 @@ async def test_deepseek_streaming_request_includes_selected_temperature(monkeypa
 
 
 class _FakeRealtimeSocket:
-    def __init__(self) -> None:
+    def __init__(self, events: list[dict[str, object]] | None = None) -> None:
         self.sent: list[str] = []
+        self.events = list(events or [{"type": "session.updated"}])
 
     async def send(self, payload: str) -> None:
         self.sent.append(payload)
 
     async def recv(self) -> str:
-        return json.dumps({"type": "session.updated"})
+        return json.dumps(self.events.pop(0))
 
     async def close(self) -> None:
         return None
@@ -85,3 +93,78 @@ async def test_qwen_realtime_tts_session_includes_selected_speech_rate(monkeypat
     assert update["type"] == "session.update"
     assert update["session"]["voice"] == "Cherry"
     assert update["session"]["speech_rate"] == 1.2
+
+
+@pytest.mark.asyncio
+async def test_qwen_realtime_asr_wraps_raw_opus_and_finishes_manual_session(
+    monkeypatch,
+) -> None:
+    socket = _FakeRealtimeSocket(
+        [
+            {"type": "session.updated"},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "你好，小智",
+                "emotion": "happy",
+            },
+            {"type": "session.finished"},
+        ]
+    )
+
+    async def fake_connect(*args, **kwargs):
+        del args, kwargs
+        return socket
+
+    monkeypatch.setattr(realtime_providers, "connect", fake_connect)
+    settings = Settings(
+        provider_mode="custom",
+        qwen_realtime_asr_url="wss://asr.example/realtime",
+        qwen_realtime_asr_model="qwen3-asr-flash-realtime",
+        asr_api_key="secret",
+    )
+
+    session = await QwenRealtimeAsrSession.open(settings)
+    await session.send_audio(b"raw-opus-one")
+    await session.send_audio(b"raw-opus-two")
+    result = await session.finish()
+
+    messages = [json.loads(payload) for payload in socket.sent]
+    append_messages = [item for item in messages if item["type"] == "input_audio_buffer.append"]
+    wrapped = b"".join(base64.b64decode(item["audio"]) for item in append_messages)
+    assert ogg_opus_packets(wrapped) == [b"raw-opus-one", b"raw-opus-two"]
+    assert [item["type"] for item in messages[-2:]] == [
+        "input_audio_buffer.commit",
+        "session.finish",
+    ]
+    assert result.text == "你好，小智"
+    assert result.emotion == "happy"
+
+
+@pytest.mark.asyncio
+async def test_qwen_realtime_error_uses_stable_code_without_transcript(monkeypatch) -> None:
+    socket = _FakeRealtimeSocket(
+        [
+            {"type": "session.updated"},
+            {
+                "type": "invalid_request_error",
+                "error": {"type": "invalid_audio", "message": "private audio detail"},
+            },
+        ]
+    )
+
+    async def fake_connect(*args, **kwargs):
+        del args, kwargs
+        return socket
+
+    monkeypatch.setattr(realtime_providers, "connect", fake_connect)
+    settings = Settings(
+        provider_mode="custom",
+        qwen_realtime_asr_url="wss://asr.example/realtime",
+        asr_api_key="secret",
+    )
+    session = await QwenRealtimeAsrSession.open(settings)
+    await session.send_audio(b"raw-opus")
+
+    with pytest.raises(RealtimeProviderError, match="invalid_audio") as error:
+        await session.finish()
+    assert "private audio detail" not in str(error.value)

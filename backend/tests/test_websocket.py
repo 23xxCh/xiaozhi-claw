@@ -75,11 +75,21 @@ def _receive_mock_turn(websocket) -> tuple[dict[str, object], bytes]:
     assert thinking["type"] == "llm"
     reply_emotion = websocket.receive_json()
     assert reply_emotion["type"] == "llm"
-    assert websocket.receive_json()["state"] == "start"
+    start = websocket.receive_json()
+    assert start["state"] == "start"
+    assert start["reply_id"]
+    websocket.send_json({"type": "tts", "state": "ready", "reply_id": start["reply_id"]})
     sentence = websocket.receive_json()
     assert sentence["state"] == "sentence_start"
     audio = websocket.receive_bytes()
-    assert websocket.receive_json()["state"] == "stop"
+    stop = websocket.receive_json()
+    assert stop == {
+        "session_id": stop["session_id"],
+        "type": "tts",
+        "state": "stop",
+        "reply_id": start["reply_id"],
+    }
+    websocket.send_json({"type": "tts", "state": "drained", "reply_id": start["reply_id"]})
     return stt, audio
 
 
@@ -167,11 +177,20 @@ def test_device_receives_each_streamed_audio_frame(
         assert websocket.receive_json()["type"] == "stt"
         assert websocket.receive_json()["type"] == "llm"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["state"] == "start"
+        start = websocket.receive_json()
+        assert start["state"] == "start"
+        websocket.send_json(
+            {"type": "tts", "state": "ready", "reply_id": start["reply_id"]}
+        )
         assert websocket.receive_json()["state"] == "sentence_start"
         assert websocket.receive_bytes() == b"opus-frame-1"
         assert websocket.receive_bytes() == b"opus-frame-2"
-        assert websocket.receive_json()["state"] == "stop"
+        stop = websocket.receive_json()
+        assert stop["state"] == "stop"
+        assert stop["reply_id"] == start["reply_id"]
+        websocket.send_json(
+            {"type": "tts", "state": "drained", "reply_id": start["reply_id"]}
+        )
 
 
 def test_face_event_api_rejects_unknown_events_and_queues_offline_devices(

@@ -8,6 +8,8 @@ import pytest
 
 from backend.app.audio_formats import (
     FfmpegOpusNormalizer,
+    IncrementalOggOpusMuxer,
+    _ogg_crc,
     ogg_opus_packets,
     opus_packets_to_ogg,
 )
@@ -20,6 +22,29 @@ def test_opus_packets_round_trip_through_ogg_container() -> None:
 
     assert ogg.startswith(b"OggS")
     assert ogg_opus_packets(ogg) == packets
+
+
+def test_incremental_ogg_muxer_preserves_sequence_crc_and_duration() -> None:
+    muxer = IncrementalOggOpusMuxer(input_sample_rate=16000, frame_duration_ms=60)
+    stream = muxer.add_packet(b"frame-one") + muxer.add_packet(b"frame-two")
+
+    pages: list[bytes] = []
+    offset = 0
+    while offset < len(stream):
+        segment_count = stream[offset + 26]
+        lacing = stream[offset + 27 : offset + 27 + segment_count]
+        page_size = 27 + segment_count + sum(lacing)
+        pages.append(stream[offset : offset + page_size])
+        offset += page_size
+
+    assert [struct.unpack("<I", page[18:22])[0] for page in pages] == [0, 1, 2, 3]
+    assert [struct.unpack("<Q", page[6:14])[0] for page in pages] == [0, 0, 2880, 5760]
+    for page in pages:
+        stored_crc = struct.unpack("<I", page[22:26])[0]
+        without_crc = bytearray(page)
+        without_crc[22:26] = b"\x00\x00\x00\x00"
+        assert stored_crc == _ogg_crc(without_crc)
+    assert ogg_opus_packets(stream) == [b"frame-one", b"frame-two"]
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,7 @@ public:
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
+    virtual void SendTtsState(const std::string& state, const std::string& reply_id);
     virtual void SendMcpMessage(const std::string& message);
     virtual void SendDeviceConfigAck(const std::string& command_id, int config_version,
                                      bool applied, int speaker_volume,

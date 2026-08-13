@@ -47,6 +47,67 @@ def _ogg_page(
     return bytes(page)
 
 
+class IncrementalOggOpusMuxer:
+    """Wrap independent raw Opus frames in one incrementally produced Ogg stream."""
+
+    def __init__(self, *, input_sample_rate: int, frame_duration_ms: int) -> None:
+        if input_sample_rate <= 0 or frame_duration_ms <= 0:
+            raise ValueError("sample rate and frame duration must be positive")
+        self.input_sample_rate = input_sample_rate
+        self.samples_per_packet = 48000 * frame_duration_ms // 1000
+        self.serial_number = 0x48454E53
+        self.sequence_number = 0
+        self.granule_position = 0
+        self.headers_sent = False
+
+    def _headers(self) -> bytes:
+        opus_head = (
+            b"OpusHead"
+            + bytes([1, 1])
+            + struct.pack("<H", 312)
+            + struct.pack("<I", self.input_sample_rate)
+            + struct.pack("<h", 0)
+            + bytes([0])
+        )
+        vendor = b"Hensun Desk"
+        opus_tags = b"OpusTags" + struct.pack("<I", len(vendor)) + vendor + struct.pack("<I", 0)
+        pages = _ogg_page(
+            opus_head,
+            header_type=0x02,
+            granule_position=0,
+            serial_number=self.serial_number,
+            sequence_number=self.sequence_number,
+        )
+        self.sequence_number += 1
+        pages += _ogg_page(
+            opus_tags,
+            header_type=0,
+            granule_position=0,
+            serial_number=self.serial_number,
+            sequence_number=self.sequence_number,
+        )
+        self.sequence_number += 1
+        return pages
+
+    def add_packet(self, packet: bytes) -> bytes:
+        if not packet:
+            raise ValueError("Opus packet cannot be empty")
+        output = b""
+        if not self.headers_sent:
+            output = self._headers()
+            self.headers_sent = True
+        self.granule_position += self.samples_per_packet
+        output += _ogg_page(
+            packet,
+            header_type=0,
+            granule_position=self.granule_position,
+            serial_number=self.serial_number,
+            sequence_number=self.sequence_number,
+        )
+        self.sequence_number += 1
+        return output
+
+
 def opus_packets_to_ogg(
     packets: list[bytes],
     *,

@@ -10,6 +10,7 @@ from typing import Protocol
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
 
+from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
 
 
@@ -17,6 +18,27 @@ from backend.app.config import Settings
 class TranscriptionResult:
     text: str
     emotion: str = "neutral"
+
+
+class RealtimeProviderError(RuntimeError):
+    def __init__(self, provider: str, code: str) -> None:
+        self.provider = provider
+        self.code = code[:80] or "unknown"
+        super().__init__(f"{provider} realtime provider error: {self.code}")
+
+
+def _raise_if_provider_error(event: dict[str, object], provider: str) -> None:
+    event_type = str(event.get("type") or "")
+    if event_type != "error" and not event_type.endswith("_error"):
+        return
+    detail = event.get("error")
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or detail.get("type") or event_type)
+    elif isinstance(detail, str):
+        code = str(event.get("code") or event_type)
+    else:
+        code = str(event.get("code") or event_type or "unknown")
+    raise RealtimeProviderError(provider, code)
 
 
 class RealtimeAsrSession(Protocol):
@@ -91,6 +113,9 @@ class QwenRealtimeAsrSession:
     def __init__(self, websocket: ClientConnection) -> None:
         self.websocket = websocket
         self.closed = False
+        self.ogg_muxer = IncrementalOggOpusMuxer(
+            input_sample_rate=16000, frame_duration_ms=60
+        )
 
     @classmethod
     async def open(cls, settings: Settings) -> "QwenRealtimeAsrSession":
@@ -128,20 +153,18 @@ class QwenRealtimeAsrSession:
         async with asyncio.timeout(15):
             while True:
                 event = json.loads(await self.websocket.recv())
-                if event.get("type") == "error":
-                    raise RuntimeError(
-                        f"Qwen ASR error: {event.get('error', {}).get('code', 'unknown')}"
-                    )
+                _raise_if_provider_error(event, "qwen-asr")
                 if event.get("type") == expected:
                     return event
 
     async def send_audio(self, frame: bytes) -> None:
+        ogg = self.ogg_muxer.add_packet(frame)
         await self.websocket.send(
             json.dumps(
                 {
                     "event_id": f"event_{uuid.uuid4().hex}",
                     "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(frame).decode("ascii"),
+                    "audio": base64.b64encode(ogg).decode("ascii"),
                 }
             )
         )
@@ -164,10 +187,7 @@ class QwenRealtimeAsrSession:
             while True:
                 event = json.loads(await self.websocket.recv())
                 event_type = event.get("type")
-                if event_type == "error":
-                    raise RuntimeError(
-                        f"Qwen ASR error: {event.get('error', {}).get('code', 'unknown')}"
-                    )
+                _raise_if_provider_error(event, "qwen-asr")
                 if event_type in {
                     "conversation.item.input_audio_transcription.text",
                     "conversation.item.input_audio_transcription.completed",
@@ -283,10 +303,7 @@ class QwenRealtimeTtsSession:
         async with asyncio.timeout(15):
             while True:
                 event = json.loads(await self.websocket.recv())
-                if event.get("type") == "error":
-                    raise RuntimeError(
-                        f"Qwen TTS error: {event.get('error', {}).get('code', 'unknown')}"
-                    )
+                _raise_if_provider_error(event, "qwen-tts")
                 if event.get("type") == expected:
                     return event
 
@@ -309,10 +326,7 @@ class QwenRealtimeTtsSession:
             while True:
                 event = json.loads(await self.websocket.recv())
                 event_type = event.get("type")
-                if event_type == "error":
-                    raise RuntimeError(
-                        f"Qwen TTS error: {event.get('error', {}).get('code', 'unknown')}"
-                    )
+                _raise_if_provider_error(event, "qwen-tts")
                 if event_type == "response.audio.delta":
                     yield base64.b64decode(str(event.get("delta") or ""))
                 if event_type == "response.done":

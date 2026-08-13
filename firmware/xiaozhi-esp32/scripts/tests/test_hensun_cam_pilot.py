@@ -69,6 +69,19 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("ota_ = std::make_unique<Ota>()", body)
         self.assertLess(body.index("ota_->CheckVersion()"), body.index("OpenAudioChannel()"))
 
+    def test_selfhosted_tts_uses_ready_drained_handshake_and_queue_backpressure(self):
+        protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")
+        protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(encoding="utf-8")
+
+        self.assertIn("SendTtsState", protocol_header)
+        self.assertIn('"ready"', self.application_source)
+        self.assertIn('"drained"', self.application_source)
+        self.assertIn("reply_id", self.application_source)
+        self.assertIn("pending_tts_stop_reply_id_", self.application_source)
+        self.assertIn("PushPacketToDecodeQueue(std::move(packet), true)", self.application_source)
+        self.assertIn("GetDecodeDropCount", self.application_source)
+        self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
+
     def test_auto_listening_has_a_bounded_safety_timeout(self):
         self.assertRegex(
             self.application_source,

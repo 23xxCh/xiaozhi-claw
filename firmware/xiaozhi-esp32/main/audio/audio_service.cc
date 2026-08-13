@@ -586,6 +586,10 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
                     audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
             });
         } else {
+            auto dropped_total = ++debug_statistics_.decode_drop_count;
+            lock.unlock();
+            ESP_LOGW(TAG, "Decode queue is full, rejecting frame (dropped %lu so far)",
+                     (unsigned long)dropped_total);
             return false;
         }
     }
@@ -738,6 +742,11 @@ bool AudioService::IsIdle() {
 bool AudioService::IsPlaybackIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     return IsPlaybackDrainedLocked();
+}
+
+uint32_t AudioService::GetDecodeDropCount() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return debug_statistics_.decode_drop_count;
 }
 
 void AudioService::ResetDecoder() {

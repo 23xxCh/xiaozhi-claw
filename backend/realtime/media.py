@@ -1,5 +1,36 @@
 import asyncio
 import contextlib
+import time
+from collections.abc import Awaitable, Callable
+
+
+class OpusPacketPacer:
+    """Send Opus frames at playback rate without catch-up bursts."""
+
+    def __init__(
+        self,
+        send: Callable[[bytes], Awaitable[bool]],
+        *,
+        frame_duration_ms: int = 60,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._send = send
+        self._frame_seconds = frame_duration_ms / 1000
+        self._clock = clock
+        self._sleep = sleep
+        self._next_send_at: float | None = None
+
+    async def send(self, packet: bytes) -> bool:
+        now = self._clock()
+        target = self._next_send_at if self._next_send_at is not None else now
+        if now < target:
+            await self._sleep(target - now)
+        elif now > target:
+            target = now
+        delivered = await self._send(packet)
+        self._next_send_at = target + self._frame_seconds
+        return delivered
 
 
 class StreamingPcmToOpus:
@@ -34,6 +65,10 @@ class StreamingPcmToOpus:
             "24k",
             "-frame_duration",
             "60",
+            "-flush_packets",
+            "1",
+            "-page_duration",
+            "60000",
             "-f",
             "ogg",
             "pipe:1",

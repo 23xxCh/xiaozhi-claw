@@ -218,10 +218,11 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
-            // Deferred listening start (auto mode): the playback queue has
-            // drained, so it is now safe to enable voice processing.
-            if (pending_listening_start_ && GetDeviceState() == kDeviceStateListening &&
+            if (!pending_tts_stop_reply_id_.empty() && audio_service_.IsPlaybackIdle()) {
+                FinishTtsPlayback(pending_tts_stop_reply_id_);
+            } else if (pending_listening_start_ && GetDeviceState() == kDeviceStateListening &&
                 audio_service_.IsPlaybackIdle()) {
+                // Deferred legacy listening start (auto mode).
                 pending_listening_start_ = false;
                 StartListeningAudio();
             }
@@ -543,7 +544,9 @@ void Application::InitializeProtocol() {
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         if (GetDeviceState() == kDeviceStateSpeaking) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+            if (!audio_service_.PushPacketToDecodeQueue(std::move(packet), true)) {
+                ESP_LOGE(TAG, "Playback queue rejected a packet after backpressure wait");
+            }
         }
     });
 
@@ -579,20 +582,49 @@ void Application::InitializeProtocol() {
                 return;
             }
             if (strcmp(state->valuestring, "start") == 0) {
-                Schedule([this]() {
+                auto reply_id = cJSON_GetObjectItem(root, "reply_id");
+                std::string playback_reply_id =
+                    cJSON_IsString(reply_id) ? reply_id->valuestring : "";
+                Schedule([this, playback_reply_id]() {
                     aborted_ = false;
-                    SetDeviceState(kDeviceStateSpeaking);
-                });
-            } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
+                    active_tts_reply_id_ = playback_reply_id;
+                    pending_tts_stop_reply_id_.clear();
                     if (GetDeviceState() == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
+                        audio_service_.ResetDecoder();
+                        if (!active_tts_reply_id_.empty() && protocol_) {
+                            protocol_->SendTtsState("ready", active_tts_reply_id_);
                         }
+                    } else {
+                        SetDeviceState(kDeviceStateSpeaking);
                     }
                 });
+            } else if (strcmp(state->valuestring, "stop") == 0) {
+                auto reply_id = cJSON_GetObjectItem(root, "reply_id");
+                if (cJSON_IsString(reply_id)) {
+                    std::string playback_reply_id = reply_id->valuestring;
+                    Schedule([this, playback_reply_id]() {
+                        if (playback_reply_id != active_tts_reply_id_) {
+                            ESP_LOGW(TAG, "Ignoring stale TTS stop acknowledgement request");
+                            return;
+                        }
+                        pending_tts_stop_reply_id_ = playback_reply_id;
+                        if (audio_service_.IsPlaybackIdle()) {
+                            FinishTtsPlayback(playback_reply_id);
+                        }
+                    });
+                } else {
+                    // Official xiaozhi servers do not provide reply_id; retain
+                    // their immediate-stop behavior for protocol compatibility.
+                    Schedule([this]() {
+                        if (GetDeviceState() == kDeviceStateSpeaking) {
+                            if (listening_mode_ == kListeningModeManualStop) {
+                                SetDeviceState(kDeviceStateIdle);
+                            } else {
+                                SetDeviceState(kDeviceStateListening);
+                            }
+                        }
+                    });
+                }
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
@@ -1071,6 +1103,9 @@ void Application::HandleStateChangedEvent() {
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             }
             audio_service_.ResetDecoder();
+            if (!active_tts_reply_id_.empty() && protocol_) {
+                protocol_->SendTtsState("ready", active_tts_reply_id_);
+            }
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1112,6 +1147,26 @@ void Application::ConfigureWakeWordForListening() {
 #endif
 }
 
+void Application::FinishTtsPlayback(std::string reply_id) {
+    if (reply_id.empty() || reply_id != active_tts_reply_id_) {
+        return;
+    }
+    pending_tts_stop_reply_id_.clear();
+    active_tts_reply_id_.clear();
+    if (protocol_) {
+        protocol_->SendTtsState("drained", reply_id);
+    }
+    ESP_LOGI(TAG, "TTS playback drained (decode drops=%lu)",
+             (unsigned long)audio_service_.GetDecodeDropCount());
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (listening_mode_ == kListeningModeManualStop) {
+            SetDeviceState(kDeviceStateIdle);
+        } else {
+            SetDeviceState(kDeviceStateListening);
+        }
+    }
+}
+
 void Application::Schedule(std::function<void()>&& callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1123,6 +1178,7 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    audio_service_.ResetDecoder();
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
