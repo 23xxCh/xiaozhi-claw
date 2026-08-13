@@ -109,8 +109,12 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:3000` for the console and
-`http://127.0.0.1:8000/docs` for OpenAPI. Development login and mock AI are disabled
-automatically when `APP_ENV=production`.
+`http://127.0.0.1:8000/docs` for OpenAPI. The customer console uses a six-digit
+email verification code. In development mode the page clearly displays the local
+test code; it does not claim that an email was sent. Production must set
+`EMAIL_DELIVERY_MODE=smtp`, SMTP host/credentials/from-address, HTTPS and secure
+cookies. The legacy development endpoint and mock AI are disabled automatically
+when `APP_ENV=production`.
 
 For the verified LAN pilot on the Hensun development computer, start or stop all three
 processes with:

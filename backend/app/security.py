@@ -26,6 +26,14 @@ def new_claim_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
+def new_email_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_email_code(email: str, code: str, settings: Settings) -> str:
+    return hash_secret(f"email-code:{email}:{code}", settings.email_otp_secret)
+
+
 def create_access_token(user_id: str, settings: Settings) -> str:
     now = datetime.now(UTC)
     return jwt.encode(

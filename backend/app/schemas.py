@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator, model_validator
 
 
 class DevLoginRequest(BaseModel):
@@ -13,6 +13,29 @@ class DevLoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class EmailCodeRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email_input(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class EmailCodeRequestResponse(BaseModel):
+    expires_in: int
+    resend_after: int
+    debug_code: str | None = None
+
+
+class EmailCodeVerifyRequest(EmailCodeRequest):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class EmailLoginResponse(TokenResponse):
+    agreements_complete: bool
 
 
 class DeviceRegistrationRequest(BaseModel):
@@ -114,6 +137,7 @@ class AdultConfirmationRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: str
+    email: str | None
     display_name: str
     adult_confirmed: bool
     agreements_complete: bool

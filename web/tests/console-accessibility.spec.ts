@@ -1,22 +1,43 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-async function devLogin(page: Page) {
-  await page.goto("/login");
-  await page.getByRole("button", { name: "本地开发登录" }).click();
-  await expect(page).toHaveURL(/\/console$/);
+async function authenticatePilot(page: Page) {
+  const response = await page.request.post("http://192.168.5.49:8000/v1/auth/dev-login", {
+    data: { openid: process.env.E2E_DEV_OPENID ?? "lan-28:84:85:4a:3d:b8", adult_confirmed: true },
+  });
+  expect(response.ok()).toBeTruthy();
+  await page.goto("/console");
   await expect(page.getByRole("heading", { level: 1, name: /今天想聊点什么/ })).toBeVisible();
 }
 
 test("unauthenticated customer route returns to the same page after login", async ({ page }) => {
   await page.goto("/console/devices");
   await expect(page).toHaveURL(/\/login\?next=%2Fconsole%2Fdevices/);
-  await page.getByRole("button", { name: "本地开发登录" }).click();
+  await expect(page.getByRole("button", { name: /微信|扫码/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "获取验证码" })).toBeVisible();
+  await page.route("**/v1/auth/email/request-code", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ expires_in: 600, resend_after: 60, debug_code: "123456" }),
+  }));
+  await page.route("**/v1/auth/email/verify-code", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ access_token: "test", token_type: "bearer", agreements_complete: true }),
+  }));
+  await page.route("**/v1/devices", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+  await page.route("**/v1/agents", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+  await page.route("**/v1/profiles", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+  await page.getByLabel("邮箱地址").fill("owner@example.com");
+  await page.getByRole("button", { name: "获取验证码" }).click();
+  await expect(page.getByLabel("6 位验证码")).toHaveValue("123456");
+  await page.getByRole("button", { name: "验证并登录" }).click();
   await expect(page).toHaveURL(/\/console\/devices$/);
+  await expect(page.getByRole("heading", { level: 1, name: "设备" })).toBeVisible();
 });
 
 test("customer console has no horizontal overflow at required viewports", async ({ page }) => {
-  await devLogin(page);
+  await authenticatePilot(page);
   const routes = [
     "/console",
     "/console/devices",
@@ -43,7 +64,7 @@ test("customer console has no horizontal overflow at required viewports", async 
 });
 
 test("home is keyboard accessible and has no serious axe violations", async ({ page }) => {
-  await devLogin(page);
+  await authenticatePilot(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
   await page.goto("/console");
@@ -61,7 +82,7 @@ test("home is keyboard accessible and has no serious axe violations", async ({ p
 });
 
 test("theme choice persists in a cookie", async ({ page }) => {
-  await devLogin(page);
+  await authenticatePilot(page);
   const root = page.locator("html");
   const before = await root.getAttribute("data-theme");
   await page.getByRole("button", { name: "切换浅色或深色模式" }).click();
@@ -72,7 +93,7 @@ test("theme choice persists in a cookie", async ({ page }) => {
 });
 
 test("customer navigation hides operations and API failures stay in Chinese", async ({ page }) => {
-  await devLogin(page);
+  await authenticatePilot(page);
   await expect(page.getByRole("link", { name: /内部后台|Operations/ })).toHaveCount(0);
   await page.route("**/v1/account/usage", (route) => route.fulfill({
     status: 503,

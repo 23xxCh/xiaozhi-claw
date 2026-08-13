@@ -1,25 +1,38 @@
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
 from ..db import get_session
 from ..dependencies import require_user
-from ..models import User
+from ..email_delivery import deliver_login_code
+from ..models import EmailLoginChallenge, User
 from ..schemas import (
     AdultConfirmationRequest,
     DevLoginRequest,
+    EmailCodeRequest,
+    EmailCodeRequestResponse,
+    EmailCodeVerifyRequest,
+    EmailLoginResponse,
     TokenResponse,
     UserResponse,
     WechatLoginStartResponse,
 )
-from ..security import create_access_token, create_oauth_state, verify_oauth_state
+from ..security import (
+    create_access_token,
+    create_oauth_state,
+    hash_email_code,
+    hash_secret,
+    new_email_code,
+    verify_oauth_state,
+)
 from ..usage_profiles import ensure_adult_profile
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -30,8 +43,168 @@ PRIVACY_VERSION = "2026-08-13"
 def _user_response(user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
+        email=user.email,
         display_name=user.display_name,
         adult_confirmed=user.adult_confirmed,
+        agreements_complete=bool(user.terms_accepted_at and user.ai_disclosure_confirmed_at),
+    )
+
+
+@router.post(
+    "/email/request-code",
+    response_model=EmailCodeRequestResponse,
+    response_model_exclude_none=True,
+)
+async def request_email_code(
+    payload: EmailCodeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> EmailCodeRequestResponse:
+    settings = request.app.state.settings
+    email = str(payload.email).lower()
+    now = datetime.now(UTC)
+    await session.execute(
+        delete(EmailLoginChallenge).where(
+            EmailLoginChallenge.created_at < now - timedelta(days=1)
+        )
+    )
+    recent_after = now - timedelta(seconds=settings.email_otp_resend_seconds)
+    recent = await session.scalar(
+        select(EmailLoginChallenge.id).where(
+            EmailLoginChallenge.email == email,
+            EmailLoginChallenge.created_at >= recent_after,
+        )
+    )
+    if recent is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email code rate limit",
+        )
+
+    remote_host = request.client.host if request.client else "unknown"
+    ip_hash = hash_secret(f"email-login-ip:{remote_host}", settings.email_otp_secret)
+    ip_window = now - timedelta(minutes=10)
+    ip_requests = await session.scalar(
+        select(func.count())
+        .select_from(EmailLoginChallenge)
+        .where(
+            EmailLoginChallenge.request_ip_hash == ip_hash,
+            EmailLoginChallenge.created_at >= ip_window,
+        )
+    )
+    if int(ip_requests or 0) >= settings.email_ip_request_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email code rate limit",
+        )
+
+    code = new_email_code()
+    challenge = EmailLoginChallenge(
+        email=email,
+        code_hash=hash_email_code(email, code, settings),
+        request_ip_hash=ip_hash,
+        expires_at=now + timedelta(seconds=settings.email_otp_ttl_seconds),
+    )
+    session.add(challenge)
+    await session.commit()
+    try:
+        await deliver_login_code(settings, email, code)
+    except Exception as exc:
+        challenge.consumed_at = datetime.now(UTC)
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email delivery unavailable",
+        ) from exc
+    return EmailCodeRequestResponse(
+        expires_in=settings.email_otp_ttl_seconds,
+        resend_after=settings.email_otp_resend_seconds,
+        debug_code=(code if settings.email_delivery_mode == "development" else None),
+    )
+
+
+@router.post("/email/verify-code", response_model=EmailLoginResponse)
+async def verify_email_code(
+    payload: EmailCodeVerifyRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> EmailLoginResponse:
+    settings = request.app.state.settings
+    email = str(payload.email).lower()
+    challenge = await session.scalar(
+        select(EmailLoginChallenge)
+        .where(EmailLoginChallenge.email == email)
+        .order_by(EmailLoginChallenge.created_at.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    now = datetime.now(UTC)
+    expires_at = challenge.expires_at if challenge is not None else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (
+        challenge is None
+        or challenge.consumed_at is not None
+        or expires_at is None
+        or expires_at <= now
+        or challenge.attempts >= settings.email_otp_max_attempts
+    ):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="email code expired")
+
+    expected_hash = hash_email_code(email, payload.code, settings)
+    if not secrets.compare_digest(expected_hash, challenge.code_hash):
+        challenge.attempts += 1
+        if challenge.attempts >= settings.email_otp_max_attempts:
+            challenge.consumed_at = now
+        await session.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid email code")
+
+    challenge.consumed_at = now
+    user = await session.scalar(select(User).where(User.email == email))
+    if user is None and settings.app_env != "production":
+        legacy_users = list(
+            await session.scalars(select(User).where(User.email.is_(None)).limit(2))
+        )
+        if len(legacy_users) == 1:
+            user = legacy_users[0]
+    if user is None:
+        user = User(
+            email=email,
+            email_verified_at=now,
+            display_name=email.split("@", 1)[0][:80],
+        )
+        session.add(user)
+        await session.flush()
+        add_audit_event(
+            session,
+            actor_type="user",
+            actor_id=user.id,
+            action="auth.email-user-created",
+        )
+    else:
+        user.email = email
+        user.email_verified_at = now
+        if user.display_name in {"微信用户", "Hensun 用户"}:
+            user.display_name = email.split("@", 1)[0][:80]
+    add_audit_event(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="auth.email-login",
+    )
+    await session.commit()
+    token = create_access_token(user.id, settings)
+    response.set_cookie(
+        "hensun_session",
+        token,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        max_age=12 * 60 * 60,
+    )
+    return EmailLoginResponse(
+        access_token=token,
         agreements_complete=bool(user.terms_accepted_at and user.ai_disclosure_confirmed_at),
     )
 

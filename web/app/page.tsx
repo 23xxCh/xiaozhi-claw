@@ -11,7 +11,7 @@ export default function Home() {
           <p className="lead">
             配置角色、音色和快速对话预设，管理设备、摘要记忆与实际用量。摄像头云端能力当前关闭。
           </p>
-          <Link className="action" href="/login">微信登录并开始</Link>
+          <Link className="action" href="/login">邮箱登录并开始</Link>
         </div>
         <div className="hero-card">
           <BrandFace />

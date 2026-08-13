@@ -51,11 +51,17 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    wechat_openid: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    wechat_openid: Mapped[str | None] = mapped_column(
+        String(128), unique=True, index=True, nullable=True
+    )
     wechat_unionid: Mapped[str | None] = mapped_column(
         String(128), unique=True, index=True, nullable=True
     )
-    display_name: Mapped[str] = mapped_column(String(80), default="微信用户")
+    email: Mapped[str | None] = mapped_column(String(320), unique=True, index=True, nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    display_name: Mapped[str] = mapped_column(String(80), default="Hensun 用户")
     adult_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     terms_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     privacy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -70,6 +76,21 @@ class User(Base):
     devices: Mapped[list["Device"]] = relationship(back_populates="owner")
     agents: Mapped[list["Agent"]] = relationship(back_populates="owner")
     usage_profiles: Mapped[list["UsageProfile"]] = relationship(back_populates="owner")
+
+
+class EmailLoginChallenge(Base):
+    __tablename__ = "email_login_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    request_ip_hash: Mapped[str] = mapped_column(String(64), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
 
 
 class UsageProfile(Base):

@@ -56,6 +56,88 @@
         }
       }
     },
+    "/v1/auth/email/request-code": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request Email Code",
+        "operationId": "request_email_code_v1_auth_email_request_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCodeRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/email/verify-code": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify Email Code",
+        "operationId": "verify_email_code_v1_auth_email_verify_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailLoginResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/dev-login": {
       "post": {
         "tags": [
@@ -4383,6 +4465,92 @@
         "type": "object",
         "title": "DeviceUpdateRequest"
       },
+      "EmailCodeRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "EmailCodeRequest"
+      },
+      "EmailCodeRequestResponse": {
+        "properties": {
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "resend_after": {
+            "type": "integer",
+            "title": "Resend After"
+          },
+          "debug_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Debug Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expires_in",
+          "resend_after"
+        ],
+        "title": "EmailCodeRequestResponse"
+      },
+      "EmailCodeVerifyRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^\\d{6}$",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "code"
+        ],
+        "title": "EmailCodeVerifyRequest"
+      },
+      "EmailLoginResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "agreements_complete": {
+            "type": "boolean",
+            "title": "Agreements Complete"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "agreements_complete"
+        ],
+        "title": "EmailLoginResponse"
+      },
       "EntitlementResponse": {
         "properties": {
           "plan": {
@@ -5130,6 +5298,17 @@
             "type": "string",
             "title": "Id"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
           "display_name": {
             "type": "string",
             "title": "Display Name"
@@ -5146,6 +5325,7 @@
         "type": "object",
         "required": [
           "id",
+          "email",
           "display_name",
           "adult_confirmed",
           "agreements_complete"

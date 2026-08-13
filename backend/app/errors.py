@@ -11,6 +11,10 @@ def _request_id(request: Request) -> str:
 
 def _http_error(status_code: int, detail: object) -> tuple[str, str]:
     text = str(detail)
+    if "invalid email code" in text:
+        return "INVALID_CODE", "验证码不正确，请重新输入"
+    if status_code == 429:
+        return "TOO_MANY_REQUESTS", "请求过于频繁，请稍后再试"
     if status_code == 401:
         return "AUTH_REQUIRED", "登录状态已失效，请重新登录"
     if status_code == 403 and "agreement" in text.lower():

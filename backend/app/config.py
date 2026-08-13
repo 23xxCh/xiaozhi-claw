@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     wechat_web_app_id: str = ""
     wechat_web_app_secret: str = ""
     wechat_web_redirect_uri: str = ""
+    email_delivery_mode: Literal["development", "smtp"] = "development"
+    email_otp_secret: str = "development-email-otp-change-me"
+    email_otp_ttl_seconds: int = 600
+    email_otp_resend_seconds: int = 60
+    email_otp_max_attempts: int = 5
+    email_ip_request_limit: int = 20
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
     qwen_realtime_asr_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     qwen_realtime_tts_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     qwen_realtime_asr_model: str = "qwen3-asr-flash-realtime"
@@ -88,6 +101,7 @@ class Settings(BaseSettings):
                 "jwt_secret": self.jwt_secret,
                 "device_credential_pepper": self.device_credential_pepper,
                 "memory_master_key": self.memory_master_key,
+                "email_otp_secret": self.email_otp_secret,
             }
             bad = [
                 name for name, value in unsafe.items() if "change-me" in value or len(value) < 24
@@ -129,6 +143,17 @@ class Settings(BaseSettings):
             raise ValueError("OTA_SIGNING_PUBLIC_KEY is required in production")
         if not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE must be enabled in production")
+        if self.email_delivery_mode != "smtp":
+            raise ValueError("Production email login must use SMTP delivery")
+        smtp_required = {
+            "smtp_host": self.smtp_host,
+            "smtp_username": self.smtp_username,
+            "smtp_password": self.smtp_password,
+            "smtp_from_email": self.smtp_from_email,
+        }
+        smtp_missing = [name for name, value in smtp_required.items() if not value.strip()]
+        if smtp_missing:
+            raise ValueError(f"Missing SMTP settings: {', '.join(smtp_missing)}")
         return self
 
 
