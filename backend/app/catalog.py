@@ -63,6 +63,7 @@ DEFAULT_VOICE_PRESETS = (
         "language": "zh-CN",
         "provider": "dashscope",
         "voice": "Cherry",
+        "preview_url": "/voice-previews/cherry.mp3",
         "is_default": True,
     },
     {
@@ -71,6 +72,7 @@ DEFAULT_VOICE_PRESETS = (
         "language": "zh-CN",
         "provider": "dashscope",
         "voice": "Ethan",
+        "preview_url": "/voice-previews/ethan.mp3",
         "is_default": False,
     },
 )

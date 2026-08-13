@@ -25,5 +25,8 @@ miniapp/miniprogram_npm/
 web/node_modules/
 web/.next/
 web/.env.local
+web/playwright-report/
+web/test-results/
 backups/
+build/
 run/
