@@ -629,6 +629,8 @@ void Application::InitializeProtocol() {
                 if (strcmp(command->valuestring, "reboot") == 0) {
                     // Do a reboot if user requests a OTA update
                     Schedule([this]() { Reboot(); });
+                } else if (strcmp(command->valuestring, "apply_config") == 0) {
+                    HandleDeviceConfig(root);
                 } else {
                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
                 }
@@ -662,6 +664,57 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->Start();
+}
+
+void Application::HandleDeviceConfig(const cJSON* root) {
+    auto command_id = cJSON_GetObjectItem(root, "command_id");
+    auto config_version = cJSON_GetObjectItem(root, "config_version");
+    auto config = cJSON_GetObjectItem(root, "config");
+    auto speaker_volume = cJSON_IsObject(config)
+                              ? cJSON_GetObjectItem(config, "speaker_volume")
+                              : nullptr;
+    auto screen_brightness = cJSON_IsObject(config)
+                                 ? cJSON_GetObjectItem(config, "screen_brightness")
+                                 : nullptr;
+    if (!cJSON_IsString(command_id) || !cJSON_IsNumber(config_version) ||
+        !cJSON_IsNumber(speaker_volume) || !cJSON_IsNumber(screen_brightness)) {
+        ESP_LOGW(TAG, "Device configuration command is malformed");
+        return;
+    }
+
+    const int version = config_version->valueint;
+    const int volume = speaker_volume->valueint;
+    const int brightness = screen_brightness->valueint;
+    const std::string id(command_id->valuestring);
+    Settings saved("hensun_config");
+    const int saved_version = saved.GetInt("version", 0);
+    if (version < saved_version) {
+        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "stale-version");
+        return;
+    }
+    if (version < 1 || volume < 10 || volume > 100 || brightness < 10 ||
+        brightness > 100) {
+        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "invalid-config");
+        return;
+    }
+
+    Schedule([this, id, version, volume, brightness]() {
+        auto& board = Board::GetInstance();
+        auto codec = board.GetAudioCodec();
+        auto backlight = board.GetBacklight();
+        if (codec == nullptr || backlight == nullptr) {
+            protocol_->SendDeviceConfigAck(
+                id, version, false, 0, 0, "unsupported-hardware");
+            return;
+        }
+        codec->SetOutputVolume(volume);
+        backlight->SetBrightness(static_cast<uint8_t>(brightness), true);
+        Settings settings("hensun_config", true);
+        settings.SetInt("version", version);
+        protocol_->SendDeviceConfigAck(id, version, true, volume, brightness);
+        ESP_LOGI(TAG, "Applied device configuration v%d (volume=%d, brightness=%d)",
+                 version, volume, brightness);
+    });
 }
 
 bool Application::OpenAudioChannelWithConfigRefresh() {

@@ -8,8 +8,25 @@ export type Agent = {
   voice_preset_id: string;
   memory_consent: boolean;
   tools: Record<string, boolean>;
+  llm_temperature: number;
+  tts_speech_rate: number;
   config_version: number;
   device_count: number;
+};
+
+export type DeviceConfiguration = {
+  device_id: string;
+  desired_version: number;
+  applied_version: number;
+  speaker_volume: number;
+  screen_brightness: number;
+  applied_speaker_volume: number | null;
+  applied_screen_brightness: number | null;
+  sync_status: "unknown" | "pending" | "synced" | "failed";
+  last_error_code: string | null;
+  command_id: string | null;
+  updated_at: string;
+  applied_at: string | null;
 };
 
 export type Device = {

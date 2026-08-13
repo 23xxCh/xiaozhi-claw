@@ -104,6 +104,26 @@ class DeviceUpdateRequest(BaseModel):
     active_agent_id: str | None = None
 
 
+class DeviceConfigurationUpdateRequest(BaseModel):
+    speaker_volume: int = Field(ge=10, le=100)
+    screen_brightness: int = Field(ge=10, le=100)
+
+
+class DeviceConfigurationResponse(BaseModel):
+    device_id: str
+    desired_version: int
+    applied_version: int
+    speaker_volume: int
+    screen_brightness: int
+    applied_speaker_volume: int | None
+    applied_screen_brightness: int | None
+    sync_status: Literal["unknown", "pending", "synced", "failed"]
+    last_error_code: str | None
+    command_id: str | None = None
+    updated_at: datetime
+    applied_at: datetime | None
+
+
 class MemoryConsentRequest(BaseModel):
     enabled: bool
 
@@ -157,6 +177,8 @@ class AgentCreateRequest(BaseModel):
     )
     model_preset_id: str = Field(default="fast-chat", max_length=64)
     voice_preset_id: str = Field(default="cherry", max_length=64)
+    llm_temperature: float = Field(default=0.6, ge=0, le=2)
+    tts_speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
     usage_profile_id: str | None = None
 
 
@@ -168,6 +190,8 @@ class AgentUpdateRequest(BaseModel):
     voice_preset_id: str | None = Field(default=None, max_length=64)
     memory_consent: bool | None = None
     tools: dict[str, bool] | None = None
+    llm_temperature: float | None = Field(default=None, ge=0, le=2)
+    tts_speech_rate: float | None = Field(default=None, ge=0.5, le=2.0)
 
 
 class AgentResponse(BaseModel):
@@ -180,6 +204,8 @@ class AgentResponse(BaseModel):
     voice_preset_id: str
     memory_consent: bool
     tools: dict[str, bool]
+    llm_temperature: float
+    tts_speech_rate: float
     config_version: int
     device_count: int = 0
     created_at: datetime

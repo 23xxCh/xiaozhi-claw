@@ -45,6 +45,8 @@ async def _response(session: AsyncSession, agent: Agent) -> AgentResponse:
         voice_preset_id=agent.voice_preset_id,
         memory_consent=agent.memory_consent,
         tools=json.loads(agent.tools_json or "{}"),
+        llm_temperature=agent.llm_temperature,
+        tts_speech_rate=agent.tts_speech_rate,
         config_version=agent.config_version,
         device_count=int(device_count or 0),
         created_at=agent.created_at,
@@ -105,6 +107,8 @@ async def create_agent(
         system_prompt=payload.system_prompt,
         model_preset_id=payload.model_preset_id,
         voice_preset_id=payload.voice_preset_id,
+        llm_temperature=payload.llm_temperature,
+        tts_speech_rate=payload.tts_speech_rate,
     )
     session.add(agent)
     await session.flush()
@@ -158,6 +162,10 @@ async def update_agent(
             )
     if payload.tools is not None:
         agent.tools_json = json.dumps(payload.tools, ensure_ascii=False, sort_keys=True)
+    if payload.llm_temperature is not None:
+        agent.llm_temperature = payload.llm_temperature
+    if payload.tts_speech_rate is not None:
+        agent.tts_speech_rate = payload.tts_speech_rate
     agent.config_version += 1
     add_audit_event(
         session,

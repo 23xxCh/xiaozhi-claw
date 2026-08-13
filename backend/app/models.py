@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -33,6 +33,7 @@ class StaffRole(StrEnum):
 class DeviceCommandStatus(StrEnum):
     PENDING = "pending"
     DELIVERED = "delivered"
+    APPLIED = "applied"
     FAILED = "failed"
     EXPIRED = "expired"
 
@@ -180,6 +181,8 @@ class Agent(Base):
     voice_preset_id: Mapped[str] = mapped_column(ForeignKey("voice_presets.id"), default="cherry")
     memory_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     tools_json: Mapped[str] = mapped_column(Text, default="{}")
+    llm_temperature: Mapped[float] = mapped_column(Float, default=0.6)
+    tts_speech_rate: Mapped[float] = mapped_column(Float, default=1.0)
     config_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -226,6 +229,23 @@ class Device(Base):
     active_profile: Mapped[UsageProfile | None] = relationship(
         back_populates="active_devices", foreign_keys=[active_profile_id]
     )
+
+
+class DeviceConfiguration(Base):
+    __tablename__ = "device_configurations"
+
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), primary_key=True)
+    desired_version: Mapped[int] = mapped_column(Integer, default=0)
+    applied_version: Mapped[int] = mapped_column(Integer, default=0)
+    speaker_volume: Mapped[int] = mapped_column(Integer, default=70)
+    screen_brightness: Mapped[int] = mapped_column(Integer, default=75)
+    applied_speaker_volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_screen_brightness: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Claim(Base):
@@ -398,6 +418,7 @@ class DeviceCommand(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 

@@ -27,8 +27,9 @@ class FixedStreamingLlm:
         *,
         system_prompt: str,
         model: str,
+        temperature: float,
     ) -> AsyncIterator[str]:
-        del transcript, history, memories, system_prompt, model
+        del transcript, history, memories, system_prompt, model, temperature
         yield "多帧回复。"
 
 
@@ -52,8 +53,10 @@ class MultiFrameRealtimeProviders:
     async def open_asr(self) -> FixedAsrSession:
         return FixedAsrSession()
 
-    async def open_tts(self, voice: str) -> MultiFrameTtsSession:
-        del voice
+    async def open_tts(
+        self, voice: str, speech_rate: float = 1.0
+    ) -> MultiFrameTtsSession:
+        del voice, speech_rate
         return MultiFrameTtsSession()
 
 

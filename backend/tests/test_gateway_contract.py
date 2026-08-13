@@ -96,8 +96,9 @@ class SlowLlm:
         *,
         system_prompt: str,
         model: str,
+        temperature: float,
     ) -> AsyncIterator[str]:
-        del transcript, history, memories, system_prompt, model
+        del transcript, history, memories, system_prompt, model, temperature
         await asyncio.sleep(60)
         yield "不应到达"
 
@@ -109,8 +110,8 @@ class SlowProviders:
     async def open_asr(self) -> ImmediateAsr:
         return ImmediateAsr()
 
-    async def open_tts(self, voice: str):
-        del voice
+    async def open_tts(self, voice: str, speech_rate: float = 1.0):
+        del voice, speech_rate
         raise AssertionError("TTS should not start before abort")
 
 
@@ -137,8 +138,8 @@ class FallbackExerciseProviders:
     async def open_asr(self) -> FailingAsr:
         return FailingAsr()
 
-    async def open_tts(self, voice: str) -> Tts:
-        del voice
+    async def open_tts(self, voice: str, speech_rate: float = 1.0) -> Tts:
+        del voice, speech_rate
         return self.Tts()
 
 

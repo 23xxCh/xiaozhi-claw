@@ -97,6 +97,31 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendDeviceConfigAck(const std::string& command_id, int config_version,
+                                   bool applied, int speaker_volume,
+                                   int screen_brightness,
+                                   const std::string& error_code) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "device_config_ack");
+    cJSON_AddStringToObject(root, "command_id", command_id.c_str());
+    cJSON_AddNumberToObject(root, "config_version", config_version);
+    cJSON_AddStringToObject(root, "status", applied ? "applied" : "failed");
+    if (applied) {
+        cJSON* values = cJSON_AddObjectToObject(root, "applied");
+        cJSON_AddNumberToObject(values, "speaker_volume", speaker_volume);
+        cJSON_AddNumberToObject(values, "screen_brightness", screen_brightness);
+    } else {
+        cJSON_AddStringToObject(root, "error_code", error_code.c_str());
+    }
+    char* json = cJSON_PrintUnformatted(root);
+    if (json != nullptr) {
+        SendText(json);
+        cJSON_free(json);
+    }
+    cJSON_Delete(root);
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

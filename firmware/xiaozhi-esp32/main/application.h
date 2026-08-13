@@ -173,6 +173,7 @@ private:
     void CheckAssetsVersion();
     void CheckNewVersion();
     void InitializeProtocol();
+    void HandleDeviceConfig(const cJSON* root);
     bool OpenAudioChannelWithConfigRefresh();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);

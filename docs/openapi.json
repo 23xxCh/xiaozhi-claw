@@ -1776,6 +1776,118 @@
         }
       }
     },
+    "/v1/devices/{device_id}/configuration": {
+      "get": {
+        "tags": [
+          "device-configuration"
+        ],
+        "summary": "Get Device Configuration",
+        "operationId": "get_device_configuration_v1_devices__device_id__configuration_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "device-configuration"
+        ],
+        "summary": "Update Device Configuration",
+        "operationId": "update_device_configuration_v1_devices__device_id__configuration_patch",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceConfigurationUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/devices/{device_id}/memories": {
       "get": {
         "tags": [
@@ -3668,6 +3780,20 @@
             "title": "Voice Preset Id",
             "default": "cherry"
           },
+          "llm_temperature": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Llm Temperature",
+            "default": 0.6
+          },
+          "tts_speech_rate": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.5,
+            "title": "Tts Speech Rate",
+            "default": 1.0
+          },
           "usage_profile_id": {
             "anyOf": [
               {
@@ -3786,6 +3912,14 @@
             "type": "object",
             "title": "Tools"
           },
+          "llm_temperature": {
+            "type": "number",
+            "title": "Llm Temperature"
+          },
+          "tts_speech_rate": {
+            "type": "number",
+            "title": "Tts Speech Rate"
+          },
           "config_version": {
             "type": "integer",
             "title": "Config Version"
@@ -3817,6 +3951,8 @@
           "voice_preset_id",
           "memory_consent",
           "tools",
+          "llm_temperature",
+          "tts_speech_rate",
           "config_version",
           "created_at",
           "updated_at"
@@ -3913,6 +4049,32 @@
               }
             ],
             "title": "Tools"
+          },
+          "llm_temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Temperature"
+          },
+          "tts_speech_rate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 2.0,
+                "minimum": 0.5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tts Speech Rate"
           }
         },
         "type": "object",
@@ -4116,6 +4278,138 @@
           "lifecycle"
         ],
         "title": "DeviceBootstrapResponse"
+      },
+      "DeviceConfigurationResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "desired_version": {
+            "type": "integer",
+            "title": "Desired Version"
+          },
+          "applied_version": {
+            "type": "integer",
+            "title": "Applied Version"
+          },
+          "speaker_volume": {
+            "type": "integer",
+            "title": "Speaker Volume"
+          },
+          "screen_brightness": {
+            "type": "integer",
+            "title": "Screen Brightness"
+          },
+          "applied_speaker_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Speaker Volume"
+          },
+          "applied_screen_brightness": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Screen Brightness"
+          },
+          "sync_status": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "pending",
+              "synced",
+              "failed"
+            ],
+            "title": "Sync Status"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "desired_version",
+          "applied_version",
+          "speaker_volume",
+          "screen_brightness",
+          "applied_speaker_volume",
+          "applied_screen_brightness",
+          "sync_status",
+          "last_error_code",
+          "updated_at",
+          "applied_at"
+        ],
+        "title": "DeviceConfigurationResponse"
+      },
+      "DeviceConfigurationUpdateRequest": {
+        "properties": {
+          "speaker_volume": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 10.0,
+            "title": "Speaker Volume"
+          },
+          "screen_brightness": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 10.0,
+            "title": "Screen Brightness"
+          }
+        },
+        "type": "object",
+        "required": [
+          "speaker_volume",
+          "screen_brightness"
+        ],
+        "title": "DeviceConfigurationUpdateRequest"
       },
       "DeviceDetailResponse": {
         "properties": {

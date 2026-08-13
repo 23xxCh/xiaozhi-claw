@@ -36,6 +36,7 @@ class RealtimeLlmProvider(Protocol):
         *,
         system_prompt: str,
         model: str,
+        temperature: float,
     ) -> AsyncIterator[str]: ...
 
 
@@ -70,6 +71,7 @@ class MockLlmProvider:
         *,
         system_prompt: str,
         model: str,
+        temperature: float,
     ) -> AsyncIterator[str]:
         yield f"收到：{transcript}"
 
@@ -196,6 +198,7 @@ class DeepSeekStreamingLlmProvider:
         *,
         system_prompt: str,
         model: str,
+        temperature: float,
     ) -> AsyncIterator[str]:
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
         if memories:
@@ -215,7 +218,12 @@ class DeepSeekStreamingLlmProvider:
                 "POST",
                 url,
                 headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
-                json={"model": model, "messages": messages, "stream": True},
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "stream": True,
+                },
             ) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -236,7 +244,9 @@ class QwenRealtimeTtsSession:
         self.closed = False
 
     @classmethod
-    async def open(cls, settings: Settings, *, voice: str) -> "QwenRealtimeTtsSession":
+    async def open(
+        cls, settings: Settings, *, voice: str, speech_rate: float
+    ) -> "QwenRealtimeTtsSession":
         url = (
             f"{settings.qwen_realtime_tts_url.rstrip('/')}?model={settings.qwen_realtime_tts_model}"
         )
@@ -261,6 +271,7 @@ class QwenRealtimeTtsSession:
                         "language_type": "Chinese",
                         "response_format": "pcm",
                         "sample_rate": 24000,
+                        "speech_rate": speech_rate,
                     },
                 }
             )
@@ -335,10 +346,12 @@ class RealtimeProviderBundle:
             return MockAsrSession()
         return await QwenRealtimeAsrSession.open(self.settings)
 
-    async def open_tts(self, voice: str) -> RealtimeTtsSession:
+    async def open_tts(self, voice: str, speech_rate: float = 1.0) -> RealtimeTtsSession:
         if self.mock:
             return MockTtsSession()
-        return await QwenRealtimeTtsSession.open(self.settings, voice=voice)
+        return await QwenRealtimeTtsSession.open(
+            self.settings, voice=voice, speech_rate=speech_rate
+        )
 
 
 def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:

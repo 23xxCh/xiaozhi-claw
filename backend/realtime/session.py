@@ -18,6 +18,9 @@ from backend.app.models import (
     AgentMemory,
     ConversationSession,
     Device,
+    DeviceCommand,
+    DeviceCommandStatus,
+    DeviceConfiguration,
     DeviceLifecycle,
     DeviceSession,
     DeviceSessionStatus,
@@ -70,6 +73,8 @@ class AgentSnapshot:
     tts_provider: str
     tts_model: str
     voice: str
+    llm_temperature: float
+    tts_speech_rate: float
     asr_cost_micros_per_minute: int
     llm_input_cost_micros_per_million_tokens: int
     llm_output_cost_micros_per_million_tokens: int
@@ -155,6 +160,8 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         tts_provider=model.tts_provider,
         tts_model=model.tts_model,
         voice=voice.voice,
+        llm_temperature=agent.llm_temperature,
+        tts_speech_rate=agent.tts_speech_rate,
         asr_cost_micros_per_minute=model.asr_cost_micros_per_minute,
         llm_input_cost_micros_per_million_tokens=(model.llm_input_cost_micros_per_million_tokens),
         llm_output_cost_micros_per_million_tokens=(model.llm_output_cost_micros_per_million_tokens),
@@ -309,6 +316,7 @@ async def _speak_fixed_message(
     websocket: WebSocket,
     serial: str,
     voice: str,
+    speech_rate: float,
     message: str,
 ) -> None:
     """Speak a product-owned policy message without invoking the LLM."""
@@ -329,7 +337,7 @@ async def _speak_fixed_message(
     )
     try:
         try:
-            tts = await providers.open_tts(voice)
+            tts = await providers.open_tts(voice, speech_rate)
         except Exception:
             if fallback is None:
                 raise
@@ -449,7 +457,9 @@ async def _process_turn(
             nonlocal batch_tts, first_audio_latency_ms, tts_started_at
             if tts is None and not batch_tts:
                 try:
-                    tts = await providers.open_tts(snapshot.voice)
+                    tts = await providers.open_tts(
+                        snapshot.voice, snapshot.tts_speech_rate
+                    )
                 except Exception:
                     if fallback is None:
                         raise
@@ -495,6 +505,7 @@ async def _process_turn(
                     snapshot.memories,
                     system_prompt=snapshot.system_prompt,
                     model=snapshot.llm_model,
+                    temperature=snapshot.llm_temperature,
                 ):
                     reply_parts.append(token)
                     for sentence in sentence_buffer.feed(token):
@@ -595,6 +606,7 @@ async def _save_session_summary(
             [],
             system_prompt="只输出简短、客观的会话摘要。",
             model=snapshot.llm_model,
+            temperature=0.2,
         ):
             parts.append(token)
         summary = "".join(parts).strip()[:500]
@@ -612,6 +624,104 @@ async def _save_session_summary(
             await session.commit()
     except Exception:
         logger.exception("session summary failed for conversation %s", conversation_id)
+
+
+async def _handle_device_config_ack(
+    session_factory: async_sessionmaker[AsyncSession],
+    device_id: str,
+    message: dict[str, object],
+) -> None:
+    command_id = message.get("command_id")
+    config_version = message.get("config_version")
+    ack_status = message.get("status")
+    applied = message.get("applied")
+    if (
+        not isinstance(command_id, str)
+        or not isinstance(config_version, int)
+        or isinstance(config_version, bool)
+        or ack_status not in {"applied", "failed"}
+    ):
+        logger.warning("ignored malformed device configuration acknowledgement")
+        return
+
+    async with session_factory() as session:
+        command = await session.get(DeviceCommand, command_id)
+        configuration = await session.get(DeviceConfiguration, device_id)
+        if (
+            command is None
+            or command.device_id != device_id
+            or command.command_type != "device-config"
+            or configuration is None
+        ):
+            logger.warning("ignored unknown device configuration acknowledgement %s", command_id)
+            return
+        try:
+            expected_version = int(json.loads(command.payload_json)["config_version"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = "invalid-command-payload"
+            await session.commit()
+            return
+        if config_version != expected_version:
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = "ack-version-mismatch"
+            await session.commit()
+            return
+
+        now = datetime.now(UTC)
+        if ack_status == "failed":
+            error_code = message.get("error_code")
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = (
+                error_code[:80] if isinstance(error_code, str) and error_code else "device-rejected"
+            )
+            if config_version == configuration.desired_version:
+                configuration.last_error_code = command.error_code
+            await session.commit()
+            return
+
+        if not isinstance(applied, dict):
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = "invalid-ack-payload"
+            if config_version == configuration.desired_version:
+                configuration.last_error_code = command.error_code
+            await session.commit()
+            return
+        speaker_volume = applied.get("speaker_volume")
+        screen_brightness = applied.get("screen_brightness")
+        if (
+            not isinstance(speaker_volume, int)
+            or isinstance(speaker_volume, bool)
+            or not 10 <= speaker_volume <= 100
+            or not isinstance(screen_brightness, int)
+            or isinstance(screen_brightness, bool)
+            or not 10 <= screen_brightness <= 100
+        ):
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = "invalid-ack-values"
+            if config_version == configuration.desired_version:
+                configuration.last_error_code = command.error_code
+            await session.commit()
+            return
+
+        command.status = DeviceCommandStatus.APPLIED.value
+        command.applied_at = now
+        command.error_code = None
+        if config_version >= configuration.applied_version:
+            configuration.applied_version = config_version
+            configuration.applied_speaker_volume = speaker_volume
+            configuration.applied_screen_brightness = screen_brightness
+            configuration.applied_at = now
+        if config_version == configuration.desired_version:
+            configuration.last_error_code = None
+        add_audit_event(
+            session,
+            actor_type="device",
+            actor_id=device_id,
+            action="device.configuration-applied",
+            payload={"command_id": command.id, "config_version": config_version},
+        )
+        await session.commit()
 
 
 async def serve_device_websocket(websocket: WebSocket) -> None:
@@ -764,6 +874,9 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     serial, {"type": "llm", "emotion": "interrupted"}
                 )
                 continue
+            if message_type == "device_config_ack":
+                await _handle_device_config_ack(session_factory, device_id, message)
+                continue
             if message_type != "listen":
                 logger.info("ignored unknown device message type %r from %s", message_type, serial)
                 await _send_error(
@@ -820,7 +933,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         serial, {"type": "llm", "emotion": "safe_block"}
                     )
                     await _speak_fixed_message(
-                        websocket, serial, snapshot.voice, policy.message
+                        websocket,
+                        serial,
+                        snapshot.voice,
+                        snapshot.tts_speech_rate,
+                        policy.message,
                     )
                     continue
                 if policy.continuous_reminder_due and not continuous_reminder_sent:
@@ -833,7 +950,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             "message": reminder,
                         },
                     )
-                    await _speak_fixed_message(websocket, serial, snapshot.voice, reminder)
+                    await _speak_fixed_message(
+                        websocket,
+                        serial,
+                        snapshot.voice,
+                        snapshot.tts_speech_rate,
+                        reminder,
+                    )
                     continuous_reminder_sent = True
                 active_asr = await websocket.app.state.realtime_providers.open_asr()
                 audio_bytes = 0

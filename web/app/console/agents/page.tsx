@@ -18,7 +18,7 @@ export default function AgentsPage() {
   const [models, setModels] = useState<ModelPreset[]>([]);
   const [voices, setVoices] = useState<VoicePreset[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [form, setForm] = useState({ name: "", system_prompt: DEFAULT_PROMPT, model_preset_id: "fast-chat", voice_preset_id: "cherry", memory_consent: false, tools: {} as Record<string, boolean> });
+  const [form, setForm] = useState({ name: "", system_prompt: DEFAULT_PROMPT, model_preset_id: "fast-chat", voice_preset_id: "cherry", memory_consent: false, tools: {} as Record<string, boolean>, llm_temperature: 0.6, tts_speech_rate: 1.0 });
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -28,7 +28,7 @@ export default function AgentsPage() {
     const selected = items.find((item) => item.id === id) ?? items[0];
     if (!selected) return;
     setSelectedId(selected.id);
-    setForm({ name: selected.name, system_prompt: selected.system_prompt, model_preset_id: selected.model_preset_id, voice_preset_id: selected.voice_preset_id, memory_consent: selected.memory_consent, tools: selected.tools });
+    setForm({ name: selected.name, system_prompt: selected.system_prompt, model_preset_id: selected.model_preset_id, voice_preset_id: selected.voice_preset_id, memory_consent: selected.memory_consent, tools: selected.tools, llm_temperature: selected.llm_temperature, tts_speech_rate: selected.tts_speech_rate });
   }, []);
 
   const load = useCallback(async (preferredId?: string) => {
@@ -70,8 +70,10 @@ export default function AgentsPage() {
           <label className="check"><input type="checkbox" checked={form.memory_consent} onChange={(event) => setForm({ ...form, memory_consent: event.target.checked })} />允许保存可查看、可删除的加密摘要记忆</label>
           <details className="details"><summary>高级设置</summary><div className="stack">
             <div className="field"><label htmlFor="model">对话风格</label><select id="model" value={form.model_preset_id} onChange={(event) => setForm({ ...form, model_preset_id: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.display_name} — {model.description}</option>)}</select></div>
+            <div className="field"><label htmlFor="temperature">表达灵活度：{form.llm_temperature.toFixed(2)}</label><input id="temperature" type="range" min="0" max="2" step="0.05" value={form.llm_temperature} onChange={(event) => setForm({ ...form, llm_temperature: Number(event.target.value) })} /><div className="hint">低值更稳定，高值更多变化；建议保持 0.3–0.8。</div></div>
+            <div className="field"><label htmlFor="speech-rate">说话速度：{form.tts_speech_rate.toFixed(2)}×</label><input id="speech-rate" type="range" min="0.5" max="2" step="0.05" value={form.tts_speech_rate} onChange={(event) => setForm({ ...form, tts_speech_rate: Number(event.target.value) })} /></div>
             <div className="field"><label htmlFor="prompt">完整角色设定</label><textarea id="prompt" value={form.system_prompt} onChange={(event) => setForm({ ...form, system_prompt: event.target.value })} /></div>
-            <button className="button secondary" type="button" onClick={() => setForm({ ...form, system_prompt: DEFAULT_PROMPT, model_preset_id: "fast-chat", voice_preset_id: "cherry", tools: {} })}>恢复默认设置</button>
+            <button className="button secondary" type="button" onClick={() => setForm({ ...form, system_prompt: DEFAULT_PROMPT, model_preset_id: "fast-chat", voice_preset_id: "cherry", tools: {}, llm_temperature: 0.6, tts_speech_rate: 1.0 })}>恢复默认设置</button>
           </div></details>
           <button className="button" type="submit" disabled={!selectedId || submitting}>{submitting ? "正在保存…" : "保存设置"}</button>
         </form>
