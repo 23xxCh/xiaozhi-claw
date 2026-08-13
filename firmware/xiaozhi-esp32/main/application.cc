@@ -19,6 +19,10 @@
 
 #define TAG "Application"
 
+namespace {
+constexpr int kAutoStopListeningTimeoutTicks = 15;
+}
+
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
@@ -273,6 +277,16 @@ void Application::Run() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
+
+            // Hardware VAD can remain in speech state in a noisy room. Bound
+            // auto listening so a lost silence transition cannot leave the UI
+            // and gateway recording forever. Manual push-to-talk is unaffected.
+            if (GetDeviceState() == kDeviceStateListening &&
+                listening_mode_ == kListeningModeAutoStop &&
+                clock_ticks_ >= kAutoStopListeningTimeoutTicks) {
+                ESP_LOGW(TAG, "Auto listening timed out; finishing the utterance");
+                StopListening();
+            }
 
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
@@ -718,23 +732,31 @@ void Application::HandleDeviceConfig(const cJSON* root) {
 }
 
 bool Application::OpenAudioChannelWithConfigRefresh() {
+    // The bootstrap websocket token is intentionally short-lived. Refresh it
+    // before every new audio session so a device that has been idle does not
+    // send an expired token and surface a visible 403 connection error.
+    if (!ota_) {
+        ota_ = std::make_unique<Ota>();
+    }
+    if (ota_->CheckVersion() == ESP_OK) {
+        InitializeProtocol();
+        if (protocol_ && protocol_->OpenAudioChannel()) {
+            last_error_message_.clear();
+            xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
+            return true;
+        }
+    } else {
+        ESP_LOGW(TAG, "Bootstrap refresh failed; trying the saved websocket configuration");
+    }
+
+    // Keep an offline-friendly fallback for a transient bootstrap failure.
+    // It succeeds only while the previously saved token is still valid.
     if (protocol_ && protocol_->OpenAudioChannel()) {
+        last_error_message_.clear();
+        xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
         return true;
     }
-
-    ESP_LOGW(TAG, "Audio channel connection failed; refreshing bootstrap configuration");
-    if (!ota_ || ota_->CheckVersion() != ESP_OK) {
-        return false;
-    }
-
-    InitializeProtocol();
-    if (!protocol_ || !protocol_->OpenAudioChannel()) {
-        return false;
-    }
-
-    last_error_message_.clear();
-    xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
-    return true;
+    return false;
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {

@@ -15,6 +15,12 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.source = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(
             encoding="utf-8"
         )
+        self.application_source = (ROOT / "main/application.cc").read_text(
+            encoding="utf-8"
+        )
+        self.audio_engine_source = (
+            ROOT / "main/audio/engines/afe_audio_engine.cc"
+        ).read_text(encoding="utf-8")
         self.face_header = (BOARD / "hensun_face_display.h").read_text(
             encoding="utf-8"
         )
@@ -51,6 +57,38 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("api.hensun", official)
         self.assertIn("api.hensun.invalid", selfhosted)
         self.assertNotIn("api.tenclass.net", selfhosted)
+
+    def test_audio_channel_refreshes_short_lived_token_before_connecting(self):
+        method = re.search(
+            r"bool Application::OpenAudioChannelWithConfigRefresh\(\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(method)
+        body = method.group(1)
+        self.assertIn("ota_ = std::make_unique<Ota>()", body)
+        self.assertLess(body.index("ota_->CheckVersion()"), body.index("OpenAudioChannel()"))
+
+    def test_auto_listening_has_a_bounded_safety_timeout(self):
+        self.assertRegex(
+            self.application_source,
+            r"kAutoStopListeningTimeoutTicks\s*=\s*15",
+        )
+        self.assertIn(
+            "clock_ticks_ >= kAutoStopListeningTimeoutTicks",
+            self.application_source,
+        )
+
+    def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
+        self.assertIn(
+            "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
+            self.audio_engine_source,
+        )
+        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
+        self.assertIn(
+            "afe_config->vad_min_noise_ms = 800",
+            self.audio_engine_source,
+        )
 
     def test_pin_map_matches_the_seller_cam_v2_board(self):
         expected = {

@@ -958,10 +958,15 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         reminder,
                     )
                     continuous_reminder_sent = True
-                active_asr = await websocket.app.state.realtime_providers.open_asr()
-                audio_bytes = 0
-                audio_frames = 0
-                audio_buffer.clear()
+                # A few ESP32 transports can put the first binary frame on the
+                # socket immediately before listen.start. The binary branch
+                # already opens an implicit ASR session for that race; preserve
+                # it here instead of discarding the beginning of the utterance.
+                if active_asr is None:
+                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    audio_bytes = 0
+                    audio_frames = 0
+                    audio_buffer.clear()
                 continue
             if state != "stop":
                 await _send_error(

@@ -218,21 +218,45 @@ def test_first_audio_frame_can_implicitly_start_listening(
         assert stt["text"] == "隐式开始"
 
 
-def test_device_audio_buffer_has_a_configured_frame_limit(
+def test_late_listen_start_keeps_audio_already_buffered(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
-    owned = provision_owned_device(client, admin_headers, serial="HENSUN-AUDIO-LIMIT")
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-LATE-START")
     headers = {
         "Device-Id": owned["serial"],
         "Authorization": f"Bearer {owned['device_secret']}",
     }
     with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_bytes("前半".encode())
         websocket.send_json({"type": "listen", "state": "start"})
-        for _ in range(client.app.state.settings.max_device_audio_queue_frames + 1):
-            websocket.send_bytes(b"frame")
-        error = websocket.receive_json()
-        assert error["type"] == "error"
-        assert error["code"] == "audio-frame-limit"
+        websocket.send_bytes("后半".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+        stt = websocket.receive_json()
+        assert stt["type"] == "stt"
+        assert stt["text"] == "前半后半"
+
+
+def test_device_audio_buffer_has_a_configured_frame_limit(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    assert client.app.state.settings.max_device_audio_queue_frames * 60 >= 60_000
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-AUDIO-LIMIT")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+    original_limit = client.app.state.settings.max_device_audio_queue_frames
+    client.app.state.settings.max_device_audio_queue_frames = 3
+    try:
+        with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+            websocket.send_json({"type": "listen", "state": "start"})
+            for _ in range(4):
+                websocket.send_bytes(b"frame")
+            error = websocket.receive_json()
+            assert error["type"] == "error"
+            assert error["code"] == "audio-frame-limit"
+    finally:
+        client.app.state.settings.max_device_audio_queue_frames = original_limit
 
 
 def test_youth_policy_block_speaks_fixed_message_without_llm(

@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     gateway_id: str = "gateway-local-1"
     command_poll_interval_seconds: float = 0.5
     device_offline_after_seconds: int = 90
-    max_device_audio_queue_frames: int = 100
+    # ESP32 sends one Opus frame every 60 ms. Keep one minute bounded in memory;
+    # the old value of 100 discarded the utterance after only six seconds.
+    max_device_audio_queue_frames: int = 1000
     cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
     web_app_url: str = "http://localhost:3000"
     session_cookie_secure: bool = False
