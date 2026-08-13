@@ -97,9 +97,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
             self.audio_engine_source,
         )
-        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
+        self.assertIn("afe_config->vad_mode = VAD_MODE_2", self.audio_engine_source)
         self.assertIn(
-            "afe_config->vad_min_noise_ms = 800",
+            "afe_config->vad_min_noise_ms = 600",
             self.audio_engine_source,
         )
 

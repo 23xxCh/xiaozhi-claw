@@ -139,10 +139,10 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
     afe_config->vad_init = kUseAfeForVoiceProcessing;
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
     // The open speaker/microphone layout on the pilot board picks up more
-    // ambient noise. Require a slightly stronger speech signal and a stable
-    // silence window before ending the utterance.
-    afe_config->vad_mode = VAD_MODE_1;
-    afe_config->vad_min_noise_ms = 800;
+    // ambient noise. Use a stricter speech decision so steady room noise can
+    // release VAD, with a short silence tail that still preserves pauses.
+    afe_config->vad_mode = VAD_MODE_2;
+    afe_config->vad_min_noise_ms = 600;
 #else
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
