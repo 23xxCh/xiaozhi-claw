@@ -71,6 +71,7 @@ async def _device_detail_response(
         hardware_version=device.hardware_version,
         ota_auto_update=device.ota_auto_update,
         active_agent_id=device.active_agent_id,
+        active_profile_id=device.active_profile_id,
         online=online,
         last_seen_at=device.last_seen_at,
     )
@@ -212,6 +213,7 @@ async def confirm_claim(
     claim.consumed_at = now
     agent = await ensure_default_agent(session, user)
     device.active_agent_id = agent.id
+    device.active_profile_id = agent.usage_profile_id
     session.add(
         Entitlement(
             user_id=user.id,
@@ -267,6 +269,7 @@ async def update_device(
         if agent is None or agent.owner_user_id != user.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="agent not found")
         device.active_agent_id = agent.id
+        device.active_profile_id = agent.usage_profile_id
     add_audit_event(
         session,
         actor_type="user",
@@ -291,6 +294,7 @@ async def unbind_device(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
     device.owner_user_id = None
     device.active_agent_id = None
+    device.active_profile_id = None
     device.lifecycle = DeviceLifecycle.FACTORY_UNCLAIMED.value
     device.memory_consent = False
     device.reset_epoch += 1

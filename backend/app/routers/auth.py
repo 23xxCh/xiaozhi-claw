@@ -20,6 +20,7 @@ from ..schemas import (
     WechatLoginStartResponse,
 )
 from ..security import create_access_token, create_oauth_state, verify_oauth_state
+from ..usage_profiles import ensure_adult_profile
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 TERMS_VERSION = "2026-08-13"
@@ -76,6 +77,7 @@ async def dev_login(
         user.privacy_version = PRIVACY_VERSION
         user.terms_accepted_at = now
         user.ai_disclosure_confirmed_at = now
+    await ensure_adult_profile(session, user)
     await session.commit()
     token = create_access_token(user.id, settings)
     response.set_cookie(
@@ -117,6 +119,7 @@ async def confirm_adult(
     user.privacy_version = PRIVACY_VERSION
     user.terms_accepted_at = now
     user.ai_disclosure_confirmed_at = now
+    await ensure_adult_profile(session, user)
     add_audit_event(
         session,
         actor_type="user",

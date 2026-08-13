@@ -63,15 +63,22 @@ class Settings(BaseSettings):
     fallback_llm_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     fallback_llm_model: str = "qwen3.7-flash"
     fallback_tts_url: str = (
-        "https://dashscope.aliyuncs.com/api/v1/services/aigc/"
-        "multimodal-generation/generation"
+        "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     )
     fallback_tts_model: str = "qwen3-tts-flash"
     fallback_tts_voice: str = "Cherry"
+    family_mode_enabled: bool = False
+    family_mode_openid_whitelist: str = ""
 
     @property
     def allowed_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def family_mode_allowed_openids(self) -> set[str]:
+        return {
+            item.strip() for item in self.family_mode_openid_whitelist.split(",") if item.strip()
+        }
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":

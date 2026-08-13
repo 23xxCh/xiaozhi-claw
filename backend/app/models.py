@@ -42,6 +42,11 @@ class DeviceSessionStatus(StrEnum):
     OFFLINE = "offline"
 
 
+class UsageProfileKind(StrEnum):
+    ADULT = "adult"
+    YOUTH = "youth"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -64,6 +69,39 @@ class User(Base):
 
     devices: Mapped[list["Device"]] = relationship(back_populates="owner")
     agents: Mapped[list["Agent"]] = relationship(back_populates="owner")
+    usage_profiles: Mapped[list["UsageProfile"]] = relationship(back_populates="owner")
+
+
+class UsageProfile(Base):
+    __tablename__ = "usage_profiles"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "kind", "display_name", name="uq_profile_identity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default=UsageProfileKind.ADULT.value, index=True)
+    display_name: Mapped[str] = mapped_column(String(80))
+    age_band: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    guardian_consent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    guardian_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    memory_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    quiet_start_minute: Mapped[int] = mapped_column(Integer, default=22 * 60)
+    quiet_end_minute: Mapped[int] = mapped_column(Integer, default=7 * 60)
+    daily_limit_minutes: Mapped[int] = mapped_column(Integer, default=90)
+    continuous_reminder_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    owner: Mapped[User] = relationship(back_populates="usage_profiles")
+    agents: Mapped[list["Agent"]] = relationship(back_populates="usage_profile")
+    active_devices: Mapped[list["Device"]] = relationship(
+        back_populates="active_profile", foreign_keys="Device.active_profile_id"
+    )
 
 
 class ModelPreset(Base):
@@ -98,6 +136,7 @@ class VoicePreset(Base):
     language: Mapped[str] = mapped_column(String(32), default="zh-CN")
     provider: Mapped[str] = mapped_column(String(40), default="dashscope")
     voice: Mapped[str] = mapped_column(String(120))
+    preview_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -108,6 +147,7 @@ class Agent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    usage_profile_id: Mapped[str] = mapped_column(ForeignKey("usage_profiles.id"), index=True)
     name: Mapped[str] = mapped_column(String(80), default="我的助手")
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     system_prompt: Mapped[str] = mapped_column(
@@ -126,6 +166,7 @@ class Agent(Base):
     )
 
     owner: Mapped[User] = relationship(back_populates="agents")
+    usage_profile: Mapped[UsageProfile] = relationship(back_populates="agents")
     devices: Mapped[list["Device"]] = relationship(
         back_populates="active_agent", foreign_keys="Device.active_agent_id"
     )
@@ -145,6 +186,9 @@ class Device(Base):
     active_agent_id: Mapped[str | None] = mapped_column(
         ForeignKey("agents.id"), nullable=True, index=True
     )
+    active_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("usage_profiles.id"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(80), default="Hensun Desk")
     hardware_version: Mapped[str] = mapped_column(String(32), default="v1")
     ota_auto_update: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -157,6 +201,9 @@ class Device(Base):
     owner: Mapped[User | None] = relationship(back_populates="devices")
     active_agent: Mapped[Agent | None] = relationship(
         back_populates="devices", foreign_keys=[active_agent_id]
+    )
+    active_profile: Mapped[UsageProfile | None] = relationship(
+        back_populates="active_devices", foreign_keys=[active_profile_id]
     )
 
 
@@ -261,6 +308,7 @@ class ConversationSession(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
+    usage_profile_id: Mapped[str] = mapped_column(ForeignKey("usage_profiles.id"), index=True)
     turn_count: Mapped[int] = mapped_column(Integer, default=0)
     first_audio_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provider_cost_micros: Mapped[int] = mapped_column(Integer, default=0)

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from backend.app.models import ConversationSession, DeviceSession, DeviceSessionStatus
+from backend.app.models import ConversationSession, Device, DeviceSession, DeviceSessionStatus
 from backend.app.runtime_state import reconcile_stale_runtime_state
 
 from .conftest import provision_owned_device
@@ -73,6 +73,8 @@ def test_stale_runtime_state_is_reconciled_without_closing_the_active_pair(
         factory = client.app.state.session_factory
         async with factory() as session:
             device_id = owned["device_id"]
+            device = await session.get(Device, device_id)
+            assert device is not None and device.active_profile_id
             stale_started = now - timedelta(minutes=10)
             active_started = now - timedelta(seconds=20)
             stale_session = DeviceSession(
@@ -93,12 +95,14 @@ def test_stale_runtime_state_is_reconciled_without_closing_the_active_pair(
                 user_id="user-old",
                 agent_id="agent-old",
                 device_id=device_id,
+                usage_profile_id=device.active_profile_id,
                 started_at=stale_started,
             )
             active_conversation = ConversationSession(
                 user_id="user-current",
                 agent_id="agent-current",
                 device_id=device_id,
+                usage_profile_id=device.active_profile_id,
                 started_at=active_started,
             )
             session.add_all(

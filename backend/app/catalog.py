@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Agent, Device, ModelPreset, User, VoicePreset
+from .usage_profiles import ensure_adult_profile
 
 DEFAULT_MODEL_PRESETS = (
     {
@@ -104,11 +105,12 @@ async def ensure_catalog(session: AsyncSession) -> None:
 
 async def ensure_default_agent(session: AsyncSession, user: User) -> Agent:
     await ensure_catalog(session)
+    profile = await ensure_adult_profile(session, user)
     agent = await session.scalar(
         select(Agent).where(Agent.owner_user_id == user.id).order_by(Agent.created_at)
     )
     if agent is None:
-        agent = Agent(owner_user_id=user.id, name="我的助手")
+        agent = Agent(owner_user_id=user.id, usage_profile_id=profile.id, name="我的助手")
         session.add(agent)
         await session.flush()
     devices = list(
@@ -121,4 +123,5 @@ async def ensure_default_agent(session: AsyncSession, user: User) -> Agent:
     )
     for device in devices:
         device.active_agent_id = agent.id
+        device.active_profile_id = agent.usage_profile_id
     return agent

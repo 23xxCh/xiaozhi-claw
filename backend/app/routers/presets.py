@@ -82,6 +82,7 @@ async def list_voice_presets(
             display_name=item.display_name,
             language=item.language,
             voice=item.voice,
+            preview_url=item.preview_url,
             is_default=item.is_default,
         )
         for item in presets

@@ -14,10 +14,12 @@ from ..models import (
     Device,
     EncryptedSessionSummary,
     ModelPreset,
+    UsageProfile,
     User,
     VoicePreset,
 )
 from ..schemas import AgentCreateRequest, AgentResponse, AgentUpdateRequest
+from ..usage_profiles import ensure_adult_profile
 
 router = APIRouter(prefix="/v1/agents", tags=["agents"])
 
@@ -35,6 +37,7 @@ async def _response(session: AsyncSession, agent: Agent) -> AgentResponse:
     )
     return AgentResponse(
         id=agent.id,
+        usage_profile_id=agent.usage_profile_id,
         name=agent.name,
         avatar_url=agent.avatar_url,
         system_prompt=agent.system_prompt,
@@ -87,8 +90,16 @@ async def create_agent(
 ) -> AgentResponse:
     await ensure_catalog(session)
     await _validate_presets(session, payload.model_preset_id, payload.voice_preset_id)
+    if payload.usage_profile_id is None:
+        profile_id = (await ensure_adult_profile(session, user)).id
+    else:
+        profile = await session.get(UsageProfile, payload.usage_profile_id)
+        if profile is None or profile.owner_user_id != user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="profile not found")
+        profile_id = profile.id
     agent = Agent(
         owner_user_id=user.id,
+        usage_profile_id=profile_id,
         name=payload.name,
         avatar_url=str(payload.avatar_url) if payload.avatar_url else None,
         system_prompt=payload.system_prompt,
@@ -171,6 +182,7 @@ async def assign_device(
     if device is None or device.owner_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
     device.active_agent_id = agent.id
+    device.active_profile_id = agent.usage_profile_id
     add_audit_event(
         session,
         actor_type="user",

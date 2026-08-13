@@ -25,9 +25,12 @@ from backend.app.models import (
     ModelPreset,
     ProviderUsage,
     UsageEvent,
+    UsageProfile,
+    UsageProfileKind,
     User,
     VoicePreset,
 )
+from backend.app.profile_policy import evaluate_profile_policy
 from backend.app.providers import ProviderBundle
 from backend.app.quota import quota_for_user
 from backend.app.safety import evaluate_text
@@ -54,6 +57,8 @@ MAX_UTTERANCE_BYTES = 1024 * 1024
 @dataclass(frozen=True)
 class AgentSnapshot:
     agent_id: str
+    usage_profile_id: str
+    usage_profile_kind: str
     config_version: int
     system_prompt: str
     memory_consent: bool
@@ -110,12 +115,25 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         agent = await session.get(Agent, device.active_agent_id)
     if agent is None:
         raise RuntimeError("active agent is missing")
+    profile = await session.get(UsageProfile, device.active_profile_id or agent.usage_profile_id)
+    if profile is None or profile.owner_user_id != device.owner_user_id:
+        raise RuntimeError("active usage profile is missing")
+    if agent.usage_profile_id != profile.id:
+        replacement = await session.scalar(
+            select(Agent).where(Agent.usage_profile_id == profile.id).order_by(Agent.created_at)
+        )
+        if replacement is None:
+            raise RuntimeError("active usage profile has no assistant")
+        agent = replacement
+        device.active_agent_id = agent.id
+    device.active_profile_id = profile.id
     model = await session.get(ModelPreset, agent.model_preset_id)
     voice = await session.get(VoicePreset, agent.voice_preset_id)
     if model is None or not model.enabled or voice is None or not voice.enabled:
         raise RuntimeError("agent preset is unavailable")
     memories: list[str] = []
-    if agent.memory_consent:
+    profile_memory_allowed = profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent
+    if agent.memory_consent and profile_memory_allowed:
         encrypted = list(
             await session.scalars(
                 select(AgentMemory.encrypted_value).where(AgentMemory.agent_id == agent.id)
@@ -124,9 +142,11 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         memories = [decrypt_memory(value, settings) for value in encrypted]
     return AgentSnapshot(
         agent_id=agent.id,
+        usage_profile_id=profile.id,
+        usage_profile_kind=profile.kind,
         config_version=agent.config_version,
         system_prompt=agent.system_prompt,
-        memory_consent=agent.memory_consent,
+        memory_consent=agent.memory_consent and profile_memory_allowed,
         memories=memories,
         asr_provider=model.asr_provider,
         asr_model=model.asr_model,
@@ -559,6 +579,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             user_id=device.owner_user_id,
             agent_id=snapshot.agent_id,
             device_id=device.id,
+            usage_profile_id=snapshot.usage_profile_id,
         )
         device_session = DeviceSession(
             device_id=device.id,
@@ -572,6 +593,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         device_id = device.id
         user_id = device.owner_user_id
         conversation_id = conversation.id
+        conversation_started_at = conversation.started_at
         device_session_id = device_session.id
 
     await websocket.accept()
@@ -589,6 +611,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     end_reason = "disconnected"
     connected_at = time.perf_counter()
     cancelled = False
+    continuous_reminder_sent = False
 
     try:
         while True:
@@ -712,7 +735,40 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         await websocket.close(code=4404, reason="device removed")
                         break
                     snapshot = await _load_snapshot(session, current_device, settings)
+                    profile = await session.get(UsageProfile, snapshot.usage_profile_id)
+                    if profile is None:
+                        await websocket.close(code=4404, reason="usage profile removed")
+                        break
+                    policy = await evaluate_profile_policy(
+                        session,
+                        profile,
+                        family_mode_enabled=settings.family_mode_enabled,
+                        conversation_started_at=conversation_started_at,
+                    )
                     await session.commit()
+                if not policy.allowed:
+                    await websocket.app.state.device_connections.send_json(
+                        serial,
+                        {
+                            "type": "alert",
+                            "status": policy.code,
+                            "message": policy.message,
+                        },
+                    )
+                    await websocket.app.state.device_connections.send_json(
+                        serial, {"type": "llm", "emotion": "safe_block"}
+                    )
+                    continue
+                if policy.continuous_reminder_due and not continuous_reminder_sent:
+                    await websocket.app.state.device_connections.send_json(
+                        serial,
+                        {
+                            "type": "alert",
+                            "status": "break-reminder",
+                            "message": "已经聊了一会儿，起来活动一下吧。",
+                        },
+                    )
+                    continuous_reminder_sent = True
                 active_asr = await websocket.app.state.realtime_providers.open_asr()
                 audio_bytes = 0
                 audio_frames = 0

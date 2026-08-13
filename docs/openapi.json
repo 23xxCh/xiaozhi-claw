@@ -973,6 +973,271 @@
         }
       }
     },
+    "/v1/profiles": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List Profiles",
+        "operationId": "list_profiles_v1_profiles_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UsageProfileResponse"
+                  },
+                  "title": "Response List Profiles V1 Profiles Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Create Youth Profile",
+        "operationId": "create_youth_profile_v1_profiles_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageProfileCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{profile_id}/guardian-controls": {
+      "patch": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Update Guardian Controls",
+        "operationId": "update_guardian_controls_v1_profiles__profile_id__guardian_controls_patch",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuardianControlsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/devices/{device_id}/active-profile": {
+      "patch": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Switch Active Profile",
+        "operationId": "switch_active_profile_v1_devices__device_id__active_profile_patch",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActiveProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/onboarding/status": {
+      "get": {
+        "tags": [
+          "onboarding"
+        ],
+        "summary": "Onboarding Status",
+        "operationId": "onboarding_status_v1_onboarding_status_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/devices": {
       "post": {
         "tags": [
@@ -2812,6 +3077,30 @@
   },
   "components": {
     "schemas": {
+      "ActiveProfileRequest": {
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "title": "Profile Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile_id"
+        ],
+        "title": "ActiveProfileRequest"
+      },
       "AdminAuditResponse": {
         "properties": {
           "id": {
@@ -3296,6 +3585,17 @@
             "maxLength": 64,
             "title": "Voice Preset Id",
             "default": "cherry"
+          },
+          "usage_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Profile Id"
           }
         },
         "type": "object",
@@ -3362,6 +3662,10 @@
             "type": "string",
             "title": "Id"
           },
+          "usage_profile_id": {
+            "type": "string",
+            "title": "Usage Profile Id"
+          },
           "name": {
             "type": "string",
             "title": "Name"
@@ -3423,6 +3727,7 @@
         "type": "object",
         "required": [
           "id",
+          "usage_profile_id",
           "name",
           "avatar_url",
           "system_prompt",
@@ -3779,6 +4084,17 @@
             ],
             "title": "Active Agent Id"
           },
+          "active_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Profile Id"
+          },
           "online": {
             "type": "boolean",
             "title": "Online"
@@ -3808,6 +4124,7 @@
           "hardware_version",
           "ota_auto_update",
           "active_agent_id",
+          "active_profile_id",
           "online",
           "last_seen_at"
         ],
@@ -4254,6 +4571,73 @@
         ],
         "title": "FirmwareReleaseResponse"
       },
+      "GuardianControlsRequest": {
+        "properties": {
+          "memory_consent": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Consent"
+          },
+          "quiet_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet Start"
+          },
+          "quiet_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quiet End"
+          },
+          "daily_limit_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 180.0,
+                "minimum": 30.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit Minutes"
+          },
+          "continuous_reminder_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 60.0,
+                "minimum": 15.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continuous Reminder Minutes"
+          }
+        },
+        "type": "object",
+        "title": "GuardianControlsRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4396,6 +4780,70 @@
         ],
         "title": "ModelPresetResponse"
       },
+      "OnboardingStatusResponse": {
+        "properties": {
+          "device_bound": {
+            "type": "boolean",
+            "title": "Device Bound"
+          },
+          "assistant_configured": {
+            "type": "boolean",
+            "title": "Assistant Configured"
+          },
+          "device_online": {
+            "type": "boolean",
+            "title": "Device Online"
+          },
+          "first_conversation_complete": {
+            "type": "boolean",
+            "title": "First Conversation Complete"
+          },
+          "next_action": {
+            "type": "string",
+            "enum": [
+              "bind_device",
+              "configure_assistant",
+              "bring_device_online",
+              "start_conversation",
+              "complete"
+            ],
+            "title": "Next Action"
+          },
+          "active_device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Device Id"
+          },
+          "active_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_bound",
+          "assistant_configured",
+          "device_online",
+          "first_conversation_complete",
+          "next_action",
+          "active_device_id",
+          "active_agent_id"
+        ],
+        "title": "OnboardingStatusResponse"
+      },
       "SessionSummaryUpdateRequest": {
         "properties": {
           "summary": {
@@ -4510,6 +4958,128 @@
           "access_token"
         ],
         "title": "TokenResponse"
+      },
+      "UsageProfileCreateRequest": {
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Display Name"
+          },
+          "age_band": {
+            "type": "string",
+            "enum": [
+              "12_13",
+              "14_17"
+            ],
+            "title": "Age Band"
+          },
+          "guardian_confirmed": {
+            "type": "boolean",
+            "title": "Guardian Confirmed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "display_name",
+          "age_band",
+          "guardian_confirmed"
+        ],
+        "title": "UsageProfileCreateRequest"
+      },
+      "UsageProfileResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adult",
+              "youth"
+            ],
+            "title": "Kind"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "age_band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "12_13",
+                  "14_17"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Band"
+          },
+          "guardian_consent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardian Consent Version"
+          },
+          "guardian_consent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardian Consent At"
+          },
+          "memory_consent": {
+            "type": "boolean",
+            "title": "Memory Consent"
+          },
+          "quiet_start": {
+            "type": "string",
+            "title": "Quiet Start"
+          },
+          "quiet_end": {
+            "type": "string",
+            "title": "Quiet End"
+          },
+          "daily_limit_minutes": {
+            "type": "integer",
+            "title": "Daily Limit Minutes"
+          },
+          "continuous_reminder_minutes": {
+            "type": "integer",
+            "title": "Continuous Reminder Minutes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "display_name",
+          "age_band",
+          "guardian_consent_version",
+          "guardian_consent_at",
+          "memory_consent",
+          "quiet_start",
+          "quiet_end",
+          "daily_limit_minutes",
+          "continuous_reminder_minutes"
+        ],
+        "title": "UsageProfileResponse"
       },
       "UsageSummaryResponse": {
         "properties": {
@@ -4656,6 +5226,17 @@
             "type": "string",
             "title": "Voice"
           },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
+          },
           "is_default": {
             "type": "boolean",
             "title": "Is Default"
@@ -4667,6 +5248,7 @@
           "display_name",
           "language",
           "voice",
+          "preview_url",
           "is_default"
         ],
         "title": "VoicePresetResponse"

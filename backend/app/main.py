@@ -11,6 +11,7 @@ from .catalog import ensure_catalog
 from .config import Settings, get_settings
 from .db import Base, create_engine, create_session_factory
 from .device_connections import DeviceConnectionManager
+from .errors import install_error_handlers
 from .pricing import backfill_unpriced_provider_usage
 from .providers import create_fallback_providers, create_providers
 from .routers import (
@@ -24,14 +25,17 @@ from .routers import (
     health,
     memories,
     memory_portability,
+    onboarding,
     ota,
     presets,
+    profiles,
     staff,
     subscriptions,
     vision,
     xiaozhi_bootstrap,
 )
 from .runtime_state import RuntimeStateReaper, reconcile_stale_runtime_state
+from .usage_profiles import ensure_all_adult_profiles
 
 
 def create_app(settings: Settings | None = None, *, include_device_gateway: bool = True) -> FastAPI:
@@ -47,6 +51,7 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
                 await connection.run_sync(Base.metadata.create_all)
         async with app.state.session_factory() as session:
             await ensure_catalog(session)
+            await ensure_all_adult_profiles(session)
             await backfill_unpriced_provider_usage(session)
             await session.commit()
         await reconcile_stale_runtime_state(
@@ -87,6 +92,7 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
     app.state.fallback_providers = create_fallback_providers(resolved)
     app.state.realtime_providers = create_realtime_providers(resolved)
     app.state.device_connections = DeviceConnectionManager()
+    install_error_handlers(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved.allowed_origins,
@@ -99,6 +105,8 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
     app.include_router(agents.router)
     app.include_router(agent_memories.router)
     app.include_router(presets.router)
+    app.include_router(profiles.router)
+    app.include_router(onboarding.router)
     app.include_router(devices.router)
     app.include_router(memories.router)
     app.include_router(memory_portability.router)

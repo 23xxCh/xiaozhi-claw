@@ -70,6 +70,7 @@ class DeviceDetailResponse(DeviceResponse):
     hardware_version: str
     ota_auto_update: bool
     active_agent_id: str | None
+    active_profile_id: str | None
     online: bool
     last_seen_at: datetime | None
 
@@ -132,6 +133,7 @@ class AgentCreateRequest(BaseModel):
     )
     model_preset_id: str = Field(default="fast-chat", max_length=64)
     voice_preset_id: str = Field(default="cherry", max_length=64)
+    usage_profile_id: str | None = None
 
 
 class AgentUpdateRequest(BaseModel):
@@ -146,6 +148,7 @@ class AgentUpdateRequest(BaseModel):
 
 class AgentResponse(BaseModel):
     id: str
+    usage_profile_id: str
     name: str
     avatar_url: str | None
     system_prompt: str
@@ -209,7 +212,69 @@ class VoicePresetResponse(BaseModel):
     display_name: str
     language: str
     voice: str
+    preview_url: str | None
     is_default: bool
+
+
+class UsageProfileCreateRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+    age_band: Literal["12_13", "14_17"]
+    guardian_confirmed: bool
+
+    @model_validator(mode="after")
+    def require_guardian_confirmation(self) -> "UsageProfileCreateRequest":
+        if not self.guardian_confirmed:
+            raise ValueError("guardian confirmation is required")
+        return self
+
+
+class GuardianControlsRequest(BaseModel):
+    memory_consent: bool | None = None
+    quiet_start: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    quiet_end: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    daily_limit_minutes: int | None = Field(default=None, ge=30, le=180)
+    continuous_reminder_minutes: int | None = Field(default=None, ge=15, le=60)
+
+
+class UsageProfileResponse(BaseModel):
+    id: str
+    kind: Literal["adult", "youth"]
+    display_name: str
+    age_band: Literal["12_13", "14_17"] | None
+    guardian_consent_version: str | None
+    guardian_consent_at: datetime | None
+    memory_consent: bool
+    quiet_start: str
+    quiet_end: str
+    daily_limit_minutes: int
+    continuous_reminder_minutes: int
+
+
+class ActiveProfileRequest(BaseModel):
+    profile_id: str
+    agent_id: str | None = None
+
+
+class OnboardingStatusResponse(BaseModel):
+    device_bound: bool
+    assistant_configured: bool
+    device_online: bool
+    first_conversation_complete: bool
+    next_action: Literal[
+        "bind_device",
+        "configure_assistant",
+        "bring_device_online",
+        "start_conversation",
+        "complete",
+    ]
+    active_device_id: str | None
+    active_agent_id: str | None
+
+
+class ErrorResponse(BaseModel):
+    code: str
+    message: str
+    request_id: str
 
 
 class AgentMemoryUpsertRequest(BaseModel):
