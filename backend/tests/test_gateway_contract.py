@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from backend.app.models import ConversationSession, ProviderUsage
+from backend.app.models import Agent, ConversationSession, Device, ProviderUsage, UsageProfile
 from backend.realtime.emotion import EmotionRouter
 from backend.realtime.providers import TranscriptionResult
 
@@ -232,3 +232,62 @@ def test_device_audio_buffer_has_a_configured_frame_limit(
         error = websocket.receive_json()
         assert error["type"] == "error"
         assert error["code"] == "audio-frame-limit"
+
+
+def test_youth_policy_block_speaks_fixed_message_without_llm(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-YOUTH-POLICY")
+    client.app.state.settings.family_mode_enabled = True
+
+    async def configure_youth_profile() -> None:
+        async with client.app.state.session_factory() as session:
+            device = await session.get(Device, owned["device_id"])
+            assert device is not None and device.active_agent_id is not None
+            adult_agent = await session.get(Agent, device.active_agent_id)
+            assert adult_agent is not None
+            profile = UsageProfile(
+                owner_user_id=device.owner_user_id,
+                kind="youth",
+                display_name="安静时段测试",
+                age_band="14_17",
+                quiet_start_minute=0,
+                quiet_end_minute=1439,
+            )
+            session.add(profile)
+            await session.flush()
+            youth_agent = Agent(
+                owner_user_id=device.owner_user_id,
+                usage_profile_id=profile.id,
+                name="家庭助手",
+                system_prompt=adult_agent.system_prompt,
+                model_preset_id=adult_agent.model_preset_id,
+                voice_preset_id=adult_agent.voice_preset_id,
+            )
+            session.add(youth_agent)
+            await session.flush()
+            device.active_profile_id = profile.id
+            device.active_agent_id = youth_agent.id
+            await session.commit()
+
+    asyncio.run(configure_youth_profile())
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        assert websocket.receive_json()["status"] == "quiet-hours"
+        emotion = websocket.receive_json()
+        assert emotion["type"] == "llm"
+        assert emotion["emotion"] == "safe_block"
+        started = websocket.receive_json()
+        assert started["type"] == "tts"
+        assert started["state"] == "start"
+        sentence = websocket.receive_json()
+        assert sentence["state"] == "sentence_start"
+        assert "休息时段" in sentence["text"]
+        assert websocket.receive_bytes()
+        stopped = websocket.receive_json()
+        assert stopped["type"] == "tts"
+        assert stopped["state"] == "stop"

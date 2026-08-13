@@ -305,6 +305,67 @@ async def _speak_sentence(
             await encoder.write(audio)
 
 
+async def _speak_fixed_message(
+    websocket: WebSocket,
+    serial: str,
+    voice: str,
+    message: str,
+) -> None:
+    """Speak a product-owned policy message without invoking the LLM."""
+    providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
+    fallback: ProviderBundle | None = websocket.app.state.fallback_providers
+    tts: RealtimeTtsSession | None = None
+    encoder: StreamingPcmToOpus | None = None
+    packet_task: asyncio.Task[None] | None = None
+
+    async def send_packets() -> None:
+        assert encoder is not None
+        async for packet in encoder.packets():
+            if not await websocket.app.state.device_connections.send_bytes(serial, packet):
+                return
+
+    await websocket.app.state.device_connections.send_json(
+        serial, {"type": "tts", "state": "start"}
+    )
+    try:
+        try:
+            tts = await providers.open_tts(voice)
+        except Exception:
+            if fallback is None:
+                raise
+            logger.warning("realtime TTS failed for policy prompt on %s; using fallback", serial)
+            await websocket.app.state.device_connections.send_json(
+                serial, {"type": "tts", "state": "sentence_start", "text": message}
+            )
+            for packet in await fallback.speech.synthesize(message):
+                await websocket.app.state.device_connections.send_bytes(serial, packet)
+            return
+
+        if not providers.mock:
+            encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
+            await encoder.start()
+            packet_task = asyncio.create_task(send_packets())
+        await _speak_sentence(websocket, serial, message, tts, encoder)
+        await tts.finish()
+        if encoder is not None:
+            await encoder.finish()
+        if packet_task is not None:
+            await packet_task
+    except Exception:
+        logger.exception("fixed policy prompt failed for device %s", serial)
+    finally:
+        if tts is not None:
+            with contextlib.suppress(Exception):
+                await tts.cancel()
+        if encoder is not None and packet_task is not None and not packet_task.done():
+            with contextlib.suppress(Exception):
+                await encoder.cancel()
+            packet_task.cancel()
+        await websocket.app.state.device_connections.send_json(
+            serial, {"type": "tts", "state": "stop"}
+        )
+
+
 async def _process_turn(
     websocket: WebSocket,
     serial: str,
@@ -758,16 +819,21 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     await websocket.app.state.device_connections.send_json(
                         serial, {"type": "llm", "emotion": "safe_block"}
                     )
+                    await _speak_fixed_message(
+                        websocket, serial, snapshot.voice, policy.message
+                    )
                     continue
                 if policy.continuous_reminder_due and not continuous_reminder_sent:
+                    reminder = "已经聊了一会儿，起来活动一下吧。"
                     await websocket.app.state.device_connections.send_json(
                         serial,
                         {
                             "type": "alert",
                             "status": "break-reminder",
-                            "message": "已经聊了一会儿，起来活动一下吧。",
+                            "message": reminder,
                         },
                     )
+                    await _speak_fixed_message(websocket, serial, snapshot.voice, reminder)
                     continuous_reminder_sent = True
                 active_asr = await websocket.app.state.realtime_providers.open_asr()
                 audio_bytes = 0
