@@ -182,6 +182,22 @@ def test_realtime_asr_failure_uses_bounded_batch_fallback(
         assert stt["emotion"] == "neutral"
 
 
+def test_first_audio_frame_can_implicitly_start_listening(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-IMPLICIT-LISTEN")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_bytes("隐式开始".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+        stt = websocket.receive_json()
+        assert stt["type"] == "stt"
+        assert stt["text"] == "隐式开始"
+
+
 def test_device_audio_buffer_has_a_configured_frame_limit(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:

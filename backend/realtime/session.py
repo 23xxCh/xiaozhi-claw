@@ -588,10 +588,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             chunk = incoming.get("bytes")
             if chunk is not None:
                 if active_asr is None:
-                    await _send_error(
-                        websocket, serial, "listen-not-started", "send listen.start first"
+                    logger.warning(
+                        "audio arrived before listen.start for %s; opening ASR implicitly", serial
                     )
-                    continue
+                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    audio_bytes = 0
+                    audio_frames = 0
+                    audio_buffer.clear()
                 if audio_bytes + len(chunk) > MAX_UTTERANCE_BYTES:
                     await active_asr.cancel()
                     active_asr = None

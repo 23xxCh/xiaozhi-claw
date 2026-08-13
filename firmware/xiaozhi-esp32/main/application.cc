@@ -78,6 +78,18 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        Schedule([this, speaking]() {
+            if (GetDeviceState() != kDeviceStateListening ||
+                listening_mode_ != kListeningModeAutoStop) {
+                return;
+            }
+            if (speaking) {
+                vad_speech_detected_ = true;
+            } else if (vad_speech_detected_) {
+                vad_speech_detected_ = false;
+                StopListening();
+            }
+        });
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     callbacks.on_playback_drained = [this]() {
@@ -652,6 +664,26 @@ void Application::InitializeProtocol() {
     protocol_->Start();
 }
 
+bool Application::OpenAudioChannelWithConfigRefresh() {
+    if (protocol_ && protocol_->OpenAudioChannel()) {
+        return true;
+    }
+
+    ESP_LOGW(TAG, "Audio channel connection failed; refreshing bootstrap configuration");
+    if (!ota_ || ota_->CheckVersion() != ESP_OK) {
+        return false;
+    }
+
+    InitializeProtocol();
+    if (!protocol_ || !protocol_->OpenAudioChannel()) {
+        return false;
+    }
+
+    last_error_message_.clear();
+    xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
+    return true;
+}
+
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
     struct digit_sound {
         char digit;
@@ -750,15 +782,22 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
+    bool opened_channel = false;
     if (!protocol_->IsAudioChannelOpened()) {
-        if (!protocol_->OpenAudioChannel()) {
+        if (!OpenAudioChannelWithConfigRefresh()) {
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error)
             SetDeviceState(kDeviceStateIdle);
             return;
         }
+        opened_channel = true;
     }
 
+    if (opened_channel) {
+        // A fresh channel must always emit listen.start, even if the local audio
+        // processor was already running for wake-word detection.
+        play_popup_on_listening_ = true;
+    }
     SetListeningMode(mode);
 }
 
@@ -877,7 +916,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     if (!protocol_->IsAudioChannelOpened()) {
-        if (!protocol_->OpenAudioChannel()) {
+        if (!OpenAudioChannelWithConfigRefresh()) {
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error), and
             // wake word detection is re-enabled by the idle state handler.
@@ -1016,6 +1055,7 @@ void Application::AbortSpeaking(AbortReason reason) {
 
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
+    vad_speech_detected_ = false;
     SetDeviceState(kDeviceStateListening);
 }
 
