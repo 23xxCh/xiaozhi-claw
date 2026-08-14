@@ -119,7 +119,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         partition = PARTITION.read_text(encoding="utf-8")
         self.assertRegex(partition, r"(?m)^nvs,\s+data,\s+nvs,\s+0x9000,\s+0x4000,")
         self.assertRegex(partition, r"(?m)^ota_0,\s+app,\s+ota_0,\s+0x20000,\s+0x3f0000,")
-        self.assertRegex(partition, r"(?m)^assets,\s+data,\s+spiffs,\s+0x800000,\s+3M")
+        self.assertRegex(partition, r"(?m)^hensun_keys,\s+data,\s+nvs,\s+0x800000,\s+0x4000")
+        self.assertRegex(partition, r"(?m)^model,\s+data,\s+spiffs,\s+0x804000,\s+0x2FC000")
         self.assertRegex(partition, r"(?m)^emote_gen,\s+data,\s+spiffs,\s+0xB00000,\s+5M")
 
         component_manifest = (ROOT / "main/idf_component.yml").read_text(encoding="utf-8")

@@ -70,14 +70,14 @@ def main() -> int:
         'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
         "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
         "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
-        "CONFIG_FLASH_MODEL_ASSETS=y",
+        "CONFIG_FLASH_NONE_ASSETS=y",
     ):
         if required_option not in selfhosted_sdkconfig:
             errors.append(f"self-hosted CAM firmware lacks {required_option}")
     official_sdkconfig = cam_builds.get("hensun-cam-official-v1", "")
     for forbidden_option in (
         "CONFIG_USE_CUSTOM_WAKE_WORD=y",
-        "CONFIG_FLASH_MODEL_ASSETS=y",
+        "CONFIG_FLASH_NONE_ASSETS=y",
     ):
         if forbidden_option in official_sdkconfig:
             errors.append(f"official CAM firmware unexpectedly enables {forbidden_option}")
@@ -90,7 +90,8 @@ def main() -> int:
     partition_path = ROOT / "firmware" / "xiaozhi-esp32" / "partitions" / "v2" / "16m_hensun_emote_lab.csv"
     partition = partition_path.read_text(encoding="utf-8")
     for expected_line in (
-        "assets,      data, spiffs,  0x800000, 3M",
+        "hensun_keys, data, nvs,     0x800000, 0x4000",
+        "model,       data, spiffs,  0x804000, 0x2FC000",
         "emote_gen,   data, spiffs,  0xB00000, 5M",
     ):
         if expected_line not in partition:

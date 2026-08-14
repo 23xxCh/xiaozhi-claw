@@ -13,6 +13,8 @@
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
 #include <esp_heap_caps.h>
+#include <nvs.h>
+#include <nvs_flash.h>
 #include <psa/crypto.h>
 #ifdef SOC_HMAC_SUPPORTED
 #include <esp_hmac.h>
@@ -25,6 +27,37 @@
 #include <iomanip>
 
 #define TAG "Ota"
+
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
+static std::string GetHensunDeviceSecret() {
+    auto err = nvs_flash_init_partition("hensun_keys");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Hensun credential partition is unavailable: %s", esp_err_to_name(err));
+        return "";
+    }
+    nvs_handle_t handle = 0;
+    err = nvs_open_from_partition("hensun_keys", "hensun", NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return "";
+    }
+    size_t length = 0;
+    err = nvs_get_str(handle, "device_secret", nullptr, &length);
+    if (err != ESP_OK || length <= 1) {
+        nvs_close(handle);
+        return "";
+    }
+    std::string secret(length, '\0');
+    err = nvs_get_str(handle, "device_secret", secret.data(), &length);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        return "";
+    }
+    while (!secret.empty() && secret.back() == '\0') {
+        secret.pop_back();
+    }
+    return secret;
+}
+#endif
 
 
 Ota::Ota() {
@@ -71,8 +104,7 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     http->SetHeader("Content-Type", "application/json");
 
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
-    Settings hensun_settings("hensun", false);
-    auto device_secret = hensun_settings.GetString("device_secret");
+    auto device_secret = GetHensunDeviceSecret();
     if (!device_secret.empty()) {
         http->SetHeader("Authorization", "Bearer " + device_secret);
     } else {

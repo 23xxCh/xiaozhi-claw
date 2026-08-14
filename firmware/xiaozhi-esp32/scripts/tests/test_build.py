@@ -1419,7 +1419,8 @@ class ZipTests(unittest.TestCase):
                     )
                     manifest = json.loads(archive.read("flash-manifest.json"))
                     self.assertEqual(manifest["images"], [])
-                    self.assertTrue(manifest["preserves_nvs"])
+                    self.assertTrue(manifest["partial_flash_preserves_nvs"])
+                    self.assertFalse(manifest["merged_binary"]["preserves_nvs"])
                     self.assertIn("merged-binary.bin", archive.read("SHA256SUMS.txt").decode())
             finally:
                 os.chdir(previous_cwd)
@@ -1452,7 +1453,8 @@ class ZipTests(unittest.TestCase):
                         [item["address"] for item in manifest["images"]],
                         ["0x0", "0x8000", "0x20000"],
                     )
-                    self.assertTrue(manifest["preserves_nvs"])
+                    self.assertTrue(manifest["partial_flash_preserves_nvs"])
+                    self.assertFalse(manifest["merged_binary"]["preserves_nvs"])
                     self.assertEqual(archive.read("images/xiaozhi.bin"), b"app")
                     self.assertIn("images/bootloader.bin", archive.namelist())
             finally:

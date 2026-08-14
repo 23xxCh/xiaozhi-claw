@@ -90,10 +90,10 @@ try {
     }
 
     if ($Variant -eq "selfhosted") {
-        $modelAssetsPath = Join-Path $firmwareRoot "build\generated_model_assets.bin"
+        $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
         $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"
         $resourceLimits = @(
-            @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 3MB },
+            @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 0x2FC000 },
             @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = 5MB }
         )
         foreach ($resource in $resourceLimits) {
@@ -125,6 +125,6 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
-    ModelAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\generated_model_assets.bin")).Length } else { $null }
+    ModelAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
     EmoteAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
 }

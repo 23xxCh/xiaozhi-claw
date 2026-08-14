@@ -6,8 +6,29 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-if (-not $env:IDF_PATH) {
-    throw "IDF_PATH is not set. Open an ESP-IDF terminal first."
+if ([System.IO.Ports.SerialPort]::GetPortNames() -notcontains $Port) {
+    throw "Serial port $Port is not available. Reconnect the ESP32 before provisioning it."
+}
+if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
+    $idfCandidates = @(
+        $env:IDF_PATH,
+        "E:\AI_TOY_NATIVE\esp-idf-v6.0.2",
+        "C:\Espressif\frameworks\esp-idf-v6.0.2"
+    ) | Where-Object { $_ }
+    $idfRoot = $idfCandidates | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_ "export.ps1")
+    } | Select-Object -First 1
+    if (-not $idfRoot) {
+        throw "ESP-IDF 6.0.2 is not active and no local export.ps1 was found."
+    }
+    if (Test-Path -LiteralPath "E:\AI_TOY_TOOLS\espressif") {
+        $env:IDF_TOOLS_PATH = "E:\AI_TOY_TOOLS\espressif"
+    }
+    . (Join-Path $idfRoot "export.ps1")
+}
+$idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $idfPython)) {
+    throw "The active ESP-IDF Python environment was not found: $idfPython"
 }
 $plainSecret = [Net.NetworkCredential]::new("", $DeviceSecret).Password
 if ($plainSecret.Length -lt 32) {
@@ -31,11 +52,11 @@ try {
         "device_secret,data,string,$plainSecret"
     )
     Set-Content -LiteralPath $csvPath -Value $csv -Encoding utf8NoBOM
-    & python $generator generate $csvPath $binaryPath 0x4000
+    & $idfPython $generator generate $csvPath $binaryPath 0x4000
     if ($LASTEXITCODE -ne 0) {
         throw "Generating the per-device NVS partition failed."
     }
-    & esptool.py --port $Port write_flash 0x9000 $binaryPath
+    & $idfPython -m esptool --port $Port write_flash 0x800000 $binaryPath
     if ($LASTEXITCODE -ne 0) {
         throw "Writing the per-device NVS partition to $Port failed."
     }

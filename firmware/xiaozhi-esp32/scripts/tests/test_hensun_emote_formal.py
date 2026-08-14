@@ -23,7 +23,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         )
         for option in (
             "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
-            "CONFIG_FLASH_MODEL_ASSETS=y",
+            "CONFIG_FLASH_NONE_ASSETS=y",
             "CONFIG_USE_CUSTOM_WAKE_WORD=y",
             'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
             'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
@@ -79,6 +79,11 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             build_script,
             r'--language zh-CN\s+`\s+--wake-word nihaoxiaozhi',
         )
+
+    def test_device_secret_uses_dedicated_nvs_partition(self):
+        ota = (ROOT / "main/ota.cc").read_text(encoding="utf-8")
+        self.assertIn('nvs_flash_init_partition("hensun_keys")', ota)
+        self.assertIn('nvs_open_from_partition("hensun_keys"', ota)
 
 if __name__ == "__main__":
     unittest.main()

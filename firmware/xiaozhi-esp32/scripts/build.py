@@ -125,8 +125,12 @@ def zip_bin(name: str, version: str) -> None:
             "archive_name": "merged-binary.bin",
             "size": merged_binary.stat().st_size,
             "sha256": hashlib.sha256(merged_binary.read_bytes()).hexdigest(),
+            "preserves_nvs": False,
+            "warning": "Full-chip recovery image clears Wi-Fi and per-device credentials.",
         },
-        "preserves_nvs": all(image["address"] != "0x9000" for image in images),
+        "partial_flash_preserves_nvs": all(
+            image["address"] not in {"0x9000", "0x800000"} for image in images
+        ),
     }
 
     checksum_lines = [
@@ -709,13 +713,11 @@ def _build_options_sdkconfig(
             "CONFIG_FLASH_NONE_ASSETS",
             "CONFIG_FLASH_DEFAULT_ASSETS",
             "CONFIG_FLASH_CUSTOM_ASSETS",
-            "CONFIG_FLASH_MODEL_ASSETS",
             "CONFIG_FLASH_EXPRESSION_ASSETS",
         )
         if (
             selected == "emote"
             and base_assignments.get("CONFIG_FLASH_CUSTOM_ASSETS") != "y"
-            and base_assignments.get("CONFIG_FLASH_MODEL_ASSETS") != "y"
         ):
             result.extend(
                 f"{symbol}={'y' if symbol == 'CONFIG_FLASH_EXPRESSION_ASSETS' else 'n'}"
