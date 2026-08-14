@@ -21,6 +21,7 @@
 
 namespace {
 constexpr int kAutoStopListeningTimeoutTicks = 15;
+constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
 }
 
 Application::Application() {
@@ -47,12 +48,28 @@ Application::Application() {
                                                 .name = "clock_timer",
                                                 .skip_unhandled_events = true};
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    esp_timer_create_args_t post_playback_listen_timer_args = {
+        .callback = [](void* arg) {
+            Application* app = static_cast<Application*>(arg);
+            xEventGroupSetBits(app->event_group_, MAIN_EVENT_POST_PLAYBACK_GUARD);
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "post_playback_listen_guard",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_create(&post_playback_listen_timer_args, &post_playback_listen_timer_handle_);
 }
 
 Application::~Application() {
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
+    }
+    if (post_playback_listen_timer_handle_ != nullptr) {
+        esp_timer_stop(post_playback_listen_timer_handle_);
+        esp_timer_delete(post_playback_listen_timer_handle_);
     }
     vEventGroupDelete(event_group_);
 }
@@ -190,7 +207,8 @@ void Application::Run() {
         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
+        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED |
+        MAIN_EVENT_POST_PLAYBACK_GUARD;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -220,9 +238,19 @@ void Application::Run() {
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
             if (!pending_tts_stop_reply_id_.empty() && audio_service_.IsPlaybackIdle()) {
                 FinishTtsPlayback(pending_tts_stop_reply_id_);
-            } else if (pending_listening_start_ && GetDeviceState() == kDeviceStateListening &&
+            } else if (!post_playback_guard_active_ && pending_listening_start_ &&
+                GetDeviceState() == kDeviceStateListening &&
                 audio_service_.IsPlaybackIdle()) {
                 // Deferred legacy listening start (auto mode).
+                pending_listening_start_ = false;
+                StartListeningAudio();
+            }
+        }
+
+        if (bits & MAIN_EVENT_POST_PLAYBACK_GUARD) {
+            post_playback_guard_active_ = false;
+            if (pending_listening_start_ && GetDeviceState() == kDeviceStateListening &&
+                audio_service_.IsPlaybackIdle()) {
                 pending_listening_start_ = false;
                 StartListeningAudio();
             }
@@ -548,6 +576,7 @@ void Application::InitializeProtocol() {
                 ESP_LOGE(TAG, "Playback queue rejected a packet after backpressure wait");
             }
         }
+
     });
 
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
@@ -586,6 +615,11 @@ void Application::InitializeProtocol() {
                 std::string playback_reply_id =
                     cJSON_IsString(reply_id) ? reply_id->valuestring : "";
                 Schedule([this, playback_reply_id]() {
+                    post_playback_guard_active_ = false;
+                    pending_listening_start_ = false;
+                    if (post_playback_listen_timer_handle_ != nullptr) {
+                        esp_timer_stop(post_playback_listen_timer_handle_);
+                    }
                     aborted_ = false;
                     active_tts_reply_id_ = playback_reply_id;
                     pending_tts_stop_reply_id_.clear();
@@ -1079,6 +1113,16 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
+            if (post_playback_guard_active_) {
+                // This simplex board has no playback reference for AEC. Keep
+                // capture disabled briefly so speaker tail cannot start a
+                // phantom user turn immediately after TTS drains.
+                pending_listening_start_ = true;
+                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(false);
+                break;
+            }
+
             // Make sure the audio processor is running
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
                 // For auto mode, wait for the playback queue to drain before enabling
@@ -1162,6 +1206,18 @@ void Application::FinishTtsPlayback(std::string reply_id) {
         if (listening_mode_ == kListeningModeManualStop) {
             SetDeviceState(kDeviceStateIdle);
         } else {
+            post_playback_guard_active_ = true;
+            esp_err_t guard_status = ESP_ERR_INVALID_STATE;
+            if (post_playback_listen_timer_handle_ != nullptr) {
+                esp_timer_stop(post_playback_listen_timer_handle_);
+                guard_status = esp_timer_start_once(post_playback_listen_timer_handle_,
+                                                    kPostPlaybackListenGuardUs);
+            }
+            if (guard_status != ESP_OK) {
+                ESP_LOGW(TAG, "Unable to start post-playback guard: %s",
+                         esp_err_to_name(guard_status));
+                post_playback_guard_active_ = false;
+            }
             SetDeviceState(kDeviceStateListening);
         }
     }

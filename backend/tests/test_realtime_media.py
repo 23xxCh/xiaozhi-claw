@@ -90,3 +90,23 @@ async def test_streaming_encoder_preserves_multi_chunk_audio_duration() -> None:
     decoded_duration = len(decoded) / 2 / sample_rate
     assert abs(decoded_duration - duration_seconds) <= 0.06
     assert len(packets) in {40, 41}
+
+
+@pytest.mark.asyncio
+async def test_streaming_encoder_prebuffers_packets_before_playback() -> None:
+    encoder = StreamingPcmToOpus("unused")
+    packets = encoder.packets(prebuffer_packets=3)
+    first_packet = asyncio.create_task(anext(packets))
+
+    await encoder._packets.put(b"one")
+    await encoder._packets.put(b"two")
+    await asyncio.sleep(0)
+    assert first_packet.done() is False
+
+    await encoder._packets.put(b"three")
+    assert await first_packet == b"one"
+    assert await anext(packets) == b"two"
+    assert await anext(packets) == b"three"
+    await encoder._packets.put(None)
+    with pytest.raises(StopAsyncIteration):
+        await anext(packets)

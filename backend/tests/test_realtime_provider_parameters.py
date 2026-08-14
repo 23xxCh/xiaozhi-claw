@@ -115,20 +115,31 @@ async def test_qwen_tts_provider_timeout_does_not_count_slow_audio_consumer() ->
     assert chunks == [b"pcm"]
 
 
-def test_sentence_buffer_releases_unpunctuated_first_audio_promptly() -> None:
+def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 35) == []
-    assert buffer.feed("句") == ["短" * 35 + "句"]
+    assert buffer.feed("很抱歉，我无法直接获取实时时间，建议您查看") == [
+        "很抱歉，我无法直接获取实时时间，"
+    ]
+    assert buffer.flush() == "建议您查看"
+
+
+def test_sentence_buffer_hard_limits_unpunctuated_text() -> None:
+    buffer = SentenceBuffer()
+
+    assert buffer.feed("短" * 47) == []
+    assert buffer.feed("句") == ["短" * 47 + "句"]
 
 
 @pytest.mark.asyncio
-async def test_qwen_realtime_asr_wraps_raw_opus_and_finishes_manual_session(
+async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
     monkeypatch,
 ) -> None:
     socket = _FakeRealtimeSocket(
         [
             {"type": "session.updated"},
+            {"type": "input_audio_buffer.speech_started"},
+            {"type": "input_audio_buffer.speech_stopped"},
             {
                 "type": "conversation.item.input_audio_transcription.completed",
                 "transcript": "你好，小智",
@@ -153,16 +164,24 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_finishes_manual_session(
     session = await QwenRealtimeAsrSession.open(settings)
     await session.send_audio(b"raw-opus-one")
     await session.send_audio(b"raw-opus-two")
+    for _ in range(10):
+        if session.endpoint_detected():
+            break
+        await asyncio.sleep(0)
     result = await session.finish()
 
     messages = [json.loads(payload) for payload in socket.sent]
+    assert messages[0]["session"]["turn_detection"] == {
+        "type": "server_vad",
+        "threshold": 0.5,
+        "silence_duration_ms": 600,
+    }
     append_messages = [item for item in messages if item["type"] == "input_audio_buffer.append"]
     wrapped = b"".join(base64.b64decode(item["audio"]) for item in append_messages)
     assert ogg_opus_packets(wrapped) == [b"raw-opus-one", b"raw-opus-two"]
-    assert [item["type"] for item in messages[-2:]] == [
-        "input_audio_buffer.commit",
-        "session.finish",
-    ]
+    assert session.endpoint_detected() is True
+    assert messages[-1]["type"] == "session.finish"
+    assert not any(item["type"] == "input_audio_buffer.commit" for item in messages)
     assert result.text == "你好，小智"
     assert result.emotion == "happy"
 
@@ -195,3 +214,27 @@ async def test_qwen_realtime_error_uses_stable_code_without_transcript(monkeypat
     with pytest.raises(RealtimeProviderError, match="invalid_audio") as error:
         await session.finish()
     assert "private audio detail" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_qwen_local_stop_commits_before_finishing_server_vad() -> None:
+    socket = _FakeRealtimeSocket(
+        [
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "本地提前停止",
+            },
+            {"type": "session.finished"},
+        ]
+    )
+    session = QwenRealtimeAsrSession(socket)
+    session._reader_task = asyncio.create_task(session._read_events())
+
+    result = await session.finish()
+
+    messages = [json.loads(payload) for payload in socket.sent]
+    assert [item["type"] for item in messages] == [
+        "input_audio_buffer.commit",
+        "session.finish",
+    ]
+    assert result.text == "本地提前停止"

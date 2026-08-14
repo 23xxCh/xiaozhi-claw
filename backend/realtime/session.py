@@ -82,9 +82,10 @@ class AgentSnapshot:
 
 
 class SentenceBuffer:
-    def __init__(self, max_chars: int = 36) -> None:
+    def __init__(self, max_chars: int = 48, min_clause_chars: int = 12) -> None:
         self._text = ""
         self._max_chars = max_chars
+        self._min_clause_chars = min_clause_chars
 
     def feed(self, text: str) -> list[str]:
         self._text += text
@@ -94,9 +95,18 @@ class SentenceBuffer:
                 (index + 1 for index, char in enumerate(self._text) if char in "。！？!?；;\n"),
                 None,
             )
-            if boundary is None and len(self._text) < self._max_chars:
-                break
-            boundary = boundary or self._max_chars
+            if boundary is None:
+                clause_boundaries = [
+                    index + 1
+                    for index, char in enumerate(self._text[: self._max_chars])
+                    if char in "，,：:、" and index + 1 >= self._min_clause_chars
+                ]
+                if clause_boundaries:
+                    boundary = clause_boundaries[-1]
+                elif len(self._text) >= self._max_chars:
+                    boundary = self._max_chars
+                else:
+                    break
             sentence = self._text[:boundary].strip()
             self._text = self._text[boundary:]
             if sentence:
@@ -417,7 +427,7 @@ async def _speak_fixed_message(
 
     async def send_packets() -> None:
         assert encoder is not None
-        async for packet in encoder.packets():
+        async for packet in encoder.packets(prebuffer_packets=5):
             if not await pacer.send(packet):
                 return
 
@@ -505,7 +515,7 @@ async def _process_turn(
     async def send_packets() -> None:
         nonlocal first_audio_latency_ms
         assert encoder is not None
-        async for packet in encoder.packets():
+        async for packet in encoder.packets(prebuffer_packets=5):
             if first_audio_latency_ms is None:
                 first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
             if not await pacer.send(packet):
@@ -900,6 +910,39 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     continuous_reminder_sent = False
     playback = PlaybackHandshake()
 
+    def asr_endpoint_detected(asr: RealtimeAsrSession) -> bool:
+        detector = getattr(asr, "endpoint_detected", None)
+        return bool(detector and detector())
+
+    def start_active_turn() -> bool:
+        nonlocal active_asr, active_task, audio_bytes, audio_frames, audio_buffer
+        if active_asr is None or audio_bytes == 0:
+            return False
+        turn_asr = active_asr
+        turn_audio_duration_ms = audio_frames * 60
+        turn_audio_frames = audio_buffer.copy()
+        active_asr = None
+        audio_bytes = 0
+        audio_frames = 0
+        audio_buffer.clear()
+        active_task = asyncio.create_task(
+            _process_turn(
+                websocket,
+                serial,
+                device_id,
+                user_id,
+                conversation_id,
+                snapshot,
+                turn_asr,
+                turn_audio_frames,
+                turn_audio_duration_ms,
+                history,
+                time.perf_counter(),
+                playback,
+            )
+        )
+        return True
+
     try:
         while True:
             incoming = await websocket.receive()
@@ -907,6 +950,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 break
             chunk = incoming.get("bytes")
             if chunk is not None:
+                # A server-VAD endpoint may arrive while the ESP32's local VAD
+                # is still stuck in speech. Ignore its trailing frames once the
+                # turn has moved to ASR/LLM/TTS processing.
+                if active_task is not None and not active_task.done():
+                    continue
                 if active_asr is None:
                     logger.warning(
                         "audio arrived before listen.start for %s; opening ASR implicitly", serial
@@ -942,6 +990,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 audio_bytes += len(chunk)
                 audio_frames += 1
                 audio_buffer.append(bytes(chunk))
+                if asr_endpoint_detected(active_asr):
+                    start_active_turn()
                 continue
 
             text_frame = incoming.get("text")
@@ -1104,31 +1154,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 )
                 continue
             if active_asr is None or audio_bytes == 0:
+                if active_task is not None:
+                    # The Qwen server VAD already closed this utterance. A late
+                    # local listen.stop is only an acknowledgement of that turn.
+                    continue
                 await _send_error(websocket, serial, "empty-audio", "no audio received")
                 continue
-            turn_asr = active_asr
-            turn_audio_duration_ms = audio_frames * 60
-            turn_audio_frames = audio_buffer.copy()
-            active_asr = None
-            audio_bytes = 0
-            audio_frames = 0
-            audio_buffer.clear()
-            active_task = asyncio.create_task(
-                _process_turn(
-                    websocket,
-                    serial,
-                    device_id,
-                    user_id,
-                    conversation_id,
-                    snapshot,
-                    turn_asr,
-                    turn_audio_frames,
-                    turn_audio_duration_ms,
-                    history,
-                    time.perf_counter(),
-                    playback,
-                )
-            )
+            start_active_turn()
 
             if time.perf_counter() - connected_at >= 7200:
                 await websocket.app.state.device_connections.send_json(

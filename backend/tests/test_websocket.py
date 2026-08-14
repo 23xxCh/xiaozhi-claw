@@ -60,6 +60,27 @@ class MultiFrameRealtimeProviders:
         return MultiFrameTtsSession()
 
 
+class ServerEndpointAsrSession(FixedAsrSession):
+    def __init__(self) -> None:
+        self.frames = 0
+
+    async def send_audio(self, frame: bytes) -> None:
+        del frame
+        self.frames += 1
+
+    def endpoint_detected(self) -> bool:
+        return self.frames >= 2
+
+
+class ServerEndpointProviders(MultiFrameRealtimeProviders):
+    def __init__(self) -> None:
+        self.opened_asr_sessions = 0
+
+    async def open_asr(self) -> ServerEndpointAsrSession:
+        self.opened_asr_sessions += 1
+        return ServerEndpointAsrSession()
+
+
 def _device_headers(owned: dict[str, str]) -> dict[str, str]:
     return {
         "Device-Id": owned["serial"],
@@ -191,6 +212,36 @@ def test_device_receives_each_streamed_audio_frame(
         websocket.send_json(
             {"type": "tts", "state": "drained", "reply_id": start["reply_id"]}
         )
+
+
+def test_server_vad_finishes_turn_without_device_listen_stop(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    providers = ServerEndpointProviders()
+    client.app.state.realtime_providers = providers
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-SERVER-VAD")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"first-frame")
+        websocket.send_bytes(b"second-frame")
+
+        assert websocket.receive_json()["type"] == "stt"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["type"] == "llm"
+        start = websocket.receive_json()
+        assert start["state"] == "start"
+        websocket.send_json(
+            {"type": "tts", "state": "ready", "reply_id": start["reply_id"]}
+        )
+        assert websocket.receive_json()["state"] == "sentence_start"
+        assert websocket.receive_bytes() == b"opus-frame-1"
+        assert websocket.receive_bytes() == b"opus-frame-2"
+        stop = websocket.receive_json()
+        websocket.send_json(
+            {"type": "tts", "state": "drained", "reply_id": stop["reply_id"]}
+        )
+
+    assert providers.opened_asr_sessions == 1
 
 
 def test_face_event_api_rejects_unknown_events_and_queues_offline_devices(

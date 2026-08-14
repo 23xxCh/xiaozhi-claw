@@ -44,6 +44,8 @@ def _raise_if_provider_error(event: dict[str, object], provider: str) -> None:
 class RealtimeAsrSession(Protocol):
     async def send_audio(self, frame: bytes) -> None: ...
 
+    def endpoint_detected(self) -> bool: ...
+
     async def finish(self) -> TranscriptionResult: ...
 
     async def cancel(self) -> None: ...
@@ -76,6 +78,9 @@ class MockAsrSession:
 
     async def send_audio(self, frame: bytes) -> None:
         self.frames.append(frame)
+
+    def endpoint_detected(self) -> bool:
+        return False
 
     async def finish(self) -> TranscriptionResult:
         return TranscriptionResult(b"".join(self.frames).decode(errors="replace"), "neutral")
@@ -116,6 +121,9 @@ class QwenRealtimeAsrSession:
         self.ogg_muxer = IncrementalOggOpusMuxer(
             input_sample_rate=16000, frame_duration_ms=60
         )
+        self._endpoint = asyncio.Event()
+        self._events: asyncio.Queue[dict[str, object] | BaseException] = asyncio.Queue()
+        self._reader_task: asyncio.Task[None] | None = None
 
     @classmethod
     async def open(cls, settings: Settings) -> "QwenRealtimeAsrSession":
@@ -141,13 +149,37 @@ class QwenRealtimeAsrSession:
                         "input_audio_format": "opus",
                         "sample_rate": 16000,
                         "input_audio_transcription": {"language": "zh"},
-                        "turn_detection": None,
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "silence_duration_ms": 600,
+                        },
                     },
                 }
             )
         )
         await session._wait_for("session.updated")
+        session._reader_task = asyncio.create_task(session._read_events())
         return session
+
+    async def _read_events(self) -> None:
+        try:
+            while True:
+                event = json.loads(await self.websocket.recv())
+                _raise_if_provider_error(event, "qwen-asr")
+                if event.get("type") == "input_audio_buffer.speech_stopped":
+                    self._endpoint.set()
+                await self._events.put(event)
+                if event.get("type") == "session.finished":
+                    return
+        except BaseException as exc:
+            # Wake the gateway immediately so finish() can surface the stable
+            # provider error and use its bounded batch fallback.
+            self._endpoint.set()
+            await self._events.put(exc)
+
+    def endpoint_detected(self) -> bool:
+        return self._endpoint.is_set()
 
     async def _wait_for(self, expected: str) -> dict[str, object]:
         async with asyncio.timeout(15):
@@ -170,14 +202,19 @@ class QwenRealtimeAsrSession:
         )
 
     async def finish(self) -> TranscriptionResult:
-        await self.websocket.send(
-            json.dumps(
-                {
-                    "event_id": f"event_{uuid.uuid4().hex}",
-                    "type": "input_audio_buffer.commit",
-                }
+        if not self._endpoint.is_set():
+            # A healthy device may report local silence before Qwen's 600 ms
+            # server-VAD tail. Explicit commit closes that same server-VAD
+            # utterance immediately; stuck local VAD is handled by the endpoint
+            # event and never reaches this path.
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "event_id": f"event_{uuid.uuid4().hex}",
+                        "type": "input_audio_buffer.commit",
+                    }
+                )
             )
-        )
         await self.websocket.send(
             json.dumps({"event_id": f"event_{uuid.uuid4().hex}", "type": "session.finish"})
         )
@@ -185,9 +222,10 @@ class QwenRealtimeAsrSession:
         emotion = "neutral"
         async with asyncio.timeout(30):
             while True:
-                event = json.loads(await self.websocket.recv())
+                event = await self._events.get()
+                if isinstance(event, BaseException):
+                    raise event
                 event_type = event.get("type")
-                _raise_if_provider_error(event, "qwen-asr")
                 if event_type in {
                     "conversation.item.input_audio_transcription.text",
                     "conversation.item.input_audio_transcription.completed",
@@ -197,12 +235,18 @@ class QwenRealtimeAsrSession:
                 if event_type == "session.finished":
                     break
         await self.websocket.close()
+        if self._reader_task is not None:
+            await self._reader_task
         self.closed = True
         return TranscriptionResult(text.strip(), emotion)
 
     async def cancel(self) -> None:
         if not self.closed:
             await self.websocket.close()
+            if self._reader_task is not None:
+                self._reader_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._reader_task
             self.closed = True
 
 

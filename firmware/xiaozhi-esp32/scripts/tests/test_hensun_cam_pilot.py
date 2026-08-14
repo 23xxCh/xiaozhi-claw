@@ -18,6 +18,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.application_source = (ROOT / "main/application.cc").read_text(
             encoding="utf-8"
         )
+        self.application_header = (ROOT / "main/application.h").read_text(
+            encoding="utf-8"
+        )
         self.audio_engine_source = (
             ROOT / "main/audio/engines/afe_audio_engine.cc"
         ).read_text(encoding="utf-8")
@@ -85,6 +88,47 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("PushPacketToDecodeQueue(std::move(packet), true)", self.application_source)
         self.assertIn("GetDecodeDropCount", self.application_source)
         self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
+
+    def test_auto_listening_waits_for_post_playback_echo_guard(self):
+        self.assertRegex(
+            self.application_source,
+            r"kPostPlaybackListenGuardUs\s*=\s*1000\s*\*\s*1000",
+        )
+        self.assertIn("MAIN_EVENT_POST_PLAYBACK_GUARD", self.application_header)
+        self.assertIn("post_playback_listen_timer_handle_", self.application_header)
+        self.assertIn("post_playback_guard_active_", self.application_header)
+
+        finish = re.search(
+            r"void Application::FinishTtsPlayback\(std::string reply_id\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(finish)
+        body = finish.group(1)
+        self.assertIn("post_playback_guard_active_ = true", body)
+        self.assertIn("esp_timer_start_once", body)
+        self.assertLess(
+            body.index("post_playback_guard_active_ = true"),
+            body.index("SetDeviceState(kDeviceStateListening)"),
+        )
+
+        self.assertIn(
+            "if (post_playback_guard_active_)", self.application_source
+        )
+        self.assertIn(
+            "else if (!post_playback_guard_active_ && pending_listening_start_",
+            self.application_source,
+        )
+        self.assertIn(
+            "audio_service_.EnableVoiceProcessing(false)", self.application_source
+        )
+        run = re.search(
+            r"void Application::Run\(\) \{(.*?)\n\}\n\nvoid Application::HandleNetworkConnectedEvent",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(run)
+        self.assertIn("bits & MAIN_EVENT_POST_PLAYBACK_GUARD", run.group(1))
 
     def test_auto_listening_has_a_bounded_safety_timeout(self):
         self.assertRegex(

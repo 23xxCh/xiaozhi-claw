@@ -115,7 +115,17 @@ class StreamingPcmToOpus:
                         await self._packets.put(packet)
             del self._buffer[:page_size]
 
-    async def packets(self):
+    async def packets(self, *, prebuffer_packets: int = 0):
+        buffered: list[bytes] = []
+        while len(buffered) < prebuffer_packets:
+            packet = await self._packets.get()
+            if packet is None:
+                for buffered_packet in buffered:
+                    yield buffered_packet
+                return
+            buffered.append(packet)
+        for buffered_packet in buffered:
+            yield buffered_packet
         while True:
             packet = await self._packets.get()
             if packet is None:

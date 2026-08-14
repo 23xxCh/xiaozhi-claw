@@ -33,6 +33,7 @@
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
+#define MAIN_EVENT_POST_PLAYBACK_GUARD  (1 << 14)
 
 
 enum AecMode {
@@ -132,6 +133,7 @@ private:
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
+    esp_timer_handle_t post_playback_listen_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
@@ -146,6 +148,7 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
+    bool post_playback_guard_active_ = false;  // Keep the microphone closed while speaker tail decays
     std::string active_tts_reply_id_;
     std::string pending_tts_stop_reply_id_;
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started

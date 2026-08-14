@@ -25,6 +25,8 @@ async def test_real_qwen_realtime_asr_does_not_require_batch_fallback() -> None:
     packet_task = asyncio.create_task(collect_packets())
     async for pcm in tts.synthesize("你好，小智，这是实时语音识别测试。"):
         await encoder.write(pcm)
+    # VAD mode needs actual trailing silence to produce speech_stopped.
+    await encoder.write(b"\x00\x00" * 16000)
     await tts.finish()
     await encoder.finish()
     packets = await packet_task
@@ -32,6 +34,7 @@ async def test_real_qwen_realtime_asr_does_not_require_batch_fallback() -> None:
     asr = await QwenRealtimeAsrSession.open(settings)
     for packet in packets:
         await asr.send_audio(packet)
+        await asyncio.sleep(0.06)
     result = await asr.finish()
 
     assert "实时" in result.text
