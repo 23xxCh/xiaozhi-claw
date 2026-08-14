@@ -2,8 +2,9 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -12,6 +13,8 @@ from websockets.asyncio.client import ClientConnection, connect
 
 from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ class RealtimeLlmProvider(Protocol):
         system_prompt: str,
         model: str,
         temperature: float,
+        tools: list[dict[str, object]] | None = None,
+        tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]: ...
 
 
@@ -99,7 +104,10 @@ class MockLlmProvider:
         system_prompt: str,
         model: str,
         temperature: float,
+        tools: list[dict[str, object]] | None = None,
+        tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]:
+        del history, memories, system_prompt, model, temperature, tools, tool_executor
         yield f"收到：{transcript}"
 
 
@@ -263,8 +271,10 @@ class DeepSeekStreamingLlmProvider:
         system_prompt: str,
         model: str,
         temperature: float,
+        tools: list[dict[str, object]] | None = None,
+        tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]:
-        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
         if memories:
             messages.append(
                 {
@@ -277,29 +287,93 @@ class DeepSeekStreamingLlmProvider:
         messages.append({"role": "user", "content": transcript})
         base_url = self.settings.llm_url.rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-        async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "stream": True,
-                },
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
-                        return
-                    payload = json.loads(data)
-                    content = payload.get("choices", [{}])[0].get("delta", {}).get("content")
-                    if content:
-                        yield str(content)
+        for _ in range(3):
+            request: dict[str, object] = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True,
+            }
+            if tools:
+                request["tools"] = tools
+            tool_calls: dict[int, dict[str, str]] = {}
+            assistant_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
+                    json=request,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line.removeprefix("data:").strip()
+                        if data == "[DONE]":
+                            break
+                        payload = json.loads(data)
+                        delta = payload.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content") if isinstance(delta, dict) else None
+                        if content:
+                            assistant_parts.append(str(content))
+                            yield str(content)
+                        reasoning = (
+                            delta.get("reasoning_content")
+                            if isinstance(delta, dict)
+                            else None
+                        )
+                        if reasoning:
+                            reasoning_parts.append(str(reasoning))
+                        calls = delta.get("tool_calls") if isinstance(delta, dict) else None
+                        if isinstance(calls, list):
+                            for call in calls:
+                                if not isinstance(call, dict):
+                                    continue
+                                index = int(call.get("index", 0))
+                                entry = tool_calls.setdefault(
+                                    index, {"id": "", "name": "", "arguments": ""}
+                                )
+                                if call.get("id"):
+                                    entry["id"] += str(call["id"])
+                                function = call.get("function")
+                                if isinstance(function, dict):
+                                    entry["name"] += str(function.get("name") or "")
+                                    entry["arguments"] += str(function.get("arguments") or "")
+            if not tool_calls or tool_executor is None:
+                return
+            assistant_message: dict[str, object] = {
+                "role": "assistant",
+                "content": "".join(assistant_parts) or "",
+                "tool_calls": [
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": call["arguments"],
+                            },
+                        }
+                        for call in tool_calls.values()
+                    ],
+            }
+            if reasoning_parts:
+                assistant_message["reasoning_content"] = "".join(reasoning_parts)
+            messages.append(assistant_message)
+            for call in tool_calls.values():
+                try:
+                    arguments = json.loads(call["arguments"] or "{}")
+                    if not isinstance(arguments, dict):
+                        raise ValueError("arguments must be an object")
+                    result = await tool_executor(call["name"], arguments)
+                except Exception as exc:
+                    logger.info("tool call failed: %s", type(exc).__name__)
+                    result = "工具暂时不可用，请稍后再试。"
+                messages.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": result}
+                )
+        return
 
 
 class QwenRealtimeTtsSession:

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     llm_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
+    web_search_mcp_enabled: bool = False
+    web_search_mcp_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp"
+    )
+    web_search_mcp_api_key: str = ""
 
     ota_signing_public_key: str = ""
     ota_base_url: str = "https://api.hensun.invalid/v1/ota/"
@@ -145,6 +150,14 @@ class Settings(BaseSettings):
             raise ValueError("OTA_SIGNING_PUBLIC_KEY is required in production")
         if not self.session_cookie_secure:
             raise ValueError("SESSION_COOKIE_SECURE must be enabled in production")
+        if self.web_search_mcp_enabled:
+            if not self.web_search_mcp_url.startswith("https://"):
+                raise ValueError("WEB_SEARCH_MCP_URL must use HTTPS in production")
+            if not (self.web_search_mcp_api_key or self.asr_api_key):
+                raise ValueError(
+                    "WEB_SEARCH_MCP_API_KEY or an Alibaba ASR key is required "
+                    "when search is enabled"
+                )
         if self.email_delivery_mode != "smtp":
             raise ValueError("Production email login must use SMTP delivery")
         smtp_required = {

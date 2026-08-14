@@ -13,6 +13,15 @@ const personalities = [
   ["高效直接", "你是 Hensun Desk，一位表达清楚、注重行动建议的桌面 AI 助手。优先给出简洁可执行的回答。"],
 ] as const;
 
+const availableTools = [
+  ["current_time", "当前时间", "回答现在几点"],
+  ["calculator", "计算器", "计算简单四则运算"],
+  ["weather", "天气", "查询城市天气，需服务端已开通联网搜索"],
+  ["web_search", "联网搜索", "查询最新公开信息，需服务端已开通"],
+  ["self.audio_speaker.set_volume", "设备音量", "允许助手调整扬声器音量"],
+  ["self.screen.set_brightness", "屏幕亮度", "允许助手调整屏幕亮度"],
+] as const;
+
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<ModelPreset[]>([]);
@@ -72,6 +81,7 @@ export default function AgentsPage() {
             <div className="field"><label htmlFor="model">对话风格</label><select id="model" value={form.model_preset_id} onChange={(event) => setForm({ ...form, model_preset_id: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.display_name} — {model.description}</option>)}</select></div>
             <div className="field"><label htmlFor="temperature">表达灵活度：{form.llm_temperature.toFixed(2)}</label><input id="temperature" type="range" min="0" max="2" step="0.05" value={form.llm_temperature} onChange={(event) => setForm({ ...form, llm_temperature: Number(event.target.value) })} /><div className="hint">低值更稳定，高值更多变化；建议保持 0.3–0.8。</div></div>
             <div className="field"><label htmlFor="speech-rate">说话速度：{form.tts_speech_rate.toFixed(2)}×</label><input id="speech-rate" type="range" min="0.5" max="2" step="0.05" value={form.tts_speech_rate} onChange={(event) => setForm({ ...form, tts_speech_rate: Number(event.target.value) })} /></div>
+            <div className="field"><span className="label">工具权限</span><div className="stack">{availableTools.map(([id, label, hint]) => <label className="check" key={id}><input type="checkbox" checked={Boolean(form.tools[id])} onChange={(event) => setForm({ ...form, tools: { ...form.tools, [id]: event.target.checked } })} />{label}<span className="hint">{hint}</span></label>)}</div><div className="hint">工具只在本助手启用后提供给模型；高风险设备操作未开放。</div></div>
             <div className="field"><label htmlFor="prompt">完整角色设定</label><textarea id="prompt" value={form.system_prompt} onChange={(event) => setForm({ ...form, system_prompt: event.target.value })} /></div>
             <button className="button secondary" type="button" onClick={() => setForm({ ...form, system_prompt: DEFAULT_PROMPT, model_preset_id: "fast-chat", voice_preset_id: "cherry", tools: {}, llm_temperature: 0.6, tts_speech_rate: 1.0 })}>恢复默认设置</button>
           </div></details>

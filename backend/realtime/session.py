@@ -45,6 +45,7 @@ from backend.app.security import (
 )
 
 from .emotion import EmotionRouter
+from .mcp import DeviceMcpClient, DeviceMcpError
 from .media import OpusPacketPacer, StreamingPcmToOpus
 from .providers import (
     RealtimeAsrSession,
@@ -52,6 +53,7 @@ from .providers import (
     RealtimeTtsSession,
     TranscriptionResult,
 )
+from .tools import ToolRegistry, create_search_provider
 
 logger = logging.getLogger(__name__)
 MAX_UTTERANCE_BYTES = 1024 * 1024
@@ -75,6 +77,7 @@ class AgentSnapshot:
     voice: str
     llm_temperature: float
     tts_speech_rate: float
+    tools: dict[str, bool]
     asr_cost_micros_per_minute: int
     llm_input_cost_micros_per_million_tokens: int
     llm_output_cost_micros_per_million_tokens: int
@@ -253,6 +256,7 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         voice=voice.voice,
         llm_temperature=agent.llm_temperature,
         tts_speech_rate=agent.tts_speech_rate,
+        tools=json.loads(agent.tools_json or "{}"),
         asr_cost_micros_per_minute=model.asr_cost_micros_per_minute,
         llm_input_cost_micros_per_million_tokens=(model.llm_input_cost_micros_per_million_tokens),
         llm_output_cost_micros_per_million_tokens=(model.llm_output_cost_micros_per_million_tokens),
@@ -495,10 +499,23 @@ async def _process_turn(
     history: list[dict[str, str]],
     turn_started: float,
     playback: PlaybackHandshake,
+    mcp_client: DeviceMcpClient | None = None,
 ) -> bool:
     providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
     fallback: ProviderBundle | None = websocket.app.state.fallback_providers
     router = EmotionRouter()
+    provider_settings = getattr(providers, "settings", websocket.app.state.settings)
+    search_provider = create_search_provider(provider_settings)
+    tool_registry = ToolRegistry(search_provider=search_provider)
+    enabled_tools = {name: enabled for name, enabled in snapshot.tools.items() if enabled}
+    tool_schemas = tool_registry.definitions(enabled_tools)
+    if mcp_client is not None:
+        tool_schemas.extend(mcp_client.openai_tools(enabled_tools))
+
+    async def execute_tool(name: str, arguments: dict[str, object]) -> str:
+        if mcp_client is not None and mcp_client.can_call(name):
+            return await mcp_client.call(name, arguments)
+        return await tool_registry.execute(name, arguments)
     tts: RealtimeTtsSession | None = None
     encoder: StreamingPcmToOpus | None = None
     packet_task: asyncio.Task[None] | None = None
@@ -619,6 +636,9 @@ async def _process_turn(
             await speak(safety.fixed_response)
         else:
             try:
+                llm_kwargs: dict[str, object] = {}
+                if tool_schemas:
+                    llm_kwargs = {"tools": tool_schemas, "tool_executor": execute_tool}
                 async for token in providers.llm.reply_stream(
                     transcript,
                     history,
@@ -626,6 +646,7 @@ async def _process_turn(
                     system_prompt=snapshot.system_prompt,
                     model=snapshot.llm_model,
                     temperature=snapshot.llm_temperature,
+                    **llm_kwargs,
                 ):
                     reply_parts.append(token)
                     for sentence in sentence_buffer.feed(token):
@@ -909,6 +930,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     cancelled = False
     continuous_reminder_sent = False
     playback = PlaybackHandshake()
+    mcp_client: DeviceMcpClient | None = None
+    mcp_initialize_task: asyncio.Task[None] | None = None
 
     def asr_endpoint_detected(asr: RealtimeAsrSession) -> bool:
         detector = getattr(asr, "endpoint_detected", None)
@@ -939,6 +962,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 history,
                 time.perf_counter(),
                 playback,
+                mcp_client,
             )
         )
         return True
@@ -1018,9 +1042,15 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             "channels": 1,
                             "frame_duration": 60,
                         },
+                        "features": {"mcp": True},
                         "disclosure": "你正在与 AI 服务互动，而非自然人。",
                     },
                 )
+                if not websocket.app.state.realtime_providers.mock:
+                    mcp_client = DeviceMcpClient(
+                        serial, websocket.app.state.device_connections
+                    )
+                    mcp_initialize_task = asyncio.create_task(mcp_client.initialize())
                 continue
             if message_type == "abort":
                 if active_asr is not None:
@@ -1046,6 +1076,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 reply_id = str(message.get("reply_id") or "")
                 if not playback.acknowledge(state, reply_id):
                     logger.info("ignored stale TTS %s acknowledgement from %s", state, serial)
+                continue
+            if message_type == "mcp":
+                if mcp_client is not None and mcp_client.handle_message(message):
+                    continue
+                logger.info("ignored unsolicited MCP message from %s", serial)
                 continue
             if message_type == "device_config_ack":
                 await _handle_device_config_ack(session_factory, device_id, message)
@@ -1183,6 +1218,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             active_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await active_task
+        if mcp_initialize_task is not None:
+            if not mcp_initialize_task.done():
+                mcp_initialize_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, DeviceMcpError):
+                await mcp_initialize_task
+        if mcp_client is not None:
+            await mcp_client.close()
         heartbeat_stop.set()
         await heartbeat_task
         await _save_session_summary(websocket, conversation_id, user_id, snapshot, history)
