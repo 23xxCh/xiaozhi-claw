@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted", "selfhosted-landscape")]
+    [ValidateSet("official", "selfhosted", "selfhosted-landscape", "selfhosted-portrait")]
     [string]$Variant,
 
     [string]$BootstrapUrl = ""
@@ -66,9 +66,10 @@ $buildName = switch ($Variant) {
     "official" { "hensun-cam-official-v1" }
     "selfhosted" { "hensun-cam-selfhosted-v1" }
     "selfhosted-landscape" { "hensun-cam-selfhosted-landscape-v1" }
+    "selfhosted-portrait" { "hensun-cam-selfhosted-portrait-v1" }
 }
 $isSelfHosted = $Variant -ne "official"
-$emoteAssetDirectory = if ($Variant -eq "selfhosted-landscape") { "emote_landscape" } else { "emote_lab" }
+$emoteAssetDirectory = if ($Variant -in @("selfhosted", "selfhosted-landscape")) { "emote_landscape" } else { "emote_lab" }
 
 $configName = "config.json"
 if ($isSelfHosted) {

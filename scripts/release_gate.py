@@ -50,6 +50,7 @@ def main() -> int:
     experimental_cam_builds = {
         "hensun-cam-emote-lab-v1",
         "hensun-cam-selfhosted-landscape-v1",
+        "hensun-cam-selfhosted-portrait-v1",
     }
     if set(cam_builds) != expected_cam_builds | experimental_cam_builds:
         errors.append(
@@ -67,6 +68,8 @@ def main() -> int:
         errors.append("self-hosted CAM firmware lacks its safe .invalid default")
     if "api.tenclass.net" in selfhosted_sdkconfig:
         errors.append("self-hosted CAM firmware points to the upstream cloud")
+    if "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y" not in selfhosted_sdkconfig:
+        errors.append("self-hosted CAM firmware does not default to landscape display")
     landscape_sdkconfig = cam_builds.get("hensun-cam-selfhosted-landscape-v1", "")
     if "api.hensun.invalid" not in landscape_sdkconfig:
         errors.append("landscape CAM firmware lacks its safe .invalid default")
@@ -74,6 +77,13 @@ def main() -> int:
         errors.append("landscape CAM firmware points to the upstream cloud")
     if "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y" not in landscape_sdkconfig:
         errors.append("landscape CAM firmware does not enable landscape display")
+    portrait_sdkconfig = cam_builds.get("hensun-cam-selfhosted-portrait-v1", "")
+    if "api.hensun.invalid" not in portrait_sdkconfig:
+        errors.append("portrait CAM firmware lacks its safe .invalid default")
+    if "api.tenclass.net" in portrait_sdkconfig:
+        errors.append("portrait CAM firmware points to the upstream cloud")
+    if "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y" in portrait_sdkconfig:
+        errors.append("portrait CAM firmware unexpectedly enables landscape display")
     for required_option in (
         "CONFIG_USE_CUSTOM_WAKE_WORD=y",
         'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',

@@ -49,6 +49,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
                 "hensun-cam-official-v1",
                 "hensun-cam-selfhosted-v1",
                 "hensun-cam-selfhosted-landscape-v1",
+                "hensun-cam-selfhosted-portrait-v1",
                 "hensun-cam-emote-lab-v1",
             },
         )
@@ -60,7 +61,10 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         landscape = "\n".join(
             self.builds["hensun-cam-selfhosted-landscape-v1"]["sdkconfig_append"]
         )
-        for sdkconfig in (official, selfhosted, landscape):
+        portrait = "\n".join(
+            self.builds["hensun-cam-selfhosted-portrait-v1"]["sdkconfig_append"]
+        )
+        for sdkconfig in (official, selfhosted, landscape, portrait):
             self.assertIn("CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=y", sdkconfig)
             self.assertIn("CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=n", sdkconfig)
             self.assertIn("CONFIG_SEND_WAKE_WORD_DATA=n", sdkconfig)
@@ -70,6 +74,8 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("api.tenclass.net", selfhosted)
         self.assertIn("api.hensun.invalid", landscape)
         self.assertNotIn("api.tenclass.net", landscape)
+        self.assertIn("api.hensun.invalid", portrait)
+        self.assertNotIn("api.tenclass.net", portrait)
 
     def test_audio_channel_refreshes_short_lived_token_before_connecting(self):
         method = re.search(

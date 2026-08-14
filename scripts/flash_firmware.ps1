@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted", "selfhosted-landscape")]
+    [ValidateSet("official", "selfhosted", "selfhosted-landscape", "selfhosted-portrait")]
     [string]$Variant,
 
     [string]$Port = "COM6",
@@ -19,13 +19,13 @@ $result = & (Join-Path $PSScriptRoot "build_firmware.ps1") @buildArgs
 
 Push-Location $firmwareRoot
 try {
-    if ($Variant -eq "selfhosted-landscape") {
+    if ($Variant -in @("selfhosted", "selfhosted-landscape")) {
         $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
         $appPath = Join-Path $firmwareRoot "build\xiaozhi.bin"
         $emotePath = Join-Path $firmwareRoot "build\mmap_build\emote_landscape\emote_gen\emote_gen.bin"
         foreach ($requiredPath in ($idfPython, $appPath, $emotePath)) {
             if (-not (Test-Path -LiteralPath $requiredPath)) {
-                throw "Landscape flash input is missing: $requiredPath"
+                throw "Landscape self-hosted flash input is missing: $requiredPath"
             }
         }
         & $idfPython -m esptool --chip esp32s3 --port $Port write_flash `

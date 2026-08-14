@@ -24,6 +24,7 @@
                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
                 "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
                 "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
+                "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y",
                 "CONFIG_FLASH_NONE_ASSETS=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_hensun_emote_lab.csv\"",
@@ -43,6 +44,24 @@
                 "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
                 "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
                 "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y",
+                "CONFIG_FLASH_NONE_ASSETS=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_hensun_emote_lab.csv\"",
+                "CONFIG_OTA_URL=\"https://api.hensun.invalid/v1/device/xiaozhi-bootstrap\""
+            ]
+        },
+        {
+            "name": "hensun-cam-selfhosted-portrait-v1",
+            "sdkconfig_append": [
+                "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=y",
+                "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=n",
+                "CONFIG_SEND_WAKE_WORD_DATA=n",
+                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+                "CONFIG_CUSTOM_WAKE_WORD=\"ni hao xiao can\"",
+                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"你好小灿\"",
+                "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
+                "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
+                "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
                 "CONFIG_FLASH_NONE_ASSETS=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_hensun_emote_lab.csv\"",

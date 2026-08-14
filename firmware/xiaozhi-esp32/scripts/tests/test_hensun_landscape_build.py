@@ -13,13 +13,18 @@ class HensunLandscapeBuildTests(unittest.TestCase):
         config = json.loads((BOARD / "config.json").read_text(encoding="utf-8"))
         self.builds = {build["name"]: build for build in config["builds"]}
 
-    def test_landscape_profile_clones_selfhosted_and_only_adds_orientation(self):
-        landscape = set(
+    def test_selfhosted_defaults_to_landscape_and_portrait_remains_available(self):
+        default = set(self.builds["hensun-cam-selfhosted-v1"]["sdkconfig_append"])
+        landscape_alias = set(
             self.builds["hensun-cam-selfhosted-landscape-v1"]["sdkconfig_append"]
         )
-        portrait = set(self.builds["hensun-cam-selfhosted-v1"]["sdkconfig_append"])
+        portrait = set(
+            self.builds["hensun-cam-selfhosted-portrait-v1"]["sdkconfig_append"]
+        )
+        self.assertIn("CONFIG_HENSUN_DISPLAY_LANDSCAPE=y", default)
+        self.assertEqual(landscape_alias, default)
         self.assertEqual(
-            landscape - {"CONFIG_HENSUN_DISPLAY_LANDSCAPE=y"},
+            default - {"CONFIG_HENSUN_DISPLAY_LANDSCAPE=y"},
             portrait,
         )
         self.assertNotIn(
@@ -63,12 +68,18 @@ class HensunLandscapeBuildTests(unittest.TestCase):
         flash_script = (REPO_ROOT / "scripts/flash_firmware.ps1").read_text(encoding="utf-8")
         release_gate = (REPO_ROOT / "scripts/release_gate.py").read_text(encoding="utf-8")
         self.assertIn('"selfhosted-landscape"', build_script)
+        self.assertIn('"selfhosted-portrait"', build_script)
         self.assertIn('"hensun-cam-selfhosted-landscape-v1"', build_script)
+        self.assertIn('"hensun-cam-selfhosted-portrait-v1"', build_script)
         self.assertIn("Repair-WhitespaceUnsafeComponentLinkFlags", build_script)
         self.assertIn('"-L${CMAKE_CURRENT_SOURCE_DIR}', build_script)
         self.assertIn('"selfhosted-landscape"', flash_script)
+        self.assertIn('"selfhosted-portrait"', flash_script)
+        self.assertIn('$Variant -in @("selfhosted", "selfhosted-landscape")', flash_script)
         self.assertIn('"hensun-cam-selfhosted-landscape-v1"', release_gate)
+        self.assertIn('"hensun-cam-selfhosted-portrait-v1"', release_gate)
         self.assertIn("landscape CAM firmware", release_gate)
+        self.assertIn("portrait CAM firmware", release_gate)
 
     def test_landscape_camera_preview_is_native_qvga_and_portrait_still_rotates(self):
         display = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
