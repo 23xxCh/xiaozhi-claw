@@ -16,12 +16,14 @@ from ..models import (
     DeviceSession,
     Entitlement,
     StaffRole,
+    StaffUser,
     User,
 )
 from ..schemas import (
     ClaimConfirmRequest,
     DeviceBootstrapRequest,
     DeviceBootstrapResponse,
+    DeviceCredentialRotationRequest,
     DeviceDetailResponse,
     DeviceRegistrationRequest,
     DeviceRegistrationResponse,
@@ -108,6 +110,44 @@ async def register_device(
         actor_type="admin",
         actor_id="factory-api",
         action="device.registered",
+        payload={"device_id": device.id, "serial_number": device.serial_number},
+    )
+    await session.commit()
+    return DeviceRegistrationResponse(
+        device_id=device.id,
+        serial_number=device.serial_number,
+        device_secret=device_secret,
+        lifecycle=device.lifecycle,
+    )
+
+
+@router.post(
+    "/admin/devices/{device_id}/rotate-credential",
+    response_model=DeviceRegistrationResponse,
+)
+async def rotate_device_credential(
+    device_id: str,
+    payload: DeviceCredentialRotationRequest,
+    request: Request,
+    staff: StaffUser | None = Depends(
+        require_admin_or_staff(StaffRole.SUPERADMIN, StaffRole.FACTORY)
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> DeviceRegistrationResponse:
+    del payload
+    device = await session.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+
+    device_secret = new_device_secret()
+    device.credential_hash = hash_secret(
+        device_secret, request.app.state.settings.device_credential_pepper
+    )
+    add_audit_event(
+        session,
+        actor_type="staff" if staff is not None else "admin",
+        actor_id=staff.id if staff is not None else "factory-api",
+        action="device.credential-rotated",
         payload={"device_id": device.id, "serial_number": device.serial_number},
     )
     await session.commit()

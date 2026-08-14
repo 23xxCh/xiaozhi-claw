@@ -50,6 +50,10 @@ class DeviceRegistrationResponse(BaseModel):
     lifecycle: str
 
 
+class DeviceCredentialRotationRequest(BaseModel):
+    confirm: Literal[True]
+
+
 class DeviceBatchRegistrationRequest(BaseModel):
     devices: list[DeviceRegistrationRequest] = Field(min_length=1, max_length=500)
     confirm: bool = False
