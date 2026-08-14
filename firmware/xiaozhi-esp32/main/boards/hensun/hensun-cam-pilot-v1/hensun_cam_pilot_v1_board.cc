@@ -129,11 +129,14 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
-                EnterWifiConfigMode();
+            const auto state = app.GetDeviceState();
+            if (state == kDeviceStateStarting ||
+                state == kDeviceStateWifiConfiguring ||
+                state == kDeviceStateAudioTesting) {
+                ESP_LOGW(TAG, "Ignoring chat button while device is not ready (state=%d)", state);
                 return;
             }
-            if (app.GetDeviceState() == kDeviceStateSpeaking) {
+            if (state == kDeviceStateSpeaking) {
                 display_->SetEmotion("interrupted");
             }
             app.ToggleChatState();

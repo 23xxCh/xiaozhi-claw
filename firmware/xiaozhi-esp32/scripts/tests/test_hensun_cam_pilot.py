@@ -210,6 +210,26 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("LAMP_GPIO", self.pins)
         self.assertEqual(len(re.findall(r"\bDECLARE_BOARD\(", self.source)), 1)
 
+    def test_boot_click_cannot_start_local_audio_loopback_before_network_ready(self):
+        handler = re.search(
+            r"boot_button_\.OnClick\(\[this\]\(\) \{(.*?)\n\s*\}\);",
+            self.source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(handler)
+        body = handler.group(1)
+        guard = re.search(
+            r"if \(state == kDeviceStateStarting \|\|\s*"
+            r"state == kDeviceStateWifiConfiguring \|\|\s*"
+            r"state == kDeviceStateAudioTesting\) \{(.*?)\n\s*\}",
+            body,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(guard)
+        self.assertIn("return;", guard.group(1))
+        self.assertLess(guard.start(), body.index("app.ToggleChatState()"))
+        self.assertNotIn("EnterWifiConfigMode()", body)
+
     def test_build_chain_selects_the_new_board(self):
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
         cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
