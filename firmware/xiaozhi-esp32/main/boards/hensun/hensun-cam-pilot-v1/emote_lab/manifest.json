@@ -1,0 +1,69 @@
+{
+  "asset_set": "hensun-emote-lab-v1",
+  "source_spec": "source/hensun_emote_motion_spec.json",
+  "source_spec_sha256": "69773bdddd33dcc8d31e6d1aec0ceb6712ec75c950b483d5b7ae2671860c8c5e",
+  "canvas": {
+    "width": 240,
+    "height": 320,
+    "fps": 20
+  },
+  "palette": {
+    "background": "#000000",
+    "face": "#F7F7F2"
+  },
+  "animations": {
+    "idle": {
+      "file": "idle_[0.30s,2.10s].gif",
+      "frames": 48,
+      "loop_start_frame": 6,
+      "loop_end_frame": 42,
+      "sha256": "1989ebd37141f01d89b8ee146ac38abeeb393cd14f4efe39a636cd376a8f2cfc"
+    },
+    "listening": {
+      "file": "listening_[0.25s,1.15s].gif",
+      "frames": 28,
+      "loop_start_frame": 5,
+      "loop_end_frame": 23,
+      "sha256": "50860fbb9060a520a47997d93d27f0bae2192da1eeb2201f650a46b77e9e735f"
+    },
+    "thinking": {
+      "file": "thinking_[0.30s,1.50s].gif",
+      "frames": 36,
+      "loop_start_frame": 6,
+      "loop_end_frame": 30,
+      "sha256": "e13f519fbbd22bd940776b3c699ee6cddbba5fde7568fd5e25bc544bcf169d98"
+    },
+    "speaking": {
+      "file": "speaking_[0.20s,0.80s].gif",
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "sha256": "77691de8647a4a7fa4414007f808e0d30dbfcb8814d40b43ccad932899a06160"
+    },
+    "happy": {
+      "file": "happy_[0.40s,1.00s].gif",
+      "frames": 25,
+      "loop_start_frame": 8,
+      "loop_end_frame": 20,
+      "sha256": "c569f7b51cf257657c07dc61a2579e8bf876679c2917f7f3a3ea562c6a7fe71a"
+    },
+    "caring": {
+      "file": "caring_[0.45s,1.65s].gif",
+      "frames": 40,
+      "loop_start_frame": 9,
+      "loop_end_frame": 33,
+      "sha256": "c2ba4aff5b4202c9aa3ee832a8d6b7813cb6e1131a8ccf799e7efcc615875c01"
+    }
+  },
+  "packer": {
+    "name": "ESP Emote GFX Packer NEXT",
+    "url": "https://emote-gfx-gen-tool-dev.pages.dev/",
+    "player_commit": "7139b46c6616d466ff153cb9d2ddf63661434f22"
+  },
+  "pack": {
+    "file": "hensun_emote_lab_v1.bin",
+    "animation_count": 6,
+    "asset_count": 7,
+    "sha256": "81082652bc2cc1592bad86655ac3df2302b510e83a8f08085fce79ada380942b"
+  }
+}
