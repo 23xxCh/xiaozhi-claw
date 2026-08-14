@@ -21,6 +21,7 @@ MANIFEST = ASSET_ROOT / "manifest.json"
 CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_contact_sheet.png"
 ANIMATED_CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_motion_preview.gif"
 SCALE = 4
+PRIMARY_ANIMATIONS = ("idle", "listening", "thinking", "speaking", "happy", "caring")
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -302,22 +303,25 @@ def draw_thinking(image: Image.Image, active: float, phase: float) -> None:
     pill(image, (122, 199), (18, 7), -10, alpha=active * 0.86)
 
 
-def draw_speaking(image: Image.Image, active: float, phase: float) -> None:
+def draw_speaking(
+    image: Image.Image, active: float, phase: float, speech_level: int = 2
+) -> None:
     beat = 0.5 - 0.5 * math.cos(phase * math.tau * 2)
-    bounce = math.sin(phase * math.tau * 2) * 2.2
+    amplitude = (0.16, 0.43, 0.72, 1.0)[max(0, min(3, speech_level))]
+    bounce = math.sin(phase * math.tau * 2) * (0.8 + amplitude * 2.0)
     for side, x in ((-1, 76), (1, 164)):
         eye_blob(
             image,
             (x, 137 + bounce * side),
-            (68 + beat * 2, lerp(10, 64 - beat * 8, active)),
+            (68 + beat * 2 * amplitude, lerp(10, 66 - beat * 9 * amplitude, active)),
             (-side * 10, 3),
             (18, 25),
             angle=side * (2 + beat * 2),
             lid=0.12,
             alpha=min(1.0, active + 0.17),
         )
-    mouth_w = lerp(14, 58 - beat * 10, active)
-    mouth_h = lerp(8, 49 + beat * 11, active)
+    mouth_w = lerp(14, 30 + amplitude * 34 - beat * (4 + amplitude * 7), active)
+    mouth_h = lerp(8, 10 + amplitude * 57 + beat * (3 + amplitude * 10), active)
     ellipse(image, (120, 205), (mouth_w, mouth_h), alpha=active)
     ellipse(image, (120, 201 - beat * 2), (mouth_w * 0.62, mouth_h * 0.55), color=(0, 0, 0))
     cheek_dashes(image, 190 + bounce, active)
@@ -377,7 +381,11 @@ def render_frame(name: str, frame: int, animation: dict) -> Image.Image:
     active, phase = stage(frame, total, loop_start, loop_end)
     canvas = Image.new("RGBA", (240 * SCALE, 320 * SCALE), (0, 0, 0, 255))
     draw_bridge(canvas, clamp(1.0 - active))
-    DRAWERS[name](canvas, active, phase)
+    renderer = animation.get("renderer", name)
+    if renderer == "speaking":
+        draw_speaking(canvas, active, phase, int(animation.get("speech_level", 2)))
+    else:
+        DRAWERS[renderer](canvas, active, phase)
     output = canvas.convert("RGB").resize((240, 320), Image.Resampling.LANCZOS)
     # GIF writers are allowed to merge identical consecutive frames. The packer
     # derives segment timing from a constant-rate frame stream, so preserve each
@@ -426,7 +434,8 @@ def build_assets(check: bool) -> int:
                 temporary.unlink(missing_ok=True)
         else:
             save_gif(path, frames)
-        contact_frames.append(frames[animation["loop_start_frame"]])
+        if name in PRIMARY_ANIMATIONS:
+            contact_frames.append(frames[animation["loop_start_frame"]])
         manifest_animations[name] = {
             "file": animation["export_file"],
             "frames": animation["frames"],
@@ -442,7 +451,7 @@ def build_assets(check: bool) -> int:
         sheet.save(CONTACT_SHEET, optimize=True)
 
         preview_frames = []
-        animation_names = list(spec["animations"])
+        animation_names = list(PRIMARY_ANIMATIONS)
         for frame_index in range(48):
             preview = Image.new("RGB", (240 * 3, 320 * 2), (0, 0, 0))
             for index, name in enumerate(animation_names):
@@ -469,8 +478,8 @@ def build_assets(check: bool) -> int:
         },
         "pack": {
             "file": existing_pack.name,
-            "animation_count": 6,
-            "asset_count": 7,
+            "animation_count": len(spec["animations"]),
+            "asset_count": len(spec["animations"]) + 1,
             "sha256": sha256(existing_pack) if existing_pack.is_file() else "PENDING_PACKER_EXPORT"
         },
     }

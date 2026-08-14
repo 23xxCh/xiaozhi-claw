@@ -41,9 +41,41 @@
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 2,
       "silhouette": "bright compact eyes above one strong open rounded mouth",
       "motion": "fast pop, two-beat mouth bounce, eye squash, clean close",
       "export_file": "speaking_[0.20s,0.80s].gif"
+    },
+    "speaking_0": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 0,
+      "silhouette": "compact speaking eyes above a nearly closed resting mouth",
+      "motion": "quiet syllable hold with restrained eye bounce",
+      "export_file": "speaking_0_[0.20s,0.80s].gif"
+    },
+    "speaking_1": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 1,
+      "silhouette": "compact speaking eyes above a small rounded mouth",
+      "motion": "soft syllable bounce with restrained eye squash",
+      "export_file": "speaking_1_[0.20s,0.80s].gif"
+    },
+    "speaking_3": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 3,
+      "silhouette": "bright speaking eyes above a wide energetic rounded mouth",
+      "motion": "strong syllable bounce with elastic eye response",
+      "export_file": "speaking_3_[0.20s,0.80s].gif"
     },
     "happy": {
       "frames": 25,

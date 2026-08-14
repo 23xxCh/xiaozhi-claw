@@ -23,6 +23,12 @@ EXPECTED = {
     "happy": (25, 8, 20),
     "caring": (40, 9, 33),
 }
+SPEAKING_VARIANTS = {
+    "speaking_0": (20, 4, 16),
+    "speaking_1": (20, 4, 16),
+    "speaking_3": (20, 4, 16),
+}
+ALL_EXPECTED = EXPECTED | SPEAKING_VARIANTS
 
 
 class HensunEmoteLabTests(unittest.TestCase):
@@ -33,7 +39,7 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertEqual(spec["canvas"], {"width": 240, "height": 320, "fps": 20})
         self.assertEqual(spec["palette"]["background"], "#000000")
         self.assertEqual(spec["palette"]["face"], "#F7F7F2")
-        self.assertEqual(set(spec["animations"]), set(EXPECTED))
+        self.assertEqual(set(spec["animations"]), set(ALL_EXPECTED))
 
         signatures = set()
         for name, (frames, loop_start, loop_end) in EXPECTED.items():
@@ -46,14 +52,18 @@ class HensunEmoteLabTests(unittest.TestCase):
             self.assertLess(loop_end, frames)
             signatures.add(animation["silhouette"])
         self.assertEqual(len(signatures), len(EXPECTED))
+        for name, level in (("speaking_0", 0), ("speaking_1", 1), ("speaking_3", 3)):
+            animation = spec["animations"][name]
+            self.assertEqual(animation["renderer"], "speaking")
+            self.assertEqual(animation["speech_level"], level)
 
     def test_generated_gifs_match_screen_fps_duration_and_palette(self):
         manifest = json.loads((ASSET_ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["asset_set"], "hensun-emote-lab-v1")
         self.assertEqual(manifest["canvas"], {"width": 240, "height": 320, "fps": 20})
-        self.assertEqual(len(manifest["animations"]), len(EXPECTED))
+        self.assertEqual(len(manifest["animations"]), len(ALL_EXPECTED))
 
-        for name, (frames, loop_start, loop_end) in EXPECTED.items():
+        for name, (frames, loop_start, loop_end) in ALL_EXPECTED.items():
             item = manifest["animations"][name]
             gif_path = GIF_ROOT / item["file"]
             self.assertTrue(gif_path.is_file(), gif_path)
@@ -84,8 +94,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertTrue(pack.is_file(), pack)
         self.assertLess(pack.stat().st_size, 6 * 1024 * 1024)
         self.assertEqual(manifest["pack"]["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
-        self.assertEqual(manifest["pack"]["animation_count"], 6)
-        self.assertEqual(manifest["pack"]["asset_count"], 7)
+        self.assertEqual(manifest["pack"]["animation_count"], 9)
+        self.assertEqual(manifest["pack"]["asset_count"], 10)
 
         pack_data = pack.read_bytes()
         asset_count, stored_checksum, payload_length = struct.unpack_from("<III", pack_data)

@@ -1,7 +1,7 @@
 {
   "asset_set": "hensun-emote-lab-v1",
   "source_spec": "source/hensun_emote_motion_spec.json",
-  "source_spec_sha256": "69773bdddd33dcc8d31e6d1aec0ceb6712ec75c950b483d5b7ae2671860c8c5e",
+  "source_spec_sha256": "a3fe23956ed93337afe95693cae09ca7ef54af4c270f68d7db2bcf1032a09ed9",
   "canvas": {
     "width": 240,
     "height": 320,
@@ -38,7 +38,28 @@
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
-      "sha256": "77691de8647a4a7fa4414007f808e0d30dbfcb8814d40b43ccad932899a06160"
+      "sha256": "4395107929c1a3f0b46697aa4bce49908b160541c29a2c3596fa4b84cf1a9892"
+    },
+    "speaking_0": {
+      "file": "speaking_0_[0.20s,0.80s].gif",
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "sha256": "de66054b0d6ce2b211c6f77acc87dd484093d1e28849772e4c89875bbdb6c7b6"
+    },
+    "speaking_1": {
+      "file": "speaking_1_[0.20s,0.80s].gif",
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "sha256": "12d909654ab5c92ed6026f287e3d73d0a63abd5ecc838e4c099e21bc59676f6a"
+    },
+    "speaking_3": {
+      "file": "speaking_3_[0.20s,0.80s].gif",
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "sha256": "f6cb272e381627d3e4dbb885e62dd6bf75c9679c2bf4d7c2a7c22e2361044805"
     },
     "happy": {
       "file": "happy_[0.40s,1.00s].gif",
@@ -62,8 +83,8 @@
   },
   "pack": {
     "file": "hensun_emote_lab_v1.bin",
-    "animation_count": 6,
-    "asset_count": 7,
-    "sha256": "81082652bc2cc1592bad86655ac3df2302b510e83a8f08085fce79ada380942b"
+    "animation_count": 9,
+    "asset_count": 10,
+    "sha256": "0065157584d9144139b082a690354f45d9f3e148b6933636c2edae5a0f79a281"
   }
 }
