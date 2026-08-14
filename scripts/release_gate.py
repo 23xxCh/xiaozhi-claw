@@ -47,8 +47,11 @@ def main() -> int:
         for build in configs["hensun-cam-pilot-v1"]["builds"]
     }
     expected_cam_builds = {"hensun-cam-official-v1", "hensun-cam-selfhosted-v1"}
-    if set(cam_builds) != expected_cam_builds:
-        errors.append("hensun-cam-pilot-v1 does not define exactly two release channels")
+    experimental_cam_builds = {"hensun-cam-emote-lab-v1"}
+    if set(cam_builds) != expected_cam_builds | experimental_cam_builds:
+        errors.append(
+            "hensun-cam-pilot-v1 must define two release channels and the emote lab"
+        )
     for name, sdkconfig in cam_builds.items():
         if "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=y" not in sdkconfig:
             errors.append(f"{name} hotspot provisioning is not enabled")
@@ -61,6 +64,11 @@ def main() -> int:
         errors.append("self-hosted CAM firmware lacks its safe .invalid default")
     if "api.tenclass.net" in selfhosted_sdkconfig:
         errors.append("self-hosted CAM firmware points to the upstream cloud")
+    emote_lab_sdkconfig = cam_builds.get("hensun-cam-emote-lab-v1", "")
+    if "CONFIG_USE_EMOTE_MESSAGE_STYLE=y" not in emote_lab_sdkconfig:
+        errors.append("emote lab does not enable the emote display engine")
+    if "api.hensun.invalid" not in emote_lab_sdkconfig:
+        errors.append("emote lab lacks its safe .invalid default")
 
     cam_source = (
         BOARD_ROOT / "hensun-cam-pilot-v1" / "hensun_cam_pilot_v1_board.cc"

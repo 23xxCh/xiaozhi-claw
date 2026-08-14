@@ -1089,6 +1089,20 @@ idf_component_register(SRCS ${SOURCES}
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
+if(CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+   AND CONFIG_USE_EMOTE_MESSAGE_STYLE
+   AND CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/v2/16m_hensun_emote_lab.csv")
+    set(HENSUN_EMOTE_LAB_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_lab")
+    set(HENSUN_EMOTE_LAB_BIN "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_lab_v1.bin")
+    spiffs_create_partition_assets(
+        emote_gen
+        "${HENSUN_EMOTE_LAB_DIR}"
+        FLASH_IN_PROJECT
+        COPY_PREBUILT_BIN "${HENSUN_EMOTE_LAB_BIN}"
+    )
+endif()
+
 # Use target_compile_definitions to define the reported board identity
 # If BOARD_NAME is empty, use BOARD_TYPE
 if(NOT BOARD_NAME)

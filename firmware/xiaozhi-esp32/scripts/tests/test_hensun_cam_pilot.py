@@ -37,12 +37,16 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-    def test_has_isolated_official_and_selfhosted_variants(self):
+    def test_has_isolated_official_selfhosted_and_emote_lab_variants(self):
         self.assertEqual(self.config["manufacturer"], "hensun")
         self.assertEqual(self.config["type"], "hensun-cam-pilot-v1")
         self.assertEqual(
             set(self.builds),
-            {"hensun-cam-official-v1", "hensun-cam-selfhosted-v1"},
+            {
+                "hensun-cam-official-v1",
+                "hensun-cam-selfhosted-v1",
+                "hensun-cam-emote-lab-v1",
+            },
         )
 
         official = "\n".join(self.builds["hensun-cam-official-v1"]["sdkconfig_append"])

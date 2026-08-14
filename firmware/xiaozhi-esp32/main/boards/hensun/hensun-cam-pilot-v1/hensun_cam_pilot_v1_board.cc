@@ -1,6 +1,10 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+#include "hensun_emote_lab_display.h"
+#else
 #include "hensun_face_display.h"
+#endif
 #include "application.h"
 #include "button.h"
 #include "config.h"
@@ -18,6 +22,12 @@
 
 namespace {
 
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+using HensunPilotDisplay = HensunEmoteLabDisplay;
+#else
+using HensunPilotDisplay = HensunFaceDisplay;
+#endif
+
 constexpr size_t kSpeechPcmSampleStride = 8;
 constexpr uint32_t kSpeechNoiseFloor = 180;
 constexpr uint32_t kSpeechReferenceAmplitude = 5000;
@@ -26,7 +36,7 @@ class HensunAudioCodecSimplex final : public NoAudioCodecSimplex {
 public:
     using NoAudioCodecSimplex::NoAudioCodecSimplex;
 
-    void SetDisplay(HensunFaceDisplay* display) {
+    void SetDisplay(HensunPilotDisplay* display) {
         display_ = display;
     }
 
@@ -57,7 +67,7 @@ public:
     }
 
 private:
-    HensunFaceDisplay* display_ = nullptr;
+    HensunPilotDisplay* display_ = nullptr;
 };
 
 }  // namespace
@@ -65,7 +75,7 @@ private:
 class HensunCamPilotV1Board : public WifiBoard {
 private:
     Button boot_button_;
-    HensunFaceDisplay* display_ = nullptr;
+    HensunPilotDisplay* display_ = nullptr;
     Esp32Camera* camera_ = nullptr;
 
     void InitializeSpi() {
@@ -105,10 +115,15 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY));
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
 
+        esp_lcd_panel_disp_on_off(panel, true);
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        display_ = new HensunEmoteLabDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#else
         display_ = new HensunFaceDisplay(panel_io, panel,
             DISPLAY_WIDTH, DISPLAY_HEIGHT,
             DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+#endif
     }
 
     void InitializeButtons() {
@@ -124,7 +139,11 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnLongPress([this]() {
+#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE
+            display_->StartShowcase();
+#else
             EnterWifiConfigMode();
+#endif
         });
         boot_button_.OnDoubleClick([this]() {
             display_->StartShowcase();
