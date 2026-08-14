@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted")]
+    [ValidateSet("official", "selfhosted", "selfhosted-landscape")]
     [string]$Variant,
 
     [string]$BootstrapUrl = ""
@@ -15,6 +15,34 @@ $boardRoot = Join-Path $firmwareRoot $boardRelativePath
 $baseConfigPath = Join-Path $boardRoot "config.json"
 $temporaryConfigName = "config.hensun-build-$PID.json"
 $temporaryConfigPath = Join-Path $boardRoot $temporaryConfigName
+
+function Repair-WhitespaceUnsafeComponentLinkFlags {
+    if ($projectRoot -notmatch "\s") {
+        return
+    }
+
+    $unsafeLinkFlag = '"-L ${CMAKE_CURRENT_SOURCE_DIR}/lib/${CONFIG_IDF_TARGET}"'
+    $safeLinkFlag = '"-L${CMAKE_CURRENT_SOURCE_DIR}/lib/${CONFIG_IDF_TARGET}"'
+    $componentCMakeFiles = @(
+        Join-Path $firmwareRoot "managed_components\espressif__esp_audio_codec\CMakeLists.txt"
+        Join-Path $firmwareRoot "managed_components\espressif__esp_image_effects\CMakeLists.txt"
+    )
+    foreach ($componentCMakeFile in $componentCMakeFiles) {
+        if (-not (Test-Path -LiteralPath $componentCMakeFile)) {
+            throw "Required ESP-IDF managed component is missing: $componentCMakeFile"
+        }
+        $content = Get-Content -Raw -LiteralPath $componentCMakeFile
+        if ($content.Contains($unsafeLinkFlag)) {
+            $content.Replace($unsafeLinkFlag, $safeLinkFlag) |
+                Set-Content -LiteralPath $componentCMakeFile -Encoding utf8 -NoNewline
+        }
+        elseif (-not $content.Contains($safeLinkFlag)) {
+            throw "Managed component link flag changed unexpectedly: $componentCMakeFile"
+        }
+    }
+}
+
+Repair-WhitespaceUnsafeComponentLinkFlags
 
 if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
     $idfCandidates = @(
@@ -34,15 +62,16 @@ if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
     . (Join-Path $idfRoot "export.ps1")
 }
 
-$buildName = if ($Variant -eq "official") {
-    "hensun-cam-official-v1"
+$buildName = switch ($Variant) {
+    "official" { "hensun-cam-official-v1" }
+    "selfhosted" { "hensun-cam-selfhosted-v1" }
+    "selfhosted-landscape" { "hensun-cam-selfhosted-landscape-v1" }
 }
-else {
-    "hensun-cam-selfhosted-v1"
-}
+$isSelfHosted = $Variant -ne "official"
+$emoteAssetDirectory = if ($Variant -eq "selfhosted-landscape") { "emote_landscape" } else { "emote_lab" }
 
 $configName = "config.json"
-if ($Variant -eq "selfhosted") {
+if ($isSelfHosted) {
     $parsedUrl = $null
     if (
         -not [Uri]::TryCreate($BootstrapUrl, [UriKind]::Absolute, [ref]$parsedUrl) -or
@@ -89,9 +118,9 @@ try {
         throw "Firmware build failed for $Variant."
     }
 
-    if ($Variant -eq "selfhosted") {
+    if ($isSelfHosted) {
         $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
-        $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"
+        $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\$emoteAssetDirectory\emote_gen\emote_gen.bin"
         $resourceLimits = @(
             @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 0x2FC000 },
             @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = 5MB }
@@ -125,6 +154,6 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
-    ModelAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
-    EmoteAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
+    ModelAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
+    EmoteAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\$emoteAssetDirectory\emote_gen\emote_gen.bin")).Length } else { $null }
 }

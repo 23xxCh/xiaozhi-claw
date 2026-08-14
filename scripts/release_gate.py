@@ -47,7 +47,10 @@ def main() -> int:
         for build in configs["hensun-cam-pilot-v1"]["builds"]
     }
     expected_cam_builds = {"hensun-cam-official-v1", "hensun-cam-selfhosted-v1"}
-    experimental_cam_builds = {"hensun-cam-emote-lab-v1"}
+    experimental_cam_builds = {
+        "hensun-cam-emote-lab-v1",
+        "hensun-cam-selfhosted-landscape-v1",
+    }
     if set(cam_builds) != expected_cam_builds | experimental_cam_builds:
         errors.append(
             "hensun-cam-pilot-v1 must define two release channels and the emote lab"
@@ -64,6 +67,13 @@ def main() -> int:
         errors.append("self-hosted CAM firmware lacks its safe .invalid default")
     if "api.tenclass.net" in selfhosted_sdkconfig:
         errors.append("self-hosted CAM firmware points to the upstream cloud")
+    landscape_sdkconfig = cam_builds.get("hensun-cam-selfhosted-landscape-v1", "")
+    if "api.hensun.invalid" not in landscape_sdkconfig:
+        errors.append("landscape CAM firmware lacks its safe .invalid default")
+    if "api.tenclass.net" in landscape_sdkconfig:
+        errors.append("landscape CAM firmware points to the upstream cloud")
+    if "CONFIG_HENSUN_DISPLAY_LANDSCAPE=y" not in landscape_sdkconfig:
+        errors.append("landscape CAM firmware does not enable landscape display")
     for required_option in (
         "CONFIG_USE_CUSTOM_WAKE_WORD=y",
         'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',

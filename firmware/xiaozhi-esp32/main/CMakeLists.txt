@@ -1092,9 +1092,16 @@ idf_component_register(SRCS ${SOURCES}
 if(CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
    AND CONFIG_USE_EMOTE_MESSAGE_STYLE
    AND CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/v2/16m_hensun_emote_lab.csv")
-    set(HENSUN_EMOTE_LAB_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_lab")
-    set(HENSUN_EMOTE_LAB_BIN "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_lab_v1.bin")
+    if(CONFIG_HENSUN_DISPLAY_LANDSCAPE)
+        set(HENSUN_EMOTE_LAB_DIR
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_landscape")
+        set(HENSUN_EMOTE_LAB_BIN
+            "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_landscape_v1.bin")
+    else()
+        set(HENSUN_EMOTE_LAB_DIR
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_lab")
+        set(HENSUN_EMOTE_LAB_BIN "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_lab_v1.bin")
+    endif()
     spiffs_create_partition_assets(
         emote_gen
         "${HENSUN_EMOTE_LAB_DIR}"

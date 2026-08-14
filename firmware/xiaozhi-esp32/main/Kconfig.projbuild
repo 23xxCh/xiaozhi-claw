@@ -819,6 +819,14 @@ choice DISPLAY_STYLE
             || BOARD_TYPE_ESP_SENSAIRSHUTTLE
 endchoice
 
+config HENSUN_DISPLAY_LANDSCAPE
+    bool "Use Hensun CAM 320x240 landscape display"
+    default n
+    depends on BOARD_TYPE_HENSUN_CAM_PILOT_V1 && USE_EMOTE_MESSAGE_STYLE
+    help
+        Rotate the Hensun CAM display controller for a counterclockwise-mounted
+        panel and select the dedicated 320x240 landscape emote resource pack.
+
 config USE_MULTILINE_CHAT_MESSAGE
     bool "Use multiline chat message display (default mode only)"
     depends on USE_DEFAULT_MESSAGE_STYLE

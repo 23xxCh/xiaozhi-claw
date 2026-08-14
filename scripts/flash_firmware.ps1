@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted")]
+    [ValidateSet("official", "selfhosted", "selfhosted-landscape")]
     [string]$Variant,
 
     [string]$Port = "COM6",
@@ -12,14 +12,29 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $firmwareRoot = Join-Path $projectRoot "firmware\xiaozhi-esp32"
 
 $buildArgs = @{ Variant = $Variant }
-if ($Variant -eq "selfhosted") {
+if ($Variant -ne "official") {
     $buildArgs.BootstrapUrl = $BootstrapUrl
 }
 $result = & (Join-Path $PSScriptRoot "build_firmware.ps1") @buildArgs
 
 Push-Location $firmwareRoot
 try {
-    idf.py -p $Port flash
+    if ($Variant -eq "selfhosted-landscape") {
+        $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+        $appPath = Join-Path $firmwareRoot "build\xiaozhi.bin"
+        $emotePath = Join-Path $firmwareRoot "build\mmap_build\emote_landscape\emote_gen\emote_gen.bin"
+        foreach ($requiredPath in ($idfPython, $appPath, $emotePath)) {
+            if (-not (Test-Path -LiteralPath $requiredPath)) {
+                throw "Landscape flash input is missing: $requiredPath"
+            }
+        }
+        & $idfPython -m esptool --chip esp32s3 --port $Port write_flash `
+            0x20000 $appPath `
+            0xB00000 $emotePath
+    }
+    else {
+        idf.py -p $Port flash
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Flashing $($result.FirmwareName) to $Port failed."
     }
