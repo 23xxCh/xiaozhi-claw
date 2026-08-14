@@ -85,5 +85,16 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn('nvs_flash_init_partition("hensun_keys")', ota)
         self.assertIn('nvs_open_from_partition("hensun_keys"', ota)
 
+    def test_compiled_custom_wake_command_does_not_require_assets_index(self):
+        source = (ROOT / "main/audio/wake_words/custom_wake_word.cc").read_text(
+            encoding="utf-8"
+        )
+        compiled_branch = source.split("#ifdef CONFIG_CUSTOM_WAKE_WORD", 1)[1].split(
+            "#else", 1
+        )[0]
+        self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD", compiled_branch)
+        self.assertIn("commands_.push_back", compiled_branch)
+        self.assertNotIn("ParseWakenetModelConfig", compiled_branch)
+
 if __name__ == "__main__":
     unittest.main()

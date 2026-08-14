@@ -87,7 +87,14 @@ def main() -> int:
     if "api.hensun.invalid" not in emote_lab_sdkconfig:
         errors.append("emote lab lacks its safe .invalid default")
 
-    partition_path = ROOT / "firmware" / "xiaozhi-esp32" / "partitions" / "v2" / "16m_hensun_emote_lab.csv"
+    partition_path = (
+        ROOT
+        / "firmware"
+        / "xiaozhi-esp32"
+        / "partitions"
+        / "v2"
+        / "16m_hensun_emote_lab.csv"
+    )
     partition = partition_path.read_text(encoding="utf-8")
     for expected_line in (
         "hensun_keys, data, nvs,     0x800000, 0x4000",
