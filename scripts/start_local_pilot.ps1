@@ -72,6 +72,16 @@ foreach ($port in 3000, 8000, 8001) {
 
 Push-Location $projectRoot
 try {
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $databasePath = Join-Path $projectRoot "hensun-lan.db"
+    $databaseBackup = $null
+    if (Test-Path -LiteralPath $databasePath) {
+        $backupRoot = Join-Path $projectRoot "run\backups\$timestamp"
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        $databaseBackup = Join-Path $backupRoot "hensun-lan.db"
+        Copy-Item -LiteralPath $databasePath -Destination $databaseBackup
+    }
+
     & $python -m alembic upgrade head
     if ($LASTEXITCODE -ne 0) {
         throw "Database migration failed."
@@ -87,7 +97,6 @@ try {
         Pop-Location
     }
 
-    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $controlOut = Join-Path $runtimeRoot "control-$timestamp.log"
     $gatewayOut = Join-Path $runtimeRoot "gateway-$timestamp.log"
     $webOut = Join-Path $runtimeRoot "web-$timestamp.log"
@@ -111,6 +120,10 @@ try {
         web_pid = $web.Id
         started_at = (Get-Date).ToString("o")
         host_address = $HostAddress
+        database_backup = $databaseBackup
+        control_log = $controlOut
+        gateway_log = $gatewayOut
+        web_log = $webOut
     } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
     $deadline = (Get-Date).AddSeconds(30)
@@ -144,11 +157,18 @@ try {
         web_pid = $webListener.OwningProcess
         started_at = (Get-Date).ToString("o")
         host_address = $HostAddress
+        database_backup = $databaseBackup
+        control_log = $controlOut
+        gateway_log = $gatewayOut
+        web_log = $webOut
     } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
     Write-Output "Hensun local pilot is ready: http://$HostAddress`:3000"
     Write-Output "Control API: http://$HostAddress`:8000/docs"
     Write-Output "Realtime gateway: ws://$HostAddress`:8001/v1/device/ws"
+    if ($databaseBackup) {
+        Write-Output "Database backup: $databaseBackup"
+    }
     if (-not $NoBrowser) {
         Start-Process "http://$HostAddress`:3000"
     }
