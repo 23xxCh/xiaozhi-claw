@@ -18,6 +18,10 @@
                 "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=y",
                 "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=n",
                 "CONFIG_SEND_WAKE_WORD_DATA=n",
+                "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
+                "CONFIG_FLASH_NONE_ASSETS=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_hensun_emote_lab.csv\"",
                 "CONFIG_OTA_URL=\"https://api.hensun.invalid/v1/device/xiaozhi-bootstrap\""
             ]
         },

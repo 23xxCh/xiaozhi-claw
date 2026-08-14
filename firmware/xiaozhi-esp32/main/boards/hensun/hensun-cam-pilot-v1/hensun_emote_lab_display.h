@@ -10,6 +10,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 class HensunEmoteLabDisplay final : public Display {
@@ -23,6 +24,8 @@ public:
     void ShowNotification(const char* notification, int duration_ms = 3000) override;
     void SetEmotion(const char* emotion) override;
     void SetChatMessage(const char* role, const char* content) override;
+    bool SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
+                         int width, int height, int stride_bytes) override;
     void UpdateStatusBar(bool update_all = false) override;
     void SetPowerSaveMode(bool on) override;
 
@@ -33,6 +36,7 @@ private:
     struct SwitchRequest {
         char animation[16];
         bool urgent;
+        bool immediate;
     };
 
     static void FlushCallback(int x_start, int y_start, int x_end, int y_end,
@@ -46,9 +50,13 @@ private:
     void Unlock() override;
     void SwitchTask();
     void ShowcaseTask();
-    void QueueAnimation(const char* animation, bool urgent = false);
+    void QueueAnimation(const char* animation, bool urgent = false, bool immediate = false);
     bool ValidatePack() const;
     const char* MapEmotion(const char* emotion, bool* urgent) const;
+    static uint8_t QuantizeSpeechLevel(uint8_t level, uint8_t current_level);
+    static void RotateRgb565Clockwise(const uint16_t* source, int source_width,
+                                      int source_height, int source_stride_pixels,
+                                      uint16_t* destination);
 
     static HensunEmoteLabDisplay* active_display_;
 
@@ -56,7 +64,14 @@ private:
     esp_lcd_panel_handle_t panel_ = nullptr;
     emote_gen_player_handle_t player_ = nullptr;
     QueueHandle_t switch_queue_ = nullptr;
+    SemaphoreHandle_t preview_flush_semaphore_ = nullptr;
     TaskHandle_t switch_task_ = nullptr;
     std::atomic<bool> showcase_active_{false};
+    std::atomic<bool> speaking_active_{false};
+    std::atomic<bool> preview_active_{false};
+    std::atomic<bool> preview_flush_pending_{false};
+    std::atomic<uint32_t> animation_flushes_pending_{0};
+    std::atomic<uint8_t> speech_level_{2};
+    std::atomic<int64_t> last_speech_switch_ms_{0};
     char current_animation_[16] = {};
 };

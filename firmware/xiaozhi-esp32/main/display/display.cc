@@ -35,6 +35,16 @@ void Display::SetChatMessage(const char* role, const char* content) {
     ESP_LOGW(TAG, "     %s", content);
 }
 
+bool Display::SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
+                              int width, int height, int stride_bytes) {
+    (void)pixels;
+    (void)pixel_count;
+    (void)width;
+    (void)height;
+    (void)stride_bytes;
+    return false;
+}
+
 void Display::ClearChatMessages() {
     // Default empty implementation, override in subclasses if needed
 }
