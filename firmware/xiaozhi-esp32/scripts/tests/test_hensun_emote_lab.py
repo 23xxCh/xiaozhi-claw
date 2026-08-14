@@ -92,7 +92,7 @@ class HensunEmoteLabTests(unittest.TestCase):
         manifest = json.loads((ASSET_ROOT / "manifest.json").read_text(encoding="utf-8"))
         pack = ASSET_ROOT / manifest["pack"]["file"]
         self.assertTrue(pack.is_file(), pack)
-        self.assertLess(pack.stat().st_size, 6 * 1024 * 1024)
+        self.assertLess(pack.stat().st_size, 5 * 1024 * 1024)
         self.assertEqual(manifest["pack"]["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
         self.assertEqual(manifest["pack"]["animation_count"], 9)
         self.assertEqual(manifest["pack"]["asset_count"], 10)
@@ -119,8 +119,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         partition = PARTITION.read_text(encoding="utf-8")
         self.assertRegex(partition, r"(?m)^nvs,\s+data,\s+nvs,\s+0x9000,\s+0x4000,")
         self.assertRegex(partition, r"(?m)^ota_0,\s+app,\s+ota_0,\s+0x20000,\s+0x3f0000,")
-        self.assertRegex(partition, r"(?m)^assets,\s+data,\s+spiffs,\s+0x800000,\s+2M")
-        self.assertRegex(partition, r"(?m)^emote_gen,\s+data,\s+spiffs,\s+0xA00000,\s+6M")
+        self.assertRegex(partition, r"(?m)^assets,\s+data,\s+spiffs,\s+0x800000,\s+3M")
+        self.assertRegex(partition, r"(?m)^emote_gen,\s+data,\s+spiffs,\s+0xB00000,\s+5M")
 
         component_manifest = (ROOT / "main/idf_component.yml").read_text(encoding="utf-8")
         self.assertIn("https://github.com/espressif2022/esp_emote_gen_player.git", component_manifest)

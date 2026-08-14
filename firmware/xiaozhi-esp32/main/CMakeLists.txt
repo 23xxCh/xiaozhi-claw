@@ -1288,6 +1288,31 @@ function(build_default_assets_bin)
     message(STATUS "Default assets build configured: ${GENERATED_ASSETS_BIN}")
 endfunction()
 
+# Build an assets image that contains only ESP-SR models and their index. This
+# keeps GFX-based boards from wasting flash on LVGL fonts and emoji resources.
+function(build_speech_model_assets_bin)
+    set(GENERATED_MODEL_ASSETS_BIN "${CMAKE_BINARY_DIR}/generated_model_assets.bin")
+    set(MODEL_ASSETS_ARGS
+        "--sdkconfig" "${SDKCONFIG}"
+        "--output" "${GENERATED_MODEL_ASSETS_BIN}"
+        "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}"
+        "--noto_fonts_path" "${NOTO_FONTS_PATH}"
+    )
+    add_custom_command(
+        OUTPUT ${GENERATED_MODEL_ASSETS_BIN}
+        COMMAND python ${PROJECT_DIR}/scripts/build_default_assets.py ${MODEL_ASSETS_ARGS}
+        DEPENDS
+            "${SDKCONFIG}"
+            "${PROJECT_DIR}/scripts/build_default_assets.py"
+        COMMENT "Building speech-model-only assets.bin"
+        VERBATIM
+    )
+    add_custom_target(generated_model_assets ALL
+        DEPENDS ${GENERATED_MODEL_ASSETS_BIN}
+    )
+    set(GENERATED_MODEL_ASSETS_LOCAL_FILE ${GENERATED_MODEL_ASSETS_BIN} PARENT_SCOPE)
+endfunction()
+
 
 # Function to get local assets file path (handles both URL and local file)
 function(get_assets_local_file assets_source assets_local_file_var)
@@ -1359,6 +1384,10 @@ if ("${size}" AND "${offset}")
         get_assets_local_file("${CONFIG_CUSTOM_ASSETS_FILE}" ASSETS_LOCAL_FILE)
         esptool_py_flash_to_partition(flash "assets" "${ASSETS_LOCAL_FILE}")
         message(STATUS "Custom assets flash configured: ${ASSETS_LOCAL_FILE} -> assets partition")
+    elseif(CONFIG_FLASH_MODEL_ASSETS)
+        build_speech_model_assets_bin()
+        esptool_py_flash_to_partition(flash "assets" "${GENERATED_MODEL_ASSETS_LOCAL_FILE}")
+        message(STATUS "Speech model assets flash configured: ${GENERATED_MODEL_ASSETS_LOCAL_FILE} -> assets partition")
     elseif(CONFIG_FLASH_EXPRESSION_ASSETS)
         set(ASSETS_NAME "expression_assets")
         set(ASSETS_PARTITION "assets")

@@ -23,7 +23,12 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         )
         for option in (
             "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
-            "CONFIG_FLASH_NONE_ASSETS=y",
+            "CONFIG_FLASH_MODEL_ASSETS=y",
+            "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+            'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
+            'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
+            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
+            "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
             'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_hensun_emote_lab.csv"',
         ):
             self.assertIn(option, selfhosted)
@@ -63,6 +68,17 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             "不擦除 NVS",
         ):
             self.assertIn(phrase, spec)
+
+    def test_selfhosted_build_keeps_custom_wake_word_configuration(self):
+        build_script_path = Path.cwd() / "scripts/build_firmware.ps1"
+        self.assertTrue(build_script_path.is_file(), build_script_path)
+        build_script = build_script_path.read_text(encoding="utf-8")
+        self.assertIn('if ($Variant -eq "official")', build_script)
+        self.assertIn('$firmwareBuildArgs += @("--wake-word", "nihaoxiaozhi")', build_script)
+        self.assertNotRegex(
+            build_script,
+            r'--language zh-CN\s+`\s+--wake-word nihaoxiaozhi',
+        )
 
 if __name__ == "__main__":
     unittest.main()

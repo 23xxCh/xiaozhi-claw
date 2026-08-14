@@ -20,6 +20,8 @@ choice
         depends on !USE_EMOTE_MESSAGE_STYLE
     config FLASH_CUSTOM_ASSETS
         bool "Flash Custom Assets"
+    config FLASH_MODEL_ASSETS
+        bool "Flash Speech Model Assets"
     config FLASH_EXPRESSION_ASSETS
         bool "Flash Emote Assets"
         depends on USE_EMOTE_MESSAGE_STYLE

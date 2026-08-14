@@ -64,11 +64,37 @@ def main() -> int:
         errors.append("self-hosted CAM firmware lacks its safe .invalid default")
     if "api.tenclass.net" in selfhosted_sdkconfig:
         errors.append("self-hosted CAM firmware points to the upstream cloud")
+    for required_option in (
+        "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+        'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
+        'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
+        "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
+        "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
+        "CONFIG_FLASH_MODEL_ASSETS=y",
+    ):
+        if required_option not in selfhosted_sdkconfig:
+            errors.append(f"self-hosted CAM firmware lacks {required_option}")
+    official_sdkconfig = cam_builds.get("hensun-cam-official-v1", "")
+    for forbidden_option in (
+        "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+        "CONFIG_FLASH_MODEL_ASSETS=y",
+    ):
+        if forbidden_option in official_sdkconfig:
+            errors.append(f"official CAM firmware unexpectedly enables {forbidden_option}")
     emote_lab_sdkconfig = cam_builds.get("hensun-cam-emote-lab-v1", "")
     if "CONFIG_USE_EMOTE_MESSAGE_STYLE=y" not in emote_lab_sdkconfig:
         errors.append("emote lab does not enable the emote display engine")
     if "api.hensun.invalid" not in emote_lab_sdkconfig:
         errors.append("emote lab lacks its safe .invalid default")
+
+    partition_path = ROOT / "firmware" / "xiaozhi-esp32" / "partitions" / "v2" / "16m_hensun_emote_lab.csv"
+    partition = partition_path.read_text(encoding="utf-8")
+    for expected_line in (
+        "assets,      data, spiffs,  0x800000, 3M",
+        "emote_gen,   data, spiffs,  0xB00000, 5M",
+    ):
+        if expected_line not in partition:
+            errors.append(f"Hensun partition layout lacks: {expected_line}")
 
     cam_source = (
         BOARD_ROOT / "hensun-cam-pilot-v1" / "hensun_cam_pilot_v1_board.cc"
