@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "asset_set": "hensun-emote-landscape-v1",
+  "canvas": {
+    "width": 320,
+    "height": 240,
+    "fps": 20
+  },
+  "layout": {
+    "left_eye_center": [104, 105],
+    "right_eye_center": [216, 105],
+    "mouth_center": [160, 174]
+  },
+  "palette": {
+    "background": "#000000",
+    "face": "#F7F7F2"
+  },
+  "bridge_pose": "two quiet horizontal eye pills centered at y=111",
+  "animation_structure": "entrance-loop-return",
+  "contact_sheet": "hensun_emote_landscape_v1_contact_sheet.png",
+  "motion_preview": "hensun_emote_landscape_v1_motion_preview.gif",
+  "pack_file": "hensun_emote_landscape_v1.bin",
+  "animations": {
+    "idle": {
+      "frames": 48,
+      "loop_start_frame": 6,
+      "loop_end_frame": 42,
+      "silhouette": "two wide-set calm oval eyes with a small relaxed smile",
+      "motion": "spring open, slow breathing, one soft blink, tiny shared gaze, settle closed",
+      "export_file": "idle_[0.30s,2.10s].gif"
+    },
+    "listening": {
+      "frames": 28,
+      "loop_start_frame": 5,
+      "loop_end_frame": 23,
+      "silhouette": "wide alert eyes leaning inward with lifted brows",
+      "motion": "quick focus, symmetric inward pulse, attentive hold, soft release",
+      "export_file": "listening_[0.25s,1.15s].gif"
+    },
+    "thinking": {
+      "frames": 36,
+      "loop_start_frame": 6,
+      "loop_end_frame": 30,
+      "silhouette": "one open upward-looking eye and one narrow skeptical eye",
+      "motion": "asymmetric reveal, slow side glance, delayed brow response, settle closed",
+      "export_file": "thinking_[0.30s,1.50s].gif"
+    },
+    "speaking": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 2,
+      "silhouette": "bright compact eyes above one strong open rounded mouth",
+      "motion": "fast pop, two-beat mouth bounce, eye squash, clean close",
+      "export_file": "speaking_[0.20s,0.80s].gif"
+    },
+    "speaking_0": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 0,
+      "silhouette": "compact speaking eyes above a nearly closed resting mouth",
+      "motion": "quiet syllable hold with restrained eye bounce",
+      "export_file": "speaking_0_[0.20s,0.80s].gif"
+    },
+    "speaking_1": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 1,
+      "silhouette": "compact speaking eyes above a small rounded mouth",
+      "motion": "soft syllable bounce with restrained eye squash",
+      "export_file": "speaking_1_[0.20s,0.80s].gif"
+    },
+    "speaking_3": {
+      "frames": 20,
+      "loop_start_frame": 4,
+      "loop_end_frame": 16,
+      "renderer": "speaking",
+      "speech_level": 3,
+      "silhouette": "bright speaking eyes above a wide energetic rounded mouth",
+      "motion": "strong syllable bounce with elastic eye response",
+      "export_file": "speaking_3_[0.20s,0.80s].gif"
+    },
+    "happy": {
+      "frames": 25,
+      "loop_start_frame": 8,
+      "loop_end_frame": 20,
+      "silhouette": "bold crescent eyes and a restrained upward smile",
+      "motion": "overshoot into crescents, buoyant squash, short joyful hold, gentle return",
+      "export_file": "happy_[0.40s,1.00s].gif"
+    },
+    "caring": {
+      "frames": 40,
+      "loop_start_frame": 9,
+      "loop_end_frame": 33,
+      "silhouette": "soft lowered eyes with protective inward brows and a tiny smile",
+      "motion": "slow warm reveal, subtle inward breathing, steady hold, unhurried release",
+      "export_file": "caring_[0.45s,1.65s].gif"
+    }
+  }
+}

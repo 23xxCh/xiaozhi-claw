@@ -8,10 +8,15 @@ import { fileURLToPath } from "node:url";
 
 const TOOL_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BOARD_ROOT = path.resolve(TOOL_ROOT, "..");
-const ASSET_ROOT = path.join(BOARD_ROOT, "emote_lab");
+const assetRootIndex = process.argv.indexOf("--asset-root");
+if (assetRootIndex >= 0 && !process.argv[assetRootIndex + 1]) {
+  throw new Error("--asset-root requires a path");
+}
+const ASSET_ROOT = assetRootIndex >= 0
+  ? path.resolve(process.cwd(), process.argv[assetRootIndex + 1])
+  : path.join(BOARD_ROOT, "emote_lab");
 const SPEC_PATH = path.join(ASSET_ROOT, "source", "hensun_emote_motion_spec.json");
 const WASM_PATH = path.join(TOOL_ROOT, "vendor", "eaf_converter_bg-gkbc_Rvp.wasm");
-const OUTPUT_PATH = path.join(ASSET_ROOT, "hensun_emote_lab_v1.bin");
 const EXPECTED_WASM_SHA256 = "c3e1d8af3651df97188356ef7f1a42ab871928d9ca06341626cdbccb4437205d";
 const MMAP_HEADER_SIZE = 12;
 const MMAP_NAME_FIELD_SIZE = 16;
@@ -67,7 +72,7 @@ async function initializeConverter() {
   wasm.__wbindgen_start();
 }
 
-function convertGif(gifBytes) {
+function convertGif(gifBytes, width, height) {
   const pointer = wasm.__wbindgen_malloc(gifBytes.length, 1) >>> 0;
   memoryBytes().set(gifBytes, pointer);
   const options = wasm.wasmconvertoptions_new() >>> 0;
@@ -77,7 +82,7 @@ function convertGif(gifBytes) {
   wasm.wasmconvertoptions_set_enable_heatshrink(options, false);
   wasm.wasmconvertoptions_set_enable_raw(options, false);
   wasm.wasmconvertoptions_set_jpeg_quality(options, 80);
-  wasm.wasmconvertoptions_set_resize(options, 240, 320);
+  wasm.wasmconvertoptions_set_resize(options, width, height);
 
   const result = wasm.convert_gif_wasm(pointer, gifBytes.length, options);
   if (result[3]) {
@@ -148,11 +153,16 @@ function buildMmapPack(files) {
 
 await initializeConverter();
 const spec = JSON.parse(fs.readFileSync(SPEC_PATH, "utf8"));
+const OUTPUT_PATH = path.join(ASSET_ROOT, spec.pack_file ?? "hensun_emote_lab_v1.bin");
 const index = [];
 const files = [];
 for (const [name, animation] of Object.entries(spec.animations)) {
   const gifPath = path.join(ASSET_ROOT, "gifs", animation.export_file);
-  const eaf = convertGif(fs.readFileSync(gifPath));
+  const eaf = convertGif(
+    fs.readFileSync(gifPath),
+    Number(spec.canvas.width),
+    Number(spec.canvas.height),
+  );
   const fileName = `${name}.eaf`;
   index.push({
     name,

@@ -14,14 +14,27 @@ from PIL import Image, ImageDraw
 
 
 BOARD = Path(__file__).resolve().parents[1]
-ASSET_ROOT = BOARD / "emote_lab"
-SOURCE_SPEC = ASSET_ROOT / "source/hensun_emote_motion_spec.json"
-GIF_ROOT = ASSET_ROOT / "gifs"
-MANIFEST = ASSET_ROOT / "manifest.json"
-CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_contact_sheet.png"
-ANIMATED_CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_motion_preview.gif"
+DEFAULT_ASSET_ROOT = BOARD / "emote_lab"
 SCALE = 4
 PRIMARY_ANIMATIONS = ("idle", "listening", "thinking", "speaking", "happy", "caring")
+
+CANVAS_WIDTH = 240
+CANVAS_HEIGHT = 320
+LAYOUT_X_SCALE = 1.0
+LAYOUT_Y_SCALE = 1.0
+LAYOUT_X_OFFSET = 0.0
+LAYOUT_Y_OFFSET = 0.0
+
+
+def layout_point(center: tuple[float, float]) -> tuple[float, float]:
+    return (
+        center[0] * LAYOUT_X_SCALE + LAYOUT_X_OFFSET,
+        center[1] * LAYOUT_Y_SCALE + LAYOUT_Y_OFFSET,
+    )
+
+
+def layout_size(size: tuple[float, float]) -> tuple[float, float]:
+    return size[0] * LAYOUT_X_SCALE, size[1] * LAYOUT_Y_SCALE
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -68,6 +81,8 @@ def pill(
     color: tuple[int, int, int] = (247, 247, 242),
     alpha: float = 1.0,
 ) -> None:
+    center = layout_point(center)
+    size = layout_size(size)
     width = max(2, int(round(size[0] * SCALE)))
     height = max(2, int(round(size[1] * SCALE)))
     shape = Image.new("RGBA", (width + 12 * SCALE, height + 12 * SCALE), (0, 0, 0, 0))
@@ -92,6 +107,8 @@ def ellipse(
     color: tuple[int, int, int] = (247, 247, 242),
     alpha: float = 1.0,
 ) -> None:
+    center = layout_point(center)
+    size = layout_size(size)
     draw = ImageDraw.Draw(image)
     half_w = size[0] * SCALE / 2
     half_h = size[1] * SCALE / 2
@@ -113,6 +130,8 @@ def superellipse(
     alpha: float = 1.0,
 ) -> None:
     """Draw a soft, organic eye silhouette instead of a generic oval."""
+    center = layout_point(center)
+    size = layout_size(size)
     cx, cy = center[0] * SCALE, center[1] * SCALE
     half_w, half_h = size[0] * SCALE / 2, size[1] * SCALE / 2
     rotation = math.radians(angle)
@@ -142,6 +161,8 @@ def arc_stroke(
     color: tuple[int, int, int] = (247, 247, 242),
     alpha: float = 1.0,
 ) -> None:
+    center = layout_point(center)
+    size = layout_size(size)
     pad = int((width + 6) * SCALE)
     layer_size = (
         max(8, int(size[0] * SCALE) + pad * 2),
@@ -219,6 +240,8 @@ def crescent(
 
 
 def smile_arc(image: Image.Image, center: tuple[float, float], size: tuple[float, float], alpha: float) -> None:
+    center = layout_point(center)
+    size = layout_size(size)
     outer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(outer)
     cx, cy = center[0] * SCALE, center[1] * SCALE
@@ -379,18 +402,22 @@ def render_frame(name: str, frame: int, animation: dict) -> Image.Image:
     loop_start = animation["loop_start_frame"]
     loop_end = animation["loop_end_frame"]
     active, phase = stage(frame, total, loop_start, loop_end)
-    canvas = Image.new("RGBA", (240 * SCALE, 320 * SCALE), (0, 0, 0, 255))
+    canvas = Image.new(
+        "RGBA", (CANVAS_WIDTH * SCALE, CANVAS_HEIGHT * SCALE), (0, 0, 0, 255)
+    )
     draw_bridge(canvas, clamp(1.0 - active))
     renderer = animation.get("renderer", name)
     if renderer == "speaking":
         draw_speaking(canvas, active, phase, int(animation.get("speech_level", 2)))
     else:
         DRAWERS[renderer](canvas, active, phase)
-    output = canvas.convert("RGB").resize((240, 320), Image.Resampling.LANCZOS)
+    output = canvas.convert("RGB").resize(
+        (CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS
+    )
     # GIF writers are allowed to merge identical consecutive frames. The packer
     # derives segment timing from a constant-rate frame stream, so preserve each
     # 50 ms tick with one imperceptible grayscale timing pixel under the bezel.
-    output.putpixel((208 + frame % 31, 319), (247, 247, 242))
+    output.putpixel((CANVAS_WIDTH - 32 + frame % 31, CANVAS_HEIGHT - 1), (247, 247, 242))
     return output
 
 
@@ -411,9 +438,39 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def build_assets(check: bool) -> int:
-    spec = json.loads(SOURCE_SPEC.read_text(encoding="utf-8"))
-    GIF_ROOT.mkdir(parents=True, exist_ok=True)
+def build_assets(check: bool, asset_root: Path) -> int:
+    global CANVAS_WIDTH, CANVAS_HEIGHT
+    global LAYOUT_X_SCALE, LAYOUT_Y_SCALE, LAYOUT_X_OFFSET, LAYOUT_Y_OFFSET
+
+    source_spec = asset_root / "source/hensun_emote_motion_spec.json"
+    gif_root = asset_root / "gifs"
+    manifest_path = asset_root / "manifest.json"
+    spec = json.loads(source_spec.read_text(encoding="utf-8"))
+    CANVAS_WIDTH = int(spec["canvas"]["width"])
+    CANVAS_HEIGHT = int(spec["canvas"]["height"])
+    layout = spec.get("layout")
+    if layout:
+        left_eye = layout["left_eye_center"]
+        right_eye = layout["right_eye_center"]
+        mouth = layout["mouth_center"]
+        LAYOUT_X_SCALE = (right_eye[0] - left_eye[0]) / (164 - 76)
+        LAYOUT_X_OFFSET = left_eye[0] - 76 * LAYOUT_X_SCALE
+        LAYOUT_Y_SCALE = (mouth[1] - left_eye[1]) / (205 - 145)
+        LAYOUT_Y_OFFSET = left_eye[1] - 145 * LAYOUT_Y_SCALE
+    else:
+        LAYOUT_X_SCALE = 1.0
+        LAYOUT_Y_SCALE = 1.0
+        LAYOUT_X_OFFSET = 0.0
+        LAYOUT_Y_OFFSET = 0.0
+
+    contact_sheet = asset_root / spec.get(
+        "contact_sheet", "hensun_emote_lab_v1_contact_sheet.png"
+    )
+    animated_contact_sheet = asset_root / spec.get(
+        "motion_preview", "hensun_emote_lab_v1_motion_preview.gif"
+    )
+    existing_pack = asset_root / spec.get("pack_file", "hensun_emote_lab_v1.bin")
+    gif_root.mkdir(parents=True, exist_ok=True)
     manifest_animations = {}
     contact_frames = []
     animation_frames: dict[str, list[Image.Image]] = {}
@@ -421,7 +478,7 @@ def build_assets(check: bool) -> int:
     for name, animation in spec["animations"].items():
         frames = [render_frame(name, index, animation) for index in range(animation["frames"])]
         animation_frames[name] = frames
-        path = GIF_ROOT / animation["export_file"]
+        path = gif_root / animation["export_file"]
         if check:
             if not path.is_file():
                 raise SystemExit(f"missing generated GIF: {path}")
@@ -445,29 +502,38 @@ def build_assets(check: bool) -> int:
         }
 
     if not check:
-        sheet = Image.new("RGB", (240 * 3, 320 * 2), (0, 0, 0))
+        sheet = Image.new(
+            "RGB", (CANVAS_WIDTH * 3, CANVAS_HEIGHT * 2), (0, 0, 0)
+        )
         for index, frame in enumerate(contact_frames):
-            sheet.paste(frame, ((index % 3) * 240, (index // 3) * 320))
-        sheet.save(CONTACT_SHEET, optimize=True)
+            sheet.paste(
+                frame,
+                ((index % 3) * CANVAS_WIDTH, (index // 3) * CANVAS_HEIGHT),
+            )
+        sheet.save(contact_sheet, optimize=True)
 
         preview_frames = []
         animation_names = list(PRIMARY_ANIMATIONS)
         for frame_index in range(48):
-            preview = Image.new("RGB", (240 * 3, 320 * 2), (0, 0, 0))
+            preview = Image.new(
+                "RGB", (CANVAS_WIDTH * 3, CANVAS_HEIGHT * 2), (0, 0, 0)
+            )
             for index, name in enumerate(animation_names):
                 frames = animation_frames[name]
                 preview.paste(
                     frames[frame_index % len(frames)],
-                    ((index % 3) * 240, (index // 3) * 320),
+                    (
+                        (index % 3) * CANVAS_WIDTH,
+                        (index // 3) * CANVAS_HEIGHT,
+                    ),
                 )
             preview_frames.append(preview)
-        save_gif(ANIMATED_CONTACT_SHEET, preview_frames)
+        save_gif(animated_contact_sheet, preview_frames)
 
-    existing_pack = ASSET_ROOT / "hensun_emote_lab_v1.bin"
     manifest = {
         "asset_set": spec["asset_set"],
-        "source_spec": str(SOURCE_SPEC.relative_to(ASSET_ROOT)).replace("\\", "/"),
-        "source_spec_sha256": sha256(SOURCE_SPEC),
+        "source_spec": str(source_spec.relative_to(asset_root)).replace("\\", "/"),
+        "source_spec_sha256": sha256(source_spec),
         "canvas": spec["canvas"],
         "palette": spec["palette"],
         "animations": manifest_animations,
@@ -485,18 +551,24 @@ def build_assets(check: bool) -> int:
     }
     manifest_text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     if check:
-        if not MANIFEST.is_file() or MANIFEST.read_text(encoding="utf-8") != manifest_text:
-            raise SystemExit(f"manifest is stale: {MANIFEST}")
+        if not manifest_path.is_file() or manifest_path.read_text(encoding="utf-8") != manifest_text:
+            raise SystemExit(f"manifest is stale: {manifest_path}")
     else:
-        MANIFEST.write_text(manifest_text, encoding="utf-8", newline="\n")
+        manifest_path.write_text(manifest_text, encoding="utf-8", newline="\n")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="verify committed outputs")
+    parser.add_argument(
+        "--asset-root",
+        type=Path,
+        default=DEFAULT_ASSET_ROOT,
+        help="asset directory containing source/hensun_emote_motion_spec.json",
+    )
     args = parser.parse_args()
-    return build_assets(args.check)
+    return build_assets(args.check, args.asset_root.resolve())
 
 
 if __name__ == "__main__":
