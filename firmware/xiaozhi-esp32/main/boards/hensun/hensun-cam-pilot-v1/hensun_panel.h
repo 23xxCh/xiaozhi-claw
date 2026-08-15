@@ -9,6 +9,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 
 class HensunPanel final {
 public:
@@ -33,9 +34,11 @@ public:
                                const void* data, emote_gen_player_handle_t manager);
 
 private:
+    static void AnimationFlushWatchdogEntry(void* context);
+    void AnimationFlushWatchdog();
     static bool IoReadyCallback(esp_lcd_panel_io_handle_t panel_io,
-                                esp_lcd_panel_io_event_data_t* event_data,
-                                void* user_ctx);
+                                 esp_lcd_panel_io_event_data_t* event_data,
+                                 void* user_ctx);
 
     static HensunPanel* active_panel_;
 
@@ -43,8 +46,10 @@ private:
     int height_ = 0;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
-    emote_gen_player_handle_t player_ = nullptr;
+    std::atomic<emote_gen_player_handle_t> player_{nullptr};
     SemaphoreHandle_t preview_flush_semaphore_ = nullptr;
+    TaskHandle_t animation_flush_watchdog_task_ = nullptr;
     std::atomic<bool> preview_flush_pending_{false};
     std::atomic<uint32_t> animation_flushes_pending_{0};
+    std::atomic<int64_t> animation_flush_started_us_{0};
 };
