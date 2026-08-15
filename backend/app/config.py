@@ -116,7 +116,11 @@ class Settings(BaseSettings):
             if bad:
                 raise ValueError(f"Unsafe production secrets: {', '.join(bad)}")
 
-        if self.provider_mode == "custom":
+        # Development and tests may instantiate one provider adapter in isolation.
+        # Full-chain completeness is a production boundary (and is also checked
+        # when the realtime provider set is assembled), not a Settings constructor
+        # invariant for every local adapter test.
+        if self.app_env == "production" and self.provider_mode == "custom":
             custom = {
                 "asr_url": self.asr_url,
                 "asr_api_key": self.asr_api_key,

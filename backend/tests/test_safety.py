@@ -38,13 +38,30 @@ def test_production_rejects_development_secrets() -> None:
         Settings(_env_file=None, app_env="production", provider_mode="custom")
 
 
-def test_custom_provider_requires_all_model_endpoints() -> None:
+def test_production_custom_provider_requires_all_model_endpoints() -> None:
     with pytest.raises(ValueError, match="Missing custom provider settings"):
         Settings(
             _env_file=None,
+            app_env="production",
             provider_mode="custom",
+            admin_api_key="a" * 32,
+            jwt_secret="b" * 32,
+            device_credential_pepper="c" * 32,
+            memory_master_key="d" * 32,
+            email_otp_secret="e" * 32,
             asr_url="https://asr.example/v1/audio/transcriptions",
         )
+
+
+def test_development_can_instantiate_one_custom_provider_in_isolation() -> None:
+    settings = Settings(
+        _env_file=None,
+        provider_mode="custom",
+        asr_url="https://asr.example/v1/audio/transcriptions",
+        asr_api_key="asr-secret",
+        asr_model="asr-model",
+    )
+    assert settings.asr_model == "asr-model"
 
 
 def test_custom_provider_accepts_separate_asr_tts_and_llm_models() -> None:
