@@ -31,6 +31,7 @@ dev = [
   "pytest-asyncio>=1.1,<2",
   "psutil>=7,<8",
   "ruff>=0.12,<1",
+  "mypy>=1.17,<2",
 ]
 
 [tool.setuptools.packages.find]
@@ -48,3 +49,9 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+exclude = ["backend/tests/"]
+check_untyped_defs = true
+warn_unused_ignores = true

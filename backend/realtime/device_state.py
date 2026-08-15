@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -110,11 +111,12 @@ async def handle_device_config_ack(
             return
 
         if applied_values is None and isinstance(legacy_applied, dict):
-            applied_values = {}
+            legacy_values: dict[str, object] = {}
             if "speaker_volume" in legacy_applied:
-                applied_values["audio.speaker_volume"] = legacy_applied["speaker_volume"]
+                legacy_values["audio.speaker_volume"] = legacy_applied["speaker_volume"]
             if "screen_brightness" in legacy_applied:
-                applied_values["display.brightness"] = legacy_applied["screen_brightness"]
+                legacy_values["display.brightness"] = legacy_applied["screen_brightness"]
+            applied_values = legacy_values
         if not isinstance(applied_values, dict):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-ack-payload"
@@ -123,7 +125,7 @@ async def handle_device_config_ack(
             await session.commit()
             return
         try:
-            validated_values = validate_device_config(applied_values)
+            validated_values = validate_device_config(cast(dict[str, object], applied_values))
         except (PermissionError, ValueError):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-ack-values"
@@ -138,7 +140,7 @@ async def handle_device_config_ack(
         if config_version >= configuration.applied_version:
             configuration.applied_version = config_version
             configuration.schema_version = schema_version
-            configuration.applied_values = validated_values
+            configuration.applied_values = cast(dict[str, object], validated_values)
             speaker_volume = validated_values.get("audio.speaker_volume")
             screen_brightness = validated_values.get("display.brightness")
             if isinstance(speaker_volume, int):

@@ -211,7 +211,9 @@ async def process_turn(
     provider_settings = getattr(providers, "settings", websocket.app.state.settings)
     search_provider = create_search_provider(provider_settings)
     tool_registry = ToolRegistry(search_provider=search_provider)
-    enabled_tools = {name: enabled for name, enabled in snapshot.tools.items() if enabled}
+    enabled_tools: dict[str, bool] = {
+        name: enabled for name, enabled in snapshot.tools.items() if enabled
+    }
     tool_schemas = tool_registry.definitions(enabled_tools)
     if mcp_client is not None:
         tool_schemas.extend(mcp_client.openai_tools(enabled_tools))
@@ -355,18 +357,28 @@ async def process_turn(
             await speak(safety.fixed_response)
         else:
             try:
-                llm_kwargs: dict[str, object] = {}
+                llm = llm_for(providers, snapshot.llm_provider)
                 if tool_schemas:
-                    llm_kwargs = {"tools": tool_schemas, "tool_executor": execute_tool}
-                async for token in llm_for(providers, snapshot.llm_provider).reply_stream(
-                    transcript,
-                    history,
-                    snapshot.memories,
-                    system_prompt=snapshot.system_prompt,
-                    model=snapshot.llm_model,
-                    temperature=snapshot.llm_temperature,
-                    **llm_kwargs,
-                ):
+                    token_stream = llm.reply_stream(
+                        transcript,
+                        history,
+                        snapshot.memories,
+                        system_prompt=snapshot.system_prompt,
+                        model=snapshot.llm_model,
+                        temperature=snapshot.llm_temperature,
+                        tools=tool_schemas,
+                        tool_executor=execute_tool,
+                    )
+                else:
+                    token_stream = llm.reply_stream(
+                        transcript,
+                        history,
+                        snapshot.memories,
+                        system_prompt=snapshot.system_prompt,
+                        model=snapshot.llm_model,
+                        temperature=snapshot.llm_temperature,
+                    )
+                async for token in token_stream:
                     reply_parts.append(token)
                     for sentence in sentence_buffer.feed(token):
                         output_safety = evaluate_text(sentence)

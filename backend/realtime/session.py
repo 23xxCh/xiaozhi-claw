@@ -318,12 +318,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     )
                     await session.commit()
                 if not policy.allowed:
+                    policy_message = policy.message or "当前使用规则暂不允许继续对话。"
                     await websocket.app.state.device_connections.send_json(
                         serial,
                         {
                             "type": "alert",
                             "status": policy.code,
-                            "message": policy.message,
+                            "message": policy_message,
                         },
                     )
                     await websocket.app.state.device_connections.send_json(
@@ -335,7 +336,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             serial,
                             snapshot.voice,
                             snapshot.tts_speech_rate,
-                            policy.message,
+                            policy_message,
                             playback,
                             tts_provider=snapshot.tts_provider,
                             tts_model=snapshot.tts_model,

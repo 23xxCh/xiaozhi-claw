@@ -301,7 +301,7 @@ class ToolRegistry:
                 {"query": {"type": "string", "minLength": 2, "maxLength": 160}},
             ),
         ):
-            handler = _unconfigured_remote_tool
+            handler: ToolHandler = _unconfigured_remote_tool
             if search_provider is not None:
                 handler = (
                     _search_handler(search_provider)

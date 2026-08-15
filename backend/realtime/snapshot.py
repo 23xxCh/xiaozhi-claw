@@ -44,6 +44,7 @@ class AgentSnapshot:
 
 
 async def load_snapshot(session: AsyncSession, device: Device, settings) -> AgentSnapshot:
+    agent: Agent | None
     if device.active_agent_id is None:
         user = await session.get(User, device.owner_user_id)
         if user is None:

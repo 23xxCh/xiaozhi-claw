@@ -200,7 +200,7 @@ async def admin_metrics(
             ConversationSession.started_at < offline_cutoff,
         )
     )
-    latencies = list(
+    raw_latencies = list(
         await session.scalars(
             select(ConversationSession.first_audio_latency_ms).where(
                 ConversationSession.started_at >= since_30d,
@@ -208,6 +208,7 @@ async def admin_metrics(
             )
         )
     )
+    latencies = [latency for latency in raw_latencies if latency is not None]
 
     fallback_condition = ProviderUsage.error_code.like("fallback-%")
     error_condition = and_(

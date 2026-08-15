@@ -63,7 +63,7 @@ class RealtimeAsrSession(Protocol):
 
 
 class RealtimeLlmProvider(Protocol):
-    async def reply_stream(
+    def reply_stream(
         self,
         transcript: str,
         history: list[dict[str, str]],
@@ -78,7 +78,7 @@ class RealtimeLlmProvider(Protocol):
 
 
 class RealtimeTtsSession(Protocol):
-    async def synthesize(self, text: str) -> AsyncIterator[bytes]: ...
+    def synthesize(self, text: str) -> AsyncIterator[bytes]: ...
 
     async def finish(self) -> None: ...
 
@@ -302,7 +302,7 @@ class DeepSeekStreamingLlmProvider:
                     + "\n".join(f"- {item}" for item in memories[:10]),
                 }
             )
-        messages.extend(history[-10:])
+        messages.extend(dict(item) for item in history[-10:])
         messages.append({"role": "user", "content": transcript})
         base_url = self.base_url.rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
@@ -631,14 +631,14 @@ async def open_asr_for(
     selector = getattr(providers, "open_asr_for", None)
     if selector is not None:
         return await selector(provider_id, model)
-    return await providers.open_asr()  # type: ignore[attr-defined,no-any-return]
+    return await providers.open_asr()  # type: ignore[attr-defined]
 
 
 def llm_for(providers: object, provider_id: str) -> RealtimeLlmProvider:
     selector = getattr(providers, "llm_for", None)
     if selector is not None:
         return selector(provider_id)
-    return providers.llm  # type: ignore[attr-defined,no-any-return]
+    return providers.llm  # type: ignore[attr-defined]
 
 
 async def open_tts_for(
@@ -651,7 +651,7 @@ async def open_tts_for(
     selector = getattr(providers, "open_tts_for", None)
     if selector is not None:
         return await selector(provider_id, model, voice, speech_rate)
-    return await providers.open_tts(voice, speech_rate)  # type: ignore[attr-defined,no-any-return]
+    return await providers.open_tts(voice, speech_rate)  # type: ignore[attr-defined]
 
 
 def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:

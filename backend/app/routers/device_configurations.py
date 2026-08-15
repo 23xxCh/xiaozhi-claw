@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -53,11 +54,18 @@ async def _configuration(session: AsyncSession, device_id: str) -> DeviceConfigu
 
 def _desired_values(configuration: DeviceConfiguration) -> dict[str, int | str]:
     values = default_device_config()
-    values.update(configuration.desired_values or {})
+    stored_values = configuration.desired_values or {}
+    values.update(
+        {
+            key: value
+            for key, value in stored_values.items()
+            if isinstance(value, (int, str)) and not isinstance(value, bool)
+        }
+    )
     if not configuration.desired_values:
         values["audio.speaker_volume"] = configuration.speaker_volume
         values["display.brightness"] = configuration.screen_brightness
-        configuration.desired_values = values
+        configuration.desired_values = cast(dict[str, object], values)
     return values
 
 
@@ -77,12 +85,14 @@ def _response(
     configuration: DeviceConfiguration, command_id: str | None = None
 ) -> DeviceConfigurationResponse:
     values = _desired_values(configuration)
-    applied_values = configuration.applied_values
+    applied_values = cast(
+        dict[str, int | str] | None, configuration.applied_values
+    )
     if (
         configuration.last_error_code
         and configuration.applied_version < configuration.desired_version
     ):
-        sync_status = "failed"
+        sync_status: Literal["unknown", "pending", "synced", "failed"] = "failed"
     elif configuration.applied_version < configuration.desired_version:
         sync_status = "pending"
     elif not applied_values and configuration.applied_speaker_volume is None:
@@ -162,7 +172,7 @@ async def _update_configuration(
     values = _desired_values(configuration)
     values.update(patch)
     configuration.schema_version = DEVICE_CONFIG_SCHEMA_VERSION
-    configuration.desired_values = values
+    configuration.desired_values = cast(dict[str, object], values)
     configuration.speaker_volume = int(values["audio.speaker_volume"])
     configuration.screen_brightness = int(values["display.brightness"])
     configuration.desired_version += 1

@@ -1,3 +1,5 @@
+from typing import Literal, cast
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +29,9 @@ router = APIRouter(prefix="/v1", tags=["profiles"])
 def _response(profile: UsageProfile) -> UsageProfileResponse:
     return UsageProfileResponse(
         id=profile.id,
-        kind=profile.kind,
+        kind=cast(Literal["adult", "youth"], profile.kind),
         display_name=profile.display_name,
-        age_band=profile.age_band,
+        age_band=cast(Literal["12_13", "14_17"] | None, profile.age_band),
         guardian_consent_version=profile.guardian_consent_version,
         guardian_consent_at=profile.guardian_consent_at,
         memory_consent=profile.memory_consent,

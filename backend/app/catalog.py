@@ -1,3 +1,5 @@
+from typing import cast
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,14 +93,18 @@ async def ensure_catalog(session: AsyncSession) -> None:
                 preset.tts_cost_micros_per_10k_chars,
             )
         ):
-            preset.asr_cost_micros_per_minute = values["asr_cost_micros_per_minute"]
-            preset.llm_input_cost_micros_per_million_tokens = values[
-                "llm_input_cost_micros_per_million_tokens"
-            ]
-            preset.llm_output_cost_micros_per_million_tokens = values[
-                "llm_output_cost_micros_per_million_tokens"
-            ]
-            preset.tts_cost_micros_per_10k_chars = values["tts_cost_micros_per_10k_chars"]
+            preset.asr_cost_micros_per_minute = cast(
+                int, values["asr_cost_micros_per_minute"]
+            )
+            preset.llm_input_cost_micros_per_million_tokens = cast(
+                int, values["llm_input_cost_micros_per_million_tokens"]
+            )
+            preset.llm_output_cost_micros_per_million_tokens = cast(
+                int, values["llm_output_cost_micros_per_million_tokens"]
+            )
+            preset.tts_cost_micros_per_10k_chars = cast(
+                int, values["tts_cost_micros_per_10k_chars"]
+            )
     for values in DEFAULT_VOICE_PRESETS:
         if await session.get(VoicePreset, values["id"]) is None:
             session.add(VoicePreset(**values))

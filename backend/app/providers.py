@@ -1,6 +1,6 @@
 import base64
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -57,7 +57,7 @@ class OpenAICompatibleSpeechProvider:
         self.client = client
         self.normalizer = normalizer or FfmpegOpusNormalizer(settings.ffmpeg_path)
 
-    async def _post(self, url: str, **kwargs: object) -> httpx.Response:
+    async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
         if self.client is not None:
             return await self.client.post(url, **kwargs)
         async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
@@ -141,7 +141,7 @@ class QwenDashScopeSpeechProvider:
         self.normalizer = normalizer or FfmpegOpusNormalizer(settings.ffmpeg_path)
         self.last_emotion: str | None = None
 
-    async def _post(self, url: str, **kwargs: object) -> httpx.Response:
+    async def _post(self, url: str, **kwargs: Any) -> httpx.Response:
         if self.client is not None:
             return await self.client.post(url, **kwargs)
         async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
@@ -221,7 +221,7 @@ class OpenAICompatibleLlmProvider:
         self.settings = settings
         self.client = client
 
-    async def _post(self, **kwargs: object) -> httpx.Response:
+    async def _post(self, **kwargs: Any) -> httpx.Response:
         if self.client is not None:
             return await self.client.post(
                 _append_path(self.settings.llm_url, "/chat/completions"), **kwargs
@@ -272,7 +272,7 @@ def create_providers(settings: Settings) -> ProviderBundle:
         or settings.tts_protocol == "dashscope-generation"
     )
     if uses_dashscope_speech:
-        speech = QwenDashScopeSpeechProvider(settings)
+        speech: SpeechProvider = QwenDashScopeSpeechProvider(settings)
     else:
         speech = OpenAICompatibleSpeechProvider(settings)
     return ProviderBundle(

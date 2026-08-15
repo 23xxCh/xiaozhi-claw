@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -50,7 +51,12 @@ async def onboarding_status(
     heartbeat = latest_session.heartbeat_at if latest_session else None
     if heartbeat is not None and heartbeat.tzinfo is None:
         heartbeat = heartbeat.replace(tzinfo=UTC)
-    online = bool(latest_session and latest_session.status == "online" and heartbeat >= cutoff)
+    online = bool(
+        latest_session
+        and latest_session.status == "online"
+        and heartbeat is not None
+        and heartbeat >= cutoff
+    )
     first_conversation = await session.scalar(
         select(ConversationSession.id).where(
             ConversationSession.user_id == user.id,
@@ -59,7 +65,13 @@ async def onboarding_status(
     )
     completed = first_conversation is not None
     if not configured:
-        next_action = "configure_assistant"
+        next_action: Literal[
+            "bind_device",
+            "configure_assistant",
+            "bring_device_online",
+            "start_conversation",
+            "complete",
+        ] = "configure_assistant"
     elif not online:
         next_action = "bring_device_online"
     elif not completed:
