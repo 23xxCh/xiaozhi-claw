@@ -606,6 +606,40 @@ export interface paths {
         patch: operations["admin_update_device_configuration_v1_admin_devices__device_id__configuration_patch"];
         trace?: never;
     };
+    "/v1/devices/{device_id}/standby": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enter Device Standby */
+        post: operations["enter_device_standby_v1_devices__device_id__standby_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/{device_id}/commands/{command_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Device Command */
+        get: operations["get_device_command_v1_devices__device_id__commands__command_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/devices/{device_id}/memories": {
         parameters: {
             query?: never;
@@ -1038,6 +1072,12 @@ export interface components {
             firmware_version: string;
             /** Last Seen At */
             last_seen_at: string | null;
+            /** Runtime State */
+            runtime_state: string;
+            /** Runtime State At */
+            runtime_state_at: string | null;
+            /** Runtime Reason */
+            runtime_reason: string | null;
         };
         /** AdminModelPresetResponse */
         AdminModelPresetResponse: {
@@ -1326,6 +1366,31 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** DeviceCommandResponse */
+        DeviceCommandResponse: {
+            /** Command Id */
+            command_id: string;
+            /** Device Id */
+            device_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "delivered" | "applied" | "failed" | "expired";
+            /** Error Code */
+            error_code: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Delivered At */
+            delivered_at: string | null;
+            /** Applied At */
+            applied_at: string | null;
+        };
         /** DeviceConfigurationFieldResponse */
         DeviceConfigurationFieldResponse: {
             /** Key */
@@ -1469,6 +1534,15 @@ export interface components {
              * @default 1
              */
             device_config_schema_version: number;
+            /**
+             * Runtime State
+             * @default offline
+             */
+            runtime_state: string;
+            /** Runtime State At */
+            runtime_state_at?: string | null;
+            /** Runtime Reason */
+            runtime_reason?: string | null;
         };
         /** DeviceFaceEventRequest */
         DeviceFaceEventRequest: {
@@ -3291,6 +3365,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceConfigurationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enter_device_standby_v1_devices__device_id__standby_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_device_command_v1_devices__device_id__commands__command_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path: {
+                device_id: string;
+                command_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommandResponse"];
                 };
             };
             /** @description Validation Error */

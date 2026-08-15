@@ -9,6 +9,7 @@ import type {
   Device,
   DeviceConfiguration,
   DeviceConfigurationSchema,
+  DeviceCommand,
   UsageProfile,
 } from "@/lib/types";
 
@@ -92,6 +93,34 @@ export default function DevicesPage() {
     finally { setSubmitting(false); }
   }
 
+  async function enterStandby(device: Device) {
+    setError(null); setMessage(null); setSubmitting(true);
+    try {
+      const command = await unwrapTyped<DeviceCommand>(typedApi.POST("/v1/devices/{device_id}/standby", {
+        params: { path: { device_id: device.id } },
+      }));
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const current = await unwrapTyped<DeviceCommand>(typedApi.GET("/v1/devices/{device_id}/commands/{command_id}", {
+          params: { path: { device_id: device.id, command_id: command.command_id } },
+        }));
+        if (current.status === "applied") {
+          setMessage("设备已结束当前对话并进入待机。");
+          await load();
+          return;
+        }
+        if (current.status === "failed" || current.status === "expired") {
+          throw new Error(current.status === "expired" ? "设备没有及时确认待机，请确认设备在线后重试" : "设备未能进入待机，请重试");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+      }
+      throw new Error("命令已发送，但设备还没有确认待机，请稍后查看状态");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "结束对话失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (!ready) return <Loading cards={2} />;
   return (
     <>
@@ -111,14 +140,26 @@ export default function DevicesPage() {
           const profile = profiles.find((item) => item.id === device.active_profile_id);
           const configuration = configurations[device.id];
           const configurationSchema = configurationSchemas[device.id];
+          const standby = device.runtime_state === "standby";
+          const runtimeLabel = standby
+            ? "待机中"
+            : device.online && device.runtime_state === "speaking"
+              ? "正在回复"
+              : device.online && device.runtime_state === "listening"
+                ? "正在聆听"
+                : device.online
+                  ? "在线，可以聊天"
+                  : "离线";
           return (
             <section className="card stack" key={device.id}>
-              <div className="split"><h2>{device.name}</h2><span className={`status ${device.online ? "online" : "warning"}`}>{device.online ? "在线，可以聊天" : "离线"}</span></div>
-              {!device.online ? <InlineResult tone="warning">请确认本机服务正在运行、设备与电脑连接同一 Wi‑Fi，然后重启设备。</InlineResult> : null}
+              <div className="split"><h2>{device.name}</h2><span className={`status ${device.online || standby ? "online" : "warning"}`}>{runtimeLabel}</span></div>
+              {standby ? <InlineResult>待机中，可说“你好小灿”或按 BOOT 唤醒。</InlineResult> : null}
+              {!device.online && !standby ? <InlineResult tone="warning">请确认本机服务正在运行、设备与电脑连接同一 Wi‑Fi，然后重启设备。</InlineResult> : null}
+              {device.online && !standby ? <button className="button secondary" type="button" disabled={submitting} onClick={() => void enterStandby(device)}>{submitting ? "正在等待设备确认…" : "结束对话并待机"}</button> : null}
               <div className="field"><label htmlFor={`agent-${device.id}`}>当前助手</label><select id={`agent-${device.id}`} value={device.active_agent_id ?? ""} disabled={submitting} onChange={(event) => void update(device, { active_agent_id: event.target.value })}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></div>
               <div><span className="label">当前使用者</span><p style={{ margin: "5px 0 0" }}>{profile?.display_name ?? "本人"} <span className="hint">· {profile?.kind === "youth" ? "家庭档案" : "成人档案"}</span></p></div>
               {configuration && configurationSchema ? <form className="card soft stack" key={configuration.desired_version} onSubmit={(event) => void saveConfiguration(event, device)}>
-                <div className="split"><h3>声音与屏幕</h3><span className={`status ${configuration.sync_status === "synced" ? "online" : "warning"}`}>{configuration.sync_status === "synced" ? `已生效 v${configuration.applied_version}` : configuration.sync_status === "failed" ? "应用失败" : configuration.sync_status === "pending" ? "等待设备确认" : "尚未确认"}</span></div>
+                <div className="split"><h3>设备设置</h3><span className={`status ${configuration.sync_status === "synced" ? "online" : "warning"}`}>{configuration.sync_status === "synced" ? `已生效 v${configuration.applied_version}` : configuration.sync_status === "failed" ? "应用失败" : configuration.sync_status === "pending" ? "等待设备确认" : "尚未确认"}</span></div>
                 {configuration.sync_status === "pending" ? <div className="hint">{device.online ? "配置已经下发，收到设备回执后会显示已生效。" : "设备离线；配置已排队，上线后自动下发。"}</div> : null}
                 {configuration.sync_status === "failed" ? <InlineResult tone="warning">设备拒绝了这次设置：{configuration.last_error_code ?? "未知原因"}。请恢复到有效范围后重试。</InlineResult> : null}
                 {configurationSchema.fields.map((field) => {

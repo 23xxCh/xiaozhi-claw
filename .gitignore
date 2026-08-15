@@ -28,6 +28,7 @@ web/.next/
 web/.env.local
 web/playwright-report/
 web/test-results/
+web/*.tsbuildinfo
 backups/
 build/
 run/

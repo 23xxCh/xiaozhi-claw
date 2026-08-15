@@ -7,6 +7,7 @@ export type DeviceConfigurationField =
   components["schemas"]["DeviceConfigurationFieldResponse"];
 export type DeviceConfigurationSchema =
   components["schemas"]["DeviceConfigurationSchemaResponse"];
+export type DeviceCommand = components["schemas"]["DeviceCommandResponse"];
 export type ModelPreset = components["schemas"]["ModelPresetResponse"];
 export type VoicePreset = components["schemas"]["VoicePresetResponse"];
 export type Usage = components["schemas"]["UsageSummaryResponse"];
