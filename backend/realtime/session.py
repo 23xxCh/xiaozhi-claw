@@ -57,6 +57,9 @@ from .providers import (
     RealtimeProviderBundle,
     RealtimeTtsSession,
     TranscriptionResult,
+    llm_for,
+    open_asr_for,
+    open_tts_for,
 )
 from .tools import ToolRegistry, create_search_provider
 
@@ -421,6 +424,9 @@ async def _speak_fixed_message(
     speech_rate: float,
     message: str,
     playback: PlaybackHandshake,
+    *,
+    tts_provider: str = "dashscope",
+    tts_model: str = "qwen3-tts-flash-realtime",
 ) -> bool:
     """Speak a product-owned policy message without invoking the LLM."""
     providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
@@ -442,7 +448,9 @@ async def _speak_fixed_message(
 
     try:
         try:
-            tts = await providers.open_tts(voice, speech_rate)
+            tts = await open_tts_for(
+                providers, tts_provider, tts_model, voice, speech_rate
+            )
         except Exception:
             if fallback is None:
                 raise
@@ -600,8 +608,12 @@ async def _process_turn(
             nonlocal batch_tts, first_audio_latency_ms, tts_started_at, reply_id
             if tts is None and not batch_tts:
                 try:
-                    tts = await providers.open_tts(
-                        snapshot.voice, snapshot.tts_speech_rate
+                    tts = await open_tts_for(
+                        providers,
+                        snapshot.tts_provider,
+                        snapshot.tts_model,
+                        snapshot.voice,
+                        snapshot.tts_speech_rate,
                     )
                 except Exception:
                     if fallback is None:
@@ -644,7 +656,7 @@ async def _process_turn(
                 llm_kwargs: dict[str, object] = {}
                 if tool_schemas:
                     llm_kwargs = {"tools": tool_schemas, "tool_executor": execute_tool}
-                async for token in providers.llm.reply_stream(
+                async for token in llm_for(providers, snapshot.llm_provider).reply_stream(
                     transcript,
                     history,
                     snapshot.memories,
@@ -751,7 +763,9 @@ async def _save_session_summary(
     prompt = "请把这次对话概括为不超过120字的偏好和待办摘要，不要记录敏感原文。"
     parts: list[str] = []
     try:
-        async for token in websocket.app.state.realtime_providers.llm.reply_stream(
+        async for token in llm_for(
+            websocket.app.state.realtime_providers, snapshot.llm_provider
+        ).reply_stream(
             prompt,
             history[-20:],
             [],
@@ -1031,7 +1045,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     logger.warning(
                         "audio arrived before listen.start for %s; opening ASR implicitly", serial
                     )
-                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    active_asr = await open_asr_for(
+                        websocket.app.state.realtime_providers,
+                        snapshot.asr_provider,
+                        snapshot.asr_model,
+                    )
                     audio_bytes = 0
                     audio_frames = 0
                     audio_buffer.clear()
@@ -1199,6 +1217,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             snapshot.tts_speech_rate,
                             policy.message,
                             playback,
+                            tts_provider=snapshot.tts_provider,
+                            tts_model=snapshot.tts_model,
                         )
                     )
                     continue
@@ -1220,6 +1240,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             snapshot.tts_speech_rate,
                             reminder,
                             playback,
+                            tts_provider=snapshot.tts_provider,
+                            tts_model=snapshot.tts_model,
                         )
                     )
                     continuous_reminder_sent = True
@@ -1229,7 +1251,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 # already opens an implicit ASR session for that race; preserve
                 # it here instead of discarding the beginning of the utterance.
                 if active_asr is None:
-                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    active_asr = await open_asr_for(
+                        websocket.app.state.realtime_providers,
+                        snapshot.asr_provider,
+                        snapshot.asr_model,
+                    )
                     audio_bytes = 0
                     audio_frames = 0
                     audio_buffer.clear()

@@ -13,6 +13,7 @@ from websockets.asyncio.client import ClientConnection, connect
 
 from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
+from backend.app.providers import ProviderBundle, create_fallback_providers
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,13 @@ def _raise_if_provider_error(event: dict[str, object], provider: str) -> None:
     else:
         code = str(event.get("code") or event_type or "unknown")
     raise RealtimeProviderError(provider, code)
+
+
+class ProviderNotRegisteredError(LookupError):
+    def __init__(self, kind: str, provider_id: str) -> None:
+        self.kind = kind
+        self.provider_id = provider_id
+        super().__init__(f"{kind} provider is not registered: {provider_id}")
 
 
 class RealtimeAsrSession(Protocol):
@@ -134,9 +142,12 @@ class QwenRealtimeAsrSession:
         self._reader_task: asyncio.Task[None] | None = None
 
     @classmethod
-    async def open(cls, settings: Settings) -> "QwenRealtimeAsrSession":
+    async def open(
+        cls, settings: Settings, *, model: str | None = None
+    ) -> "QwenRealtimeAsrSession":
         url = (
-            f"{settings.qwen_realtime_asr_url.rstrip('/')}?model={settings.qwen_realtime_asr_model}"
+            f"{settings.qwen_realtime_asr_url.rstrip('/')}"
+            f"?model={model or settings.qwen_realtime_asr_model}"
         )
         websocket = await connect(
             url,
@@ -259,8 +270,16 @@ class QwenRealtimeAsrSession:
 
 
 class DeepSeekStreamingLlmProvider:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
         self.settings = settings
+        self.base_url = base_url or settings.llm_url
+        self.api_key = api_key or settings.llm_api_key
 
     async def reply_stream(
         self,
@@ -285,7 +304,7 @@ class DeepSeekStreamingLlmProvider:
             )
         messages.extend(history[-10:])
         messages.append({"role": "user", "content": transcript})
-        base_url = self.settings.llm_url.rstrip("/")
+        base_url = self.base_url.rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         for _ in range(3):
             request: dict[str, object] = {
@@ -303,7 +322,7 @@ class DeepSeekStreamingLlmProvider:
                 async with client.stream(
                     "POST",
                     url,
-                    headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
+                    headers={"Authorization": f"Bearer {self.api_key}"},
                     json=request,
                 ) as response:
                     response.raise_for_status()
@@ -389,10 +408,16 @@ class QwenRealtimeTtsSession:
 
     @classmethod
     async def open(
-        cls, settings: Settings, *, voice: str, speech_rate: float
+        cls,
+        settings: Settings,
+        *,
+        voice: str,
+        speech_rate: float,
+        model: str | None = None,
     ) -> "QwenRealtimeTtsSession":
         url = (
-            f"{settings.qwen_realtime_tts_url.rstrip('/')}?model={settings.qwen_realtime_tts_model}"
+            f"{settings.qwen_realtime_tts_url.rstrip('/')}"
+            f"?model={model or settings.qwen_realtime_tts_model}"
         )
         websocket = await connect(
             url,
@@ -480,30 +505,218 @@ class QwenRealtimeTtsSession:
             self.closed = True
 
 
-@dataclass(frozen=True)
+class BatchAsrSession:
+    def __init__(self, providers: ProviderBundle) -> None:
+        self.providers = providers
+        self.frames: list[bytes] = []
+
+    async def send_audio(self, frame: bytes) -> None:
+        self.frames.append(bytes(frame))
+
+    def endpoint_detected(self) -> bool:
+        return False
+
+    async def finish(self) -> TranscriptionResult:
+        text = await self.providers.speech.transcribe(self.frames)
+        emotion = getattr(self.providers.speech, "last_emotion", None) or "neutral"
+        self.frames.clear()
+        return TranscriptionResult(text=text, emotion=emotion)
+
+    async def cancel(self) -> None:
+        self.frames.clear()
+
+
+class BatchLlmStreamingAdapter:
+    def __init__(self, providers: ProviderBundle) -> None:
+        self.providers = providers
+
+    async def reply_stream(
+        self,
+        transcript: str,
+        history: list[dict[str, str]],
+        memories: list[str],
+        *,
+        system_prompt: str,
+        model: str,
+        temperature: float,
+        tools: list[dict[str, object]] | None = None,
+        tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
+    ) -> AsyncIterator[str]:
+        del history, system_prompt, model, temperature, tools, tool_executor
+        yield await self.providers.llm.reply(transcript, memories)
+
+
+class BatchTtsSession:
+    def __init__(self, providers: ProviderBundle) -> None:
+        self.providers = providers
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        for packet in await self.providers.speech.synthesize(text):
+            yield packet
+
+    async def finish(self) -> None:
+        return None
+
+    async def cancel(self) -> None:
+        return None
+
+
+AsrFactory = Callable[[str], Awaitable[RealtimeAsrSession]]
+TtsFactory = Callable[[str, str, float], Awaitable[RealtimeTtsSession]]
+
+
 class RealtimeProviderBundle:
-    settings: Settings
-    llm: RealtimeLlmProvider
-    mock: bool = False
+    """Provider registry selected by the IDs stored in each ModelPreset.
+
+    The no-argument methods and ``llm`` property remain as a compatibility
+    bridge for tests and older callers. New code selects adapters with the
+    ``*_for`` methods so adding a provider does not change the turn coordinator.
+    """
+
+    def __init__(self, settings: Settings, *, mock: bool = False) -> None:
+        self.settings = settings
+        self.mock = mock
+        self._asr_factories: dict[str, AsrFactory] = {}
+        self._llm_providers: dict[str, RealtimeLlmProvider] = {}
+        self._tts_factories: dict[str, TtsFactory] = {}
+        self._default_asr = "mock" if mock else "dashscope"
+        self._default_llm = "mock" if mock else "deepseek"
+        self._default_tts = "mock" if mock else "dashscope"
+
+    def register_asr(self, provider_id: str, factory: AsrFactory) -> None:
+        self._asr_factories[provider_id] = factory
+
+    def register_llm(self, provider_id: str, provider: RealtimeLlmProvider) -> None:
+        self._llm_providers[provider_id] = provider
+
+    def register_tts(self, provider_id: str, factory: TtsFactory) -> None:
+        self._tts_factories[provider_id] = factory
+
+    async def open_asr_for(self, provider_id: str, model: str) -> RealtimeAsrSession:
+        factory = self._asr_factories.get(provider_id)
+        if factory is None:
+            raise ProviderNotRegisteredError("asr", provider_id)
+        return await factory(model)
+
+    def llm_for(self, provider_id: str) -> RealtimeLlmProvider:
+        provider = self._llm_providers.get(provider_id)
+        if provider is None:
+            raise ProviderNotRegisteredError("llm", provider_id)
+        return provider
+
+    async def open_tts_for(
+        self, provider_id: str, model: str, voice: str, speech_rate: float = 1.0
+    ) -> RealtimeTtsSession:
+        factory = self._tts_factories.get(provider_id)
+        if factory is None:
+            raise ProviderNotRegisteredError("tts", provider_id)
+        return await factory(model, voice, speech_rate)
+
+    @property
+    def llm(self) -> RealtimeLlmProvider:
+        return self.llm_for(self._default_llm)
 
     async def open_asr(self) -> RealtimeAsrSession:
-        if self.mock:
-            return MockAsrSession()
-        return await QwenRealtimeAsrSession.open(self.settings)
+        return await self.open_asr_for(self._default_asr, self.settings.asr_model)
 
     async def open_tts(self, voice: str, speech_rate: float = 1.0) -> RealtimeTtsSession:
-        if self.mock:
-            return MockTtsSession()
-        return await QwenRealtimeTtsSession.open(
-            self.settings, voice=voice, speech_rate=speech_rate
+        return await self.open_tts_for(
+            self._default_tts, self.settings.tts_model, voice, speech_rate
         )
 
 
+async def open_asr_for(
+    providers: object, provider_id: str, model: str
+) -> RealtimeAsrSession:
+    selector = getattr(providers, "open_asr_for", None)
+    if selector is not None:
+        return await selector(provider_id, model)
+    return await providers.open_asr()  # type: ignore[attr-defined,no-any-return]
+
+
+def llm_for(providers: object, provider_id: str) -> RealtimeLlmProvider:
+    selector = getattr(providers, "llm_for", None)
+    if selector is not None:
+        return selector(provider_id)
+    return providers.llm  # type: ignore[attr-defined,no-any-return]
+
+
+async def open_tts_for(
+    providers: object,
+    provider_id: str,
+    model: str,
+    voice: str,
+    speech_rate: float = 1.0,
+) -> RealtimeTtsSession:
+    selector = getattr(providers, "open_tts_for", None)
+    if selector is not None:
+        return await selector(provider_id, model, voice, speech_rate)
+    return await providers.open_tts(voice, speech_rate)  # type: ignore[attr-defined,no-any-return]
+
+
 def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:
-    if settings.provider_mode == "mock":
-        return RealtimeProviderBundle(settings=settings, llm=MockLlmProvider(), mock=True)
-    return RealtimeProviderBundle(
+    registry = RealtimeProviderBundle(
         settings=settings,
-        llm=DeepSeekStreamingLlmProvider(settings),
-        mock=False,
+        mock=settings.providers.mode == "mock",
     )
+    if registry.mock:
+        for provider_id in ("mock", "dashscope", "dashscope-batch"):
+            registry.register_asr(provider_id, lambda model: _open_mock_asr(model))
+            registry.register_tts(provider_id, _open_mock_tts)
+        mock_llm = MockLlmProvider()
+        for provider_id in ("mock", "deepseek", "dashscope"):
+            registry.register_llm(provider_id, mock_llm)
+        return registry
+
+    async def open_qwen_asr(model: str) -> RealtimeAsrSession:
+        return await QwenRealtimeAsrSession.open(settings, model=model)
+
+    async def open_qwen_tts(
+        model: str, voice: str, speech_rate: float
+    ) -> RealtimeTtsSession:
+        return await QwenRealtimeTtsSession.open(
+            settings,
+            model=model,
+            voice=voice,
+            speech_rate=speech_rate,
+        )
+
+    registry.register_asr("dashscope", open_qwen_asr)
+    registry.register_llm("deepseek", DeepSeekStreamingLlmProvider(settings))
+    registry.register_tts("dashscope", open_qwen_tts)
+
+    fallback = create_fallback_providers(settings)
+    if fallback is not None:
+        async def open_batch_asr(model: str) -> RealtimeAsrSession:
+            del model
+            return BatchAsrSession(fallback)
+
+        async def open_batch_tts(
+            model: str, voice: str, speech_rate: float
+        ) -> RealtimeTtsSession:
+            del model, voice, speech_rate
+            return BatchTtsSession(fallback)
+
+        registry.register_asr("dashscope-batch", open_batch_asr)
+        registry.register_llm(
+            "dashscope",
+            DeepSeekStreamingLlmProvider(
+                settings,
+                base_url=settings.providers.fallback_llm.url,
+                api_key=settings.providers.fallback_llm.api_key,
+            ),
+        )
+        registry.register_tts("dashscope-batch", open_batch_tts)
+    return registry
+
+
+async def _open_mock_asr(model: str) -> RealtimeAsrSession:
+    del model
+    return MockAsrSession()
+
+
+async def _open_mock_tts(
+    model: str, voice: str, speech_rate: float
+) -> RealtimeTtsSession:
+    del model, voice, speech_rate
+    return MockTtsSession()

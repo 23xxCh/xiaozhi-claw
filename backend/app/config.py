@@ -1,8 +1,61 @@
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@dataclass(frozen=True, slots=True)
+class SecuritySettings:
+    admin_api_key: str
+    jwt_secret: str
+    device_credential_pepper: str
+    memory_master_key: str
+    email_otp_secret: str
+
+
+@dataclass(frozen=True, slots=True)
+class ControlPlaneSettings:
+    database_url: str
+    ota_base_url: str
+    claim_ttl_seconds: int
+    trial_days: int
+    trial_monthly_turns: int
+    free_monthly_turns: int
+    cors_origins: tuple[str, ...]
+    web_app_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class GatewaySettings:
+    gateway_id: str
+    device_ws_url: str
+    command_poll_interval_seconds: float
+    device_offline_after_seconds: int
+    max_device_audio_queue_frames: int
+    ffmpeg_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderEndpointSettings:
+    provider_id: str
+    url: str
+    api_key: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSettings:
+    mode: Literal["mock", "custom"]
+    timeout_seconds: float
+    realtime_asr: ProviderEndpointSettings
+    realtime_llm: ProviderEndpointSettings
+    realtime_tts: ProviderEndpointSettings
+    fallback_asr: ProviderEndpointSettings
+    fallback_llm: ProviderEndpointSettings
+    fallback_tts: ProviderEndpointSettings
+    fallback_enabled: bool
 
 
 class Settings(BaseSettings):
@@ -99,6 +152,86 @@ class Settings(BaseSettings):
         return {
             item.strip() for item in self.family_mode_openid_whitelist.split(",") if item.strip()
         }
+
+    @property
+    def security(self) -> SecuritySettings:
+        """Typed security view while legacy flat environment names remain compatible."""
+        return SecuritySettings(
+            admin_api_key=self.admin_api_key,
+            jwt_secret=self.jwt_secret,
+            device_credential_pepper=self.device_credential_pepper,
+            memory_master_key=self.memory_master_key,
+            email_otp_secret=self.email_otp_secret,
+        )
+
+    @property
+    def control_plane(self) -> ControlPlaneSettings:
+        return ControlPlaneSettings(
+            database_url=self.database_url,
+            ota_base_url=self.ota_base_url,
+            claim_ttl_seconds=self.claim_ttl_seconds,
+            trial_days=self.trial_days,
+            trial_monthly_turns=self.trial_monthly_turns,
+            free_monthly_turns=self.free_monthly_turns,
+            cors_origins=tuple(self.allowed_origins),
+            web_app_url=self.web_app_url,
+        )
+
+    @property
+    def gateway(self) -> GatewaySettings:
+        return GatewaySettings(
+            gateway_id=self.gateway_id,
+            device_ws_url=self.device_ws_url,
+            command_poll_interval_seconds=self.command_poll_interval_seconds,
+            device_offline_after_seconds=self.device_offline_after_seconds,
+            max_device_audio_queue_frames=self.max_device_audio_queue_frames,
+            ffmpeg_path=self.ffmpeg_path,
+        )
+
+    @property
+    def providers(self) -> ProviderSettings:
+        fallback_key = self.fallback_api_key or self.asr_api_key
+        return ProviderSettings(
+            mode=self.provider_mode,
+            timeout_seconds=self.provider_timeout_seconds,
+            realtime_asr=ProviderEndpointSettings(
+                provider_id="dashscope",
+                url=self.qwen_realtime_asr_url,
+                api_key=self.asr_api_key,
+                model=self.qwen_realtime_asr_model,
+            ),
+            realtime_llm=ProviderEndpointSettings(
+                provider_id="deepseek",
+                url=self.llm_url,
+                api_key=self.llm_api_key,
+                model=self.llm_model,
+            ),
+            realtime_tts=ProviderEndpointSettings(
+                provider_id="dashscope",
+                url=self.qwen_realtime_tts_url,
+                api_key=self.tts_api_key,
+                model=self.qwen_realtime_tts_model,
+            ),
+            fallback_asr=ProviderEndpointSettings(
+                provider_id="dashscope-batch",
+                url=self.fallback_asr_url,
+                api_key=fallback_key,
+                model=self.fallback_asr_model,
+            ),
+            fallback_llm=ProviderEndpointSettings(
+                provider_id="dashscope",
+                url=self.fallback_llm_url,
+                api_key=fallback_key,
+                model=self.fallback_llm_model,
+            ),
+            fallback_tts=ProviderEndpointSettings(
+                provider_id="dashscope-batch",
+                url=self.fallback_tts_url,
+                api_key=fallback_key,
+                model=self.fallback_tts_model,
+            ),
+            fallback_enabled=self.fallback_enabled,
+        )
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":
