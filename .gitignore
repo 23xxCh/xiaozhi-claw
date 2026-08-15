@@ -19,6 +19,7 @@ firmware/xiaozhi-esp32/releases/
 firmware/xiaozhi-esp32/managed_components/
 firmware/xiaozhi-esp32/sdkconfig
 firmware/xiaozhi-esp32/sdkconfig.old
+firmware/xiaozhi-esp32/main/boards/**/config.hensun-build-*.json
 
 # WeChat developer tool output
 miniapp/miniprogram_npm/
