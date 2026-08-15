@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
 
 
 class Base(DeclarativeBase):
@@ -17,8 +16,6 @@ class Base(DeclarativeBase):
 
 def create_engine(database_url: str) -> AsyncEngine:
     options: dict[str, object] = {"pool_pre_ping": True}
-    if database_url.startswith("sqlite"):
-        options["poolclass"] = NullPool
     return create_async_engine(database_url, **options)
 
 
