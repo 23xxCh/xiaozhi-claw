@@ -11,9 +11,9 @@
 
 namespace {
 constexpr char kTag[] = "HensunEmoteDisplay";
-constexpr size_t kShowcaseAnimationCount = 6;
+constexpr size_t kShowcaseAnimationCount = 7;
 constexpr const char* kShowcaseAnimations[kShowcaseAnimationCount] = {
-    "idle", "listening", "thinking", "speaking", "happy", "caring",
+    "idle", "listening", "thinking", "speaking", "happy", "caring", "sleep",
 };
 }  // namespace
 
@@ -39,12 +39,15 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         return;
     }
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
+        standby_ = false;
         speech_envelope_.SetSpeaking(false);
         renderer_.Queue("listening");
     } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
+        standby_ = true;
         speech_envelope_.SetSpeaking(false);
-        renderer_.Queue("idle");
+        renderer_.Queue("sleep");
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
+        standby_ = false;
         speech_envelope_.SetSpeaking(true);
         renderer_.Queue("speaking");
     } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
@@ -60,6 +63,12 @@ void HensunEmoteLabDisplay::ShowNotification(
 }
 
 void HensunEmoteLabDisplay::SetEmotion(const char* emotion) {
+    if (standby_ && (emotion == nullptr || std::strcmp(emotion, "neutral") == 0 ||
+                     std::strcmp(emotion, "idle") == 0)) {
+        speech_envelope_.SetSpeaking(false);
+        renderer_.Queue("sleep");
+        return;
+    }
     const EmotionAnimation mapped = EmotionMapper::Map(emotion);
     speech_envelope_.SetSpeaking(std::strcmp(mapped.name, "speaking") == 0);
     renderer_.Queue(mapped.name, mapped.urgent);
@@ -141,6 +150,6 @@ void HensunEmoteLabDisplay::ShowcaseTask() {
         vTaskDelay(pdMS_TO_TICKS(2200));
     }
     showcase_active_.store(false);
-    renderer_.Queue("idle");
+    renderer_.Queue("sleep");
     vTaskDelete(nullptr);
 }

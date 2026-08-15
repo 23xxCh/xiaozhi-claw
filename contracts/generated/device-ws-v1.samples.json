@@ -7,7 +7,7 @@
     "display_profile_id": "st7789-320x240-landscape-v1",
     "profile_schema_version": 1,
     "profile_sha256": "example",
-    "device_config_schema_version": 1
+    "device_config_schema_version": 2
   },
   "listen": {
     "type": "listen",
@@ -52,5 +52,15 @@
       "audio.speaker_volume": 70,
       "display.brightness": 75
     }
+  },
+  "device_command_ack": {
+    "type": "device_command_ack",
+    "command_id": "example",
+    "status": "applied"
+  },
+  "device_state": {
+    "type": "device_state",
+    "state": "standby",
+    "reason": "idle-timeout"
   }
 }

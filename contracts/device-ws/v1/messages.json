@@ -7,7 +7,9 @@
     "mcp",
     "system",
     "alert",
-    "device_config_ack"
+    "device_config_ack",
+    "device_command_ack",
+    "device_state"
   ],
   "samples": {
     "hello": {
@@ -18,7 +20,7 @@
       "display_profile_id": "st7789-320x240-landscape-v1",
       "profile_schema_version": 1,
       "profile_sha256": "example",
-      "device_config_schema_version": 1
+      "device_config_schema_version": 2
     },
     "listen": {"type": "listen", "state": "start"},
     "tts": {"type": "tts", "state": "ready", "reply_id": "example"},
@@ -39,6 +41,16 @@
       "schema_version": 1,
       "status": "applied",
       "applied_values": {"audio.speaker_volume": 70, "display.brightness": 75}
+    },
+    "device_command_ack": {
+      "type": "device_command_ack",
+      "command_id": "example",
+      "status": "applied"
+    },
+    "device_state": {
+      "type": "device_state",
+      "state": "standby",
+      "reason": "idle-timeout"
     }
   }
 }

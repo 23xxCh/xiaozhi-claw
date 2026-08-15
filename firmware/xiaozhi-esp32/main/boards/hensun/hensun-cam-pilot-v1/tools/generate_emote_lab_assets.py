@@ -16,7 +16,9 @@ from PIL import Image, ImageDraw
 BOARD = Path(__file__).resolve().parents[1]
 DEFAULT_ASSET_ROOT = BOARD / "emote_lab"
 SCALE = 4
-PRIMARY_ANIMATIONS = ("idle", "listening", "thinking", "speaking", "happy", "caring")
+PRIMARY_ANIMATIONS = (
+    "idle", "listening", "thinking", "speaking", "happy", "caring", "sleep"
+)
 
 CANVAS_WIDTH = 240
 CANVAS_HEIGHT = 320
@@ -387,6 +389,40 @@ def draw_caring(image: Image.Image, active: float, phase: float) -> None:
     arc_stroke(image, (120, 201 + breathe), (38, 19), 18, 162, 5, alpha=active * 0.92)
 
 
+def draw_sleep(image: Image.Image, active: float, phase: float) -> None:
+    breathe = math.sin(phase * math.tau)
+    eyelid_y = 153 + breathe * 2.2
+    for x in (76, 164):
+        arc_stroke(
+            image,
+            (x, eyelid_y),
+            (68, 34),
+            18,
+            162,
+            9,
+            alpha=active,
+        )
+    arc_stroke(
+        image,
+        (120, 197 + breathe),
+        (34, 16),
+        198,
+        342,
+        5,
+        alpha=active * 0.88,
+    )
+
+    # A single restrained Z drifts upward once per loop. It is built from the
+    # same rounded strokes as the face so no font asset is required.
+    z_phase = (phase * 1.15) % 1.0
+    z_alpha = active * math.sin(math.pi * clamp(z_phase)) * 0.82
+    z_x = 194 + z_phase * 8
+    z_y = 122 - z_phase * 28
+    pill(image, (z_x, z_y - 7), (18, 5), alpha=z_alpha)
+    pill(image, (z_x, z_y + 7), (18, 5), alpha=z_alpha)
+    pill(image, (z_x, z_y), (22, 5), -38, alpha=z_alpha)
+
+
 DRAWERS: dict[str, Callable[[Image.Image, float, float], None]] = {
     "idle": draw_idle,
     "listening": draw_listening,
@@ -394,6 +430,7 @@ DRAWERS: dict[str, Callable[[Image.Image, float, float], None]] = {
     "speaking": draw_speaking,
     "happy": draw_happy,
     "caring": draw_caring,
+    "sleep": draw_sleep,
 }
 
 
@@ -502,13 +539,15 @@ def build_assets(check: bool, asset_root: Path) -> int:
         }
 
     if not check:
+        columns = 4
+        rows = math.ceil(len(contact_frames) / columns)
         sheet = Image.new(
-            "RGB", (CANVAS_WIDTH * 3, CANVAS_HEIGHT * 2), (0, 0, 0)
+            "RGB", (CANVAS_WIDTH * columns, CANVAS_HEIGHT * rows), (0, 0, 0)
         )
         for index, frame in enumerate(contact_frames):
             sheet.paste(
                 frame,
-                ((index % 3) * CANVAS_WIDTH, (index // 3) * CANVAS_HEIGHT),
+                ((index % columns) * CANVAS_WIDTH, (index // columns) * CANVAS_HEIGHT),
             )
         sheet.save(contact_sheet, optimize=True)
 
@@ -516,15 +555,15 @@ def build_assets(check: bool, asset_root: Path) -> int:
         animation_names = list(PRIMARY_ANIMATIONS)
         for frame_index in range(48):
             preview = Image.new(
-                "RGB", (CANVAS_WIDTH * 3, CANVAS_HEIGHT * 2), (0, 0, 0)
+                "RGB", (CANVAS_WIDTH * columns, CANVAS_HEIGHT * rows), (0, 0, 0)
             )
             for index, name in enumerate(animation_names):
                 frames = animation_frames[name]
                 preview.paste(
                     frames[frame_index % len(frames)],
                     (
-                        (index % 3) * CANVAS_WIDTH,
-                        (index // 3) * CANVAS_HEIGHT,
+                        (index % columns) * CANVAS_WIDTH,
+                        (index // columns) * CANVAS_HEIGHT,
                     ),
                 )
             preview_frames.append(preview)

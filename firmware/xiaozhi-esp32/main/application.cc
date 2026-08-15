@@ -15,13 +15,18 @@
 #include <esp_log.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
+#include <algorithm>
 #include <cstring>
 
 #define TAG "Application"
 
 namespace {
-constexpr int kAutoStopListeningTimeoutTicks = 15;
+constexpr int kMaxAutoStopUtteranceSeconds = 15;
 constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
+constexpr int kDefaultConversationIdleTimeoutSeconds = 3;
+constexpr int kMinimumConversationIdleTimeoutSeconds = 3;
+constexpr int kMaximumConversationIdleTimeoutSeconds = 30;
+constexpr int kStandbyBrightnessPercent = 40;
 }
 
 Application::Application() {
@@ -89,6 +94,12 @@ void Application::Initialize() {
         device_config.GetInt(
             "lip_ref",
             HENSUN_CONFIG_DEFAULT_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE));
+    conversation_idle_timeout_seconds_ = device_config.GetInt(
+        "idle_timeout", kDefaultConversationIdleTimeoutSeconds);
+    if (conversation_idle_timeout_seconds_ < kMinimumConversationIdleTimeoutSeconds ||
+        conversation_idle_timeout_seconds_ > kMaximumConversationIdleTimeoutSeconds) {
+        conversation_idle_timeout_seconds_ = kDefaultConversationIdleTimeoutSeconds;
+    }
     display->SetupUI();
     // Print board name/version info
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
@@ -113,6 +124,7 @@ void Application::Initialize() {
             }
             if (speaking) {
                 vad_speech_detected_ = true;
+                listening_idle_ticks_ = 0;
             } else if (vad_speech_detected_) {
                 vad_speech_detected_ = false;
                 StopListening();
@@ -215,7 +227,7 @@ void Application::Run() {
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
         MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED |
-        MAIN_EVENT_POST_PLAYBACK_GUARD;
+        MAIN_EVENT_POST_PLAYBACK_GUARD | MAIN_EVENT_ENTER_STANDBY;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -275,6 +287,10 @@ void Application::Run() {
             HandleStopListeningEvent();
         }
 
+        if (bits & MAIN_EVENT_ENTER_STANDBY) {
+            HandleEnterStandbyEvent();
+        }
+
         if (bits & MAIN_EVENT_SEND_AUDIO) {
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
                 if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
@@ -314,14 +330,22 @@ void Application::Run() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
-            // Hardware VAD can remain in speech state in a noisy room. Bound
-            // auto listening so a lost silence transition cannot leave the UI
-            // and gateway recording forever. Manual push-to-talk is unaffected.
+            // Only the no-speech follow-up window enters standby. Once speech
+            // starts, ordinary VAD endpoint handling owns the turn so a natural
+            // pause inside an utterance cannot be mistaken for inactivity.
             if (GetDeviceState() == kDeviceStateListening &&
                 listening_mode_ == kListeningModeAutoStop &&
-                clock_ticks_ >= kAutoStopListeningTimeoutTicks) {
-                ESP_LOGW(TAG, "Auto listening timed out; finishing the utterance");
-                StopListening();
+                listening_capture_active_) {
+                if (!vad_speech_detected_) {
+                    listening_idle_ticks_++;
+                    if (listening_idle_ticks_ >= conversation_idle_timeout_seconds_) {
+                        ESP_LOGI(TAG, "Conversation idle timeout; entering standby");
+                        EnterStandby("idle-timeout");
+                    }
+                } else if (clock_ticks_ >= kMaxAutoStopUtteranceSeconds) {
+                    ESP_LOGW(TAG, "Auto listening safety limit reached; finishing utterance");
+                    StopListening();
+                }
             }
 
             // Print debug info every 10 seconds
@@ -718,6 +742,13 @@ void Application::InitializeProtocol() {
                     Schedule([this]() { Reboot(); });
                 } else if (strcmp(command->valuestring, "apply_config") == 0) {
                     HandleDeviceConfig(root);
+                } else if (strcmp(command->valuestring, "enter_standby") == 0) {
+                    auto command_id = cJSON_GetObjectItem(root, "command_id");
+                    if (cJSON_IsString(command_id) && command_id->valuestring[0] != '\0') {
+                        EnterStandby("remote", command_id->valuestring);
+                    } else {
+                        ESP_LOGW(TAG, "Standby command requires command_id");
+                    }
                 } else {
                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
                 }
@@ -785,6 +816,8 @@ void Application::HandleDeviceConfig(const cJSON* root) {
         "speaker", HENSUN_CONFIG_DEFAULT_AUDIO_SPEAKER_VOLUME);
     config.display_brightness = saved.GetInt(
         "brightness", HENSUN_CONFIG_DEFAULT_DISPLAY_BRIGHTNESS);
+    config.conversation_idle_timeout_seconds = saved.GetInt(
+        "idle_timeout", HENSUN_CONFIG_DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS);
     config.audio_wake_threshold = saved.GetInt(
         "wake_threshold", HENSUN_CONFIG_DEFAULT_AUDIO_WAKE_THRESHOLD);
     config.audio_vad_mode = saved.GetString(
@@ -831,6 +864,8 @@ void Application::HandleDeviceConfig(const cJSON* root) {
                  config.audio_speaker_volume) &&
         read_int(HENSUN_CONFIG_KEY_DISPLAY_BRIGHTNESS, "screen_brightness",
                  config.display_brightness) &&
+        read_int(HENSUN_CONFIG_KEY_CONVERSATION_IDLE_TIMEOUT_SECONDS, nullptr,
+                 config.conversation_idle_timeout_seconds) &&
         read_int(HENSUN_CONFIG_KEY_AUDIO_WAKE_THRESHOLD, nullptr,
                  config.audio_wake_threshold) &&
         read_string(HENSUN_CONFIG_KEY_AUDIO_VAD_MODE, config.audio_vad_mode) &&
@@ -849,6 +884,10 @@ void Application::HandleDeviceConfig(const cJSON* root) {
         config.audio_speaker_volume <= HENSUN_CONFIG_MAX_AUDIO_SPEAKER_VOLUME &&
         config.display_brightness >= HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS &&
         config.display_brightness <= HENSUN_CONFIG_MAX_DISPLAY_BRIGHTNESS &&
+        config.conversation_idle_timeout_seconds >=
+            HENSUN_CONFIG_MIN_CONVERSATION_IDLE_TIMEOUT_SECONDS &&
+        config.conversation_idle_timeout_seconds <=
+            HENSUN_CONFIG_MAX_CONVERSATION_IDLE_TIMEOUT_SECONDS &&
         config.audio_wake_threshold >= HENSUN_CONFIG_MIN_AUDIO_WAKE_THRESHOLD &&
         config.audio_wake_threshold <= HENSUN_CONFIG_MAX_AUDIO_WAKE_THRESHOLD &&
         valid_vad_mode &&
@@ -879,8 +918,15 @@ void Application::HandleDeviceConfig(const cJSON* root) {
             return;
         }
         codec->SetOutputVolume(config.audio_speaker_volume);
-        backlight->SetBrightness(
-            static_cast<uint8_t>(config.display_brightness), true);
+        active_display_brightness_ =
+            static_cast<uint8_t>(config.display_brightness);
+        const int applied_brightness = standby_visual_active_
+                                           ? std::max(10, config.display_brightness * 40 / 100)
+                                           : config.display_brightness;
+        backlight->SetBrightness(static_cast<uint8_t>(applied_brightness),
+                                 !standby_visual_active_);
+        conversation_idle_timeout_seconds_ =
+            static_cast<uint8_t>(config.conversation_idle_timeout_seconds);
         if (display != nullptr) {
             display->ConfigureSpeechEnvelope(
                 config.display_lip_sync_noise_floor,
@@ -890,6 +936,7 @@ void Application::HandleDeviceConfig(const cJSON* root) {
         settings.SetInt("version", version);
         settings.SetInt("speaker", config.audio_speaker_volume);
         settings.SetInt("brightness", config.display_brightness);
+        settings.SetInt("idle_timeout", config.conversation_idle_timeout_seconds);
         settings.SetInt("wake_threshold", config.audio_wake_threshold);
         settings.SetString("vad_mode", config.audio_vad_mode);
         settings.SetInt("vad_noise_ms", config.audio_vad_min_noise_ms);
@@ -897,9 +944,10 @@ void Application::HandleDeviceConfig(const cJSON* root) {
         settings.SetInt("lip_ref", config.display_lip_sync_reference_amplitude);
         protocol_->SendDeviceConfigAck(id, version, schema, true, &config);
         ESP_LOGI(TAG,
-                 "Applied device configuration v%d schema=%d (volume=%d, brightness=%d)",
+                 "Applied device configuration v%d schema=%d (volume=%d, brightness=%d, idle_timeout=%d)",
                  version, schema, config.audio_speaker_volume,
-                 config.display_brightness);
+                 config.display_brightness,
+                 config.conversation_idle_timeout_seconds);
     });
 }
 
@@ -981,6 +1029,16 @@ void Application::ToggleChatState() { xEventGroupSetBits(event_group_, MAIN_EVEN
 void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING); }
 
 void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
+
+void Application::EnterStandby(const std::string& reason,
+                               const std::string& command_id) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_standby_reason_ = reason.empty() ? "unknown" : reason;
+        pending_standby_command_id_ = command_id;
+    }
+    xEventGroupSetBits(event_group_, MAIN_EVENT_ENTER_STANDBY);
+}
 
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
@@ -1087,11 +1145,70 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
+        listening_capture_active_ = false;
+        listening_idle_ticks_ = 0;
         if (protocol_) {
             protocol_->SendStopListening();
         }
         SetDeviceState(kDeviceStateIdle);
     }
+}
+
+void Application::HandleEnterStandbyEvent() {
+    std::string reason;
+    std::string command_id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reason = std::move(pending_standby_reason_);
+        command_id = std::move(pending_standby_command_id_);
+        pending_standby_reason_.clear();
+        pending_standby_command_id_.clear();
+    }
+
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring ||
+        state == kDeviceStateAudioTesting || state == kDeviceStateUpgrading ||
+        state == kDeviceStateFatalError) {
+        if (protocol_ && !command_id.empty() && protocol_->IsAudioChannelOpened()) {
+            protocol_->SendDeviceCommandAck(command_id, false, "device-not-ready");
+        }
+        return;
+    }
+
+    pending_listening_start_ = false;
+    post_playback_guard_active_ = false;
+    listening_capture_active_ = false;
+    listening_idle_ticks_ = 0;
+    vad_speech_detected_ = false;
+    play_popup_on_listening_ = false;
+    if (post_playback_listen_timer_handle_ != nullptr) {
+        esp_timer_stop(post_playback_listen_timer_handle_);
+    }
+
+    if (state == kDeviceStateSpeaking) {
+        AbortSpeaking(kAbortReasonNone);
+    } else if (state == kDeviceStateListening && protocol_) {
+        protocol_->SendStopListening();
+    }
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.ResetDecoder();
+    while (audio_service_.PopPacketFromSendQueue()) {
+    }
+    active_tts_reply_id_.clear();
+    pending_tts_stop_reply_id_.clear();
+
+    SetDeviceState(kDeviceStateIdle);
+    auto display = Board::GetInstance().GetDisplay();
+    display->SetEmotion("sleep");
+
+    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+        protocol_->SendDeviceState("standby", reason);
+        if (!command_id.empty()) {
+            protocol_->SendDeviceCommandAck(command_id, true);
+        }
+        protocol_->CloseAudioChannel();
+    }
+    ESP_LOGI(TAG, "Entered soft standby (reason=%s)", reason.c_str());
 }
 
 void Application::HandleWakeWordDetectedEvent() {
@@ -1201,12 +1318,46 @@ void Application::HandleStateChangedEvent() {
     auto led = board.GetLed();
     led->OnStateChanged();
 
+#if defined(CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1) && CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    if (new_state != kDeviceStateIdle && standby_visual_active_) {
+        auto backlight = board.GetBacklight();
+        if (backlight != nullptr) {
+            backlight->SetBrightness(active_display_brightness_);
+        }
+        standby_visual_active_ = false;
+    }
+#endif
+
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
+#if defined(CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1) && CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+            display->SetEmotion("sleep");
+            if (!standby_visual_active_) {
+                auto backlight = board.GetBacklight();
+                if (backlight != nullptr) {
+                    const int current = backlight->brightness();
+                    Settings settings("hensun_config");
+                    active_display_brightness_ = static_cast<uint8_t>(
+                        current >= HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS
+                            ? current
+                            : settings.GetInt(
+                                  "brightness",
+                                  HENSUN_CONFIG_DEFAULT_DISPLAY_BRIGHTNESS));
+                    const int standby_brightness =
+                        active_display_brightness_ * kStandbyBrightnessPercent / 100;
+                    backlight->SetBrightness(static_cast<uint8_t>(
+                        standby_brightness < HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS
+                            ? HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS
+                            : standby_brightness));
+                }
+                standby_visual_active_ = true;
+            }
+#else
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
+#endif
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
             break;
@@ -1256,6 +1407,9 @@ void Application::HandleStateChangedEvent() {
             if (!active_tts_reply_id_.empty() && protocol_) {
                 protocol_->SendTtsState("ready", active_tts_reply_id_);
             }
+            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                protocol_->SendDeviceState("speaking");
+            }
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1276,7 +1430,13 @@ void Application::StartListeningAudio() {
 
     // Send the start listening command
     protocol_->SendStartListening(listening_mode_);
+    if (protocol_->IsAudioChannelOpened()) {
+        protocol_->SendDeviceState("listening");
+    }
     audio_service_.EnableVoiceProcessing(true);
+    listening_capture_active_ = true;
+    listening_idle_ticks_ = 0;
+    clock_ticks_ = 0;
 
     ConfigureWakeWordForListening();
 
@@ -1353,6 +1513,8 @@ void Application::AbortSpeaking(AbortReason reason) {
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     vad_speech_detected_ = false;
+    listening_capture_active_ = false;
+    listening_idle_ticks_ = 0;
     SetDeviceState(kDeviceStateListening);
 }
 

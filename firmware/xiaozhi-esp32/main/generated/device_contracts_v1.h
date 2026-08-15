@@ -3,7 +3,7 @@
 
 #include <string>
 
-#define HENSUN_DEVICE_CONFIG_SCHEMA_VERSION 1
+#define HENSUN_DEVICE_CONFIG_SCHEMA_VERSION 2
 #define HENSUN_DEVICE_WS_PROTOCOL_VERSION 1
 
 #define HENSUN_CONFIG_KEY_AUDIO_SPEAKER_VOLUME "audio.speaker_volume"
@@ -15,6 +15,11 @@
 #define HENSUN_CONFIG_DEFAULT_DISPLAY_BRIGHTNESS 75
 #define HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS 10
 #define HENSUN_CONFIG_MAX_DISPLAY_BRIGHTNESS 100
+
+#define HENSUN_CONFIG_KEY_CONVERSATION_IDLE_TIMEOUT_SECONDS "conversation.idle_timeout_seconds"
+#define HENSUN_CONFIG_DEFAULT_CONVERSATION_IDLE_TIMEOUT_SECONDS 3
+#define HENSUN_CONFIG_MIN_CONVERSATION_IDLE_TIMEOUT_SECONDS 3
+#define HENSUN_CONFIG_MAX_CONVERSATION_IDLE_TIMEOUT_SECONDS 30
 
 #define HENSUN_CONFIG_KEY_AUDIO_WAKE_THRESHOLD "audio.wake_threshold"
 #define HENSUN_CONFIG_DEFAULT_AUDIO_WAKE_THRESHOLD 15
@@ -46,10 +51,13 @@
 #define HENSUN_WS_TYPE_SYSTEM "system"
 #define HENSUN_WS_TYPE_ALERT "alert"
 #define HENSUN_WS_TYPE_DEVICE_CONFIG_ACK "device_config_ack"
+#define HENSUN_WS_TYPE_DEVICE_COMMAND_ACK "device_command_ack"
+#define HENSUN_WS_TYPE_DEVICE_STATE "device_state"
 
 struct HensunDeviceConfigValues {
     int audio_speaker_volume = 70;
     int display_brightness = 75;
+    int conversation_idle_timeout_seconds = 3;
     int audio_wake_threshold = 15;
     std::string audio_vad_mode = "normal";
     int audio_vad_min_noise_ms = 1200;

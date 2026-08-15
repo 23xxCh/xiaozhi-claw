@@ -22,6 +22,9 @@ bool IsOneOf(const char* value, std::initializer_list<const char*> choices) {
 }  // namespace
 
 EmotionAnimation EmotionMapper::Map(const char* emotion) {
+    if (IsOneOf(emotion, {"sleep", "sleep_entered", "standby"})) {
+        return {"sleep", false};
+    }
     if (IsOneOf(emotion, {"neutral", "idle", "idle_entered"})) {
         return {"idle", false};
     }

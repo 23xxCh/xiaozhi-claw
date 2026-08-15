@@ -100,6 +100,14 @@
       "silhouette": "soft lowered eyes with protective inward brows and a tiny smile",
       "motion": "slow warm reveal, subtle inward breathing, steady hold, unhurried release",
       "export_file": "caring_[0.45s,1.65s].gif"
+    },
+    "sleep": {
+      "frames": 60,
+      "loop_start_frame": 8,
+      "loop_end_frame": 54,
+      "silhouette": "two softly closed eyes, a quiet resting mouth and one small drifting Z",
+      "motion": "gentle close, slow breathing loop with one restrained Z, smooth wake return",
+      "export_file": "sleep_[0.40s,2.70s].gif"
     }
   }
 }

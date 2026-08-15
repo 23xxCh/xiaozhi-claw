@@ -34,6 +34,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 #define MAIN_EVENT_POST_PLAYBACK_GUARD  (1 << 14)
+#define MAIN_EVENT_ENTER_STANDBY        (1 << 15)
 
 
 enum AecMode {
@@ -106,6 +107,13 @@ public:
      */
     void StopListening();
 
+    /**
+     * End the active voice session and return to wake-word standby.
+     * This is event-based and safe to call from button or protocol callbacks.
+     */
+    void EnterStandby(const std::string& reason,
+                      const std::string& command_id = "");
+
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
@@ -152,6 +160,13 @@ private:
     std::string active_tts_reply_id_;
     std::string pending_tts_stop_reply_id_;
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started
+    bool listening_capture_active_ = false;
+    int listening_idle_ticks_ = 0;
+    int conversation_idle_timeout_seconds_ = 3;
+    bool standby_visual_active_ = false;
+    uint8_t active_display_brightness_ = 75;
+    std::string pending_standby_reason_;
+    std::string pending_standby_command_id_;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -161,6 +176,7 @@ private:
     void HandleToggleChatEvent();
     void HandleStartListeningEvent();
     void HandleStopListeningEvent();
+    void HandleEnterStandbyEvent();
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();

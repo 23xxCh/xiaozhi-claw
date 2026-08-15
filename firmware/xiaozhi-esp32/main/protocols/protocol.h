@@ -71,6 +71,10 @@ public:
                                      int schema_version, bool applied,
                                      const HensunDeviceConfigValues* values = nullptr,
                                      const std::string& error_code = "");
+    virtual void SendDeviceCommandAck(const std::string& command_id, bool applied,
+                                      const std::string& error_code = "");
+    virtual void SendDeviceState(const std::string& state,
+                                 const std::string& reason = "");
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;

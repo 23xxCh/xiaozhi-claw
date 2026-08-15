@@ -102,10 +102,14 @@ private:
                 ESP_LOGW(TAG, "Ignoring chat button while device is not ready (state=%d)", state);
                 return;
             }
+            if (state == kDeviceStateIdle) {
+                app.ToggleChatState();
+                return;
+            }
             if (state == kDeviceStateSpeaking) {
                 display_->SetEmotion("interrupted");
             }
-            app.ToggleChatState();
+            app.EnterStandby("button");
         });
         boot_button_.OnLongPress([this]() {
             ESP_LOGI(TAG, "BOOT long press");

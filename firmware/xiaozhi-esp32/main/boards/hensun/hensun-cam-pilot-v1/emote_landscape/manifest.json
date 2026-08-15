@@ -1,7 +1,7 @@
 {
   "asset_set": "hensun-emote-landscape-v1",
   "source_spec": "source/hensun_emote_motion_spec.json",
-  "source_spec_sha256": "784de12e2545e21ff6fb06ac09939e8f93d3a6acabae551393847dfd2f2db57c",
+  "source_spec_sha256": "4782315dd4d1584e329edbba53aa6e3b45084f2844f37c6f11a1762525d0f26b",
   "canvas": {
     "width": 320,
     "height": 240,
@@ -74,6 +74,13 @@
       "loop_start_frame": 9,
       "loop_end_frame": 33,
       "sha256": "74f87f6fd4b8652bc259da232d8b649febf762768a11516068a5e3354da66bc4"
+    },
+    "sleep": {
+      "file": "sleep_[0.40s,2.70s].gif",
+      "frames": 60,
+      "loop_start_frame": 8,
+      "loop_end_frame": 54,
+      "sha256": "4129a5310d722388f39870ffecf6fe34481ddc961d62e64a6499404c90bb6991"
     }
   },
   "packer": {
@@ -83,8 +90,8 @@
   },
   "pack": {
     "file": "hensun_emote_landscape_v1.bin",
-    "animation_count": 9,
-    "asset_count": 10,
-    "sha256": "8f82655df95bfe13646ee4984e7fd2717d0fc040d2a8956aa2ef9bac731c23a2"
+    "animation_count": 10,
+    "asset_count": 11,
+    "sha256": "a72ca4b797586fcca48b35483fc6c842cc5c676605555534cc1ecde1b310315f"
   }
 }

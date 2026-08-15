@@ -11,10 +11,10 @@ namespace {
 constexpr char kTag[] = "EmoteRenderer";
 constexpr char kPartitionLabel[] = "emote_gen";
 constexpr int kFrameRate = 20;
-constexpr size_t kExpectedAnimationCount = 9;
+constexpr size_t kExpectedAnimationCount = 10;
 constexpr const char* kExpectedAnimations[kExpectedAnimationCount] = {
     "idle", "listening", "thinking", "speaking", "speaking_0",
-    "speaking_1", "speaking_3", "happy", "caring",
+    "speaking_1", "speaking_3", "happy", "caring", "sleep",
 };
 }  // namespace
 

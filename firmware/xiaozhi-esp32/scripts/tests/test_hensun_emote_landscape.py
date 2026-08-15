@@ -23,6 +23,7 @@ EXPECTED = {
     "speaking_3": (20, 4, 16),
     "happy": (25, 8, 20),
     "caring": (40, 9, 33),
+    "sleep": (60, 8, 54),
 }
 
 
@@ -69,11 +70,11 @@ class HensunEmoteLandscapeTests(unittest.TestCase):
         pack = ASSET_ROOT / manifest["pack"]["file"]
         self.assertLess(pack.stat().st_size, 5 * 1024 * 1024)
         self.assertEqual(manifest["pack"]["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
-        self.assertEqual(manifest["pack"]["animation_count"], 9)
-        self.assertEqual(manifest["pack"]["asset_count"], 10)
+        self.assertEqual(manifest["pack"]["animation_count"], 10)
+        self.assertEqual(manifest["pack"]["asset_count"], 11)
         asset_count, stored_checksum, payload_length = struct.unpack_from("<III", pack.read_bytes())
         payload = pack.read_bytes()[12:]
-        self.assertEqual(asset_count, 10)
+        self.assertEqual(asset_count, 11)
         self.assertEqual(payload_length, len(payload))
         self.assertEqual(stored_checksum, sum(payload) & 0xFFFF)
 

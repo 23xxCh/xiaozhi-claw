@@ -128,6 +128,9 @@ void Protocol::SendDeviceConfigAck(const std::string& command_id, int config_ver
                                 config->audio_speaker_volume);
         cJSON_AddNumberToObject(applied_values, HENSUN_CONFIG_KEY_DISPLAY_BRIGHTNESS,
                                 config->display_brightness);
+        cJSON_AddNumberToObject(
+            applied_values, HENSUN_CONFIG_KEY_CONVERSATION_IDLE_TIMEOUT_SECONDS,
+            config->conversation_idle_timeout_seconds);
         cJSON_AddNumberToObject(applied_values, HENSUN_CONFIG_KEY_AUDIO_WAKE_THRESHOLD,
                                 config->audio_wake_threshold);
         cJSON_AddStringToObject(applied_values, HENSUN_CONFIG_KEY_AUDIO_VAD_MODE,
@@ -147,6 +150,41 @@ void Protocol::SendDeviceConfigAck(const std::string& command_id, int config_ver
                                 config->display_brightness);
     } else {
         cJSON_AddStringToObject(root, "error_code", error_code.c_str());
+    }
+    char* json = cJSON_PrintUnformatted(root);
+    if (json != nullptr) {
+        SendText(json);
+        cJSON_free(json);
+    }
+    cJSON_Delete(root);
+}
+
+void Protocol::SendDeviceCommandAck(const std::string& command_id, bool applied,
+                                    const std::string& error_code) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "device_command_ack");
+    cJSON_AddStringToObject(root, "command_id", command_id.c_str());
+    cJSON_AddStringToObject(root, "status", applied ? "applied" : "failed");
+    if (!applied && !error_code.empty()) {
+        cJSON_AddStringToObject(root, "error_code", error_code.c_str());
+    }
+    char* json = cJSON_PrintUnformatted(root);
+    if (json != nullptr) {
+        SendText(json);
+        cJSON_free(json);
+    }
+    cJSON_Delete(root);
+}
+
+void Protocol::SendDeviceState(const std::string& state,
+                               const std::string& reason) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "device_state");
+    cJSON_AddStringToObject(root, "state", state.c_str());
+    if (!reason.empty()) {
+        cJSON_AddStringToObject(root, "reason", reason.c_str());
     }
     char* json = cJSON_PrintUnformatted(root);
     if (json != nullptr) {

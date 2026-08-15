@@ -46,4 +46,5 @@ private:
     SpeechEnvelope speech_envelope_;
     CameraPreview preview_;
     std::atomic<bool> showcase_active_{false};
+    bool standby_ = false;
 };
