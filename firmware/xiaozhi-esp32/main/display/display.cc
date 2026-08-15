@@ -45,6 +45,12 @@ bool Display::SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
     return false;
 }
 
+void Display::ConfigureSpeechEnvelope(uint32_t noise_floor,
+                                      uint32_t reference_amplitude) {
+    (void)noise_floor;
+    (void)reference_amplitude;
+}
+
 void Display::ClearChatMessages() {
     // Default empty implementation, override in subclasses if needed
 }

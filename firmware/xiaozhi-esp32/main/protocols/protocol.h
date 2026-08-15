@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "generated/device_contracts_v1.h"
+
 struct AudioStreamPacket {
     int sample_rate = 0;
     int frame_duration = 0;
@@ -66,8 +68,8 @@ public:
     virtual void SendTtsState(const std::string& state, const std::string& reply_id);
     virtual void SendMcpMessage(const std::string& message);
     virtual void SendDeviceConfigAck(const std::string& command_id, int config_version,
-                                     bool applied, int speaker_volume,
-                                     int screen_brightness,
+                                     int schema_version, bool applied,
+                                     const HensunDeviceConfigValues* values = nullptr,
                                      const std::string& error_code = "");
 
 protected:

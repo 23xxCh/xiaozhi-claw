@@ -82,6 +82,13 @@ void Application::Initialize() {
 
     // Setup the display
     auto display = board.GetDisplay();
+    Settings device_config("hensun_config");
+    display->ConfigureSpeechEnvelope(
+        device_config.GetInt(
+            "lip_noise", HENSUN_CONFIG_DEFAULT_DISPLAY_LIP_SYNC_NOISE_FLOOR),
+        device_config.GetInt(
+            "lip_ref",
+            HENSUN_CONFIG_DEFAULT_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE));
     display->SetupUI();
     // Print board name/version info
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
@@ -749,51 +756,150 @@ void Application::InitializeProtocol() {
 void Application::HandleDeviceConfig(const cJSON* root) {
     auto command_id = cJSON_GetObjectItem(root, "command_id");
     auto config_version = cJSON_GetObjectItem(root, "config_version");
-    auto config = cJSON_GetObjectItem(root, "config");
-    auto speaker_volume = cJSON_IsObject(config)
-                              ? cJSON_GetObjectItem(config, "speaker_volume")
-                              : nullptr;
-    auto screen_brightness = cJSON_IsObject(config)
-                                 ? cJSON_GetObjectItem(config, "screen_brightness")
-                                 : nullptr;
+    auto schema_version = cJSON_GetObjectItem(root, "schema_version");
+    auto values = cJSON_GetObjectItem(root, "values");
+    auto legacy = cJSON_GetObjectItem(root, "config");
     if (!cJSON_IsString(command_id) || !cJSON_IsNumber(config_version) ||
-        !cJSON_IsNumber(speaker_volume) || !cJSON_IsNumber(screen_brightness)) {
+        (schema_version != nullptr && !cJSON_IsNumber(schema_version)) ||
+        (values != nullptr && !cJSON_IsObject(values)) ||
+        (legacy != nullptr && !cJSON_IsObject(legacy))) {
         ESP_LOGW(TAG, "Device configuration command is malformed");
         return;
     }
 
     const int version = config_version->valueint;
-    const int volume = speaker_volume->valueint;
-    const int brightness = screen_brightness->valueint;
+    const int schema = schema_version == nullptr
+                           ? HENSUN_DEVICE_CONFIG_SCHEMA_VERSION
+                           : schema_version->valueint;
     const std::string id(command_id->valuestring);
     Settings saved("hensun_config");
     const int saved_version = saved.GetInt("version", 0);
     if (version < saved_version) {
-        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "stale-version");
-        return;
-    }
-    if (version < 1 || volume < 10 || volume > 100 || brightness < 10 ||
-        brightness > 100) {
-        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "invalid-config");
+        protocol_->SendDeviceConfigAck(id, version, schema, false, nullptr,
+                                       "stale-version");
         return;
     }
 
-    Schedule([this, id, version, volume, brightness]() {
+    HensunDeviceConfigValues config;
+    config.audio_speaker_volume = saved.GetInt(
+        "speaker", HENSUN_CONFIG_DEFAULT_AUDIO_SPEAKER_VOLUME);
+    config.display_brightness = saved.GetInt(
+        "brightness", HENSUN_CONFIG_DEFAULT_DISPLAY_BRIGHTNESS);
+    config.audio_wake_threshold = saved.GetInt(
+        "wake_threshold", HENSUN_CONFIG_DEFAULT_AUDIO_WAKE_THRESHOLD);
+    config.audio_vad_mode = saved.GetString(
+        "vad_mode", HENSUN_CONFIG_DEFAULT_AUDIO_VAD_MODE);
+    config.audio_vad_min_noise_ms = saved.GetInt(
+        "vad_noise_ms", HENSUN_CONFIG_DEFAULT_AUDIO_VAD_MIN_NOISE_MS);
+    config.display_lip_sync_noise_floor = saved.GetInt(
+        "lip_noise", HENSUN_CONFIG_DEFAULT_DISPLAY_LIP_SYNC_NOISE_FLOOR);
+    config.display_lip_sync_reference_amplitude = saved.GetInt(
+        "lip_ref", HENSUN_CONFIG_DEFAULT_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE);
+
+    auto read_int = [values, legacy](const char* key, const char* legacy_key,
+                                     int& target) {
+        const cJSON* item = cJSON_IsObject(values)
+                                ? cJSON_GetObjectItem(values, key)
+                                : nullptr;
+        if (item == nullptr && legacy_key != nullptr && cJSON_IsObject(legacy)) {
+            item = cJSON_GetObjectItem(legacy, legacy_key);
+        }
+        if (item == nullptr) {
+            return true;
+        }
+        if (!cJSON_IsNumber(item)) {
+            return false;
+        }
+        target = item->valueint;
+        return true;
+    };
+    auto read_string = [values](const char* key, std::string& target) {
+        const cJSON* item = cJSON_IsObject(values)
+                                ? cJSON_GetObjectItem(values, key)
+                                : nullptr;
+        if (item == nullptr) {
+            return true;
+        }
+        if (!cJSON_IsString(item)) {
+            return false;
+        }
+        target = item->valuestring;
+        return true;
+    };
+    const bool parsed =
+        read_int(HENSUN_CONFIG_KEY_AUDIO_SPEAKER_VOLUME, "speaker_volume",
+                 config.audio_speaker_volume) &&
+        read_int(HENSUN_CONFIG_KEY_DISPLAY_BRIGHTNESS, "screen_brightness",
+                 config.display_brightness) &&
+        read_int(HENSUN_CONFIG_KEY_AUDIO_WAKE_THRESHOLD, nullptr,
+                 config.audio_wake_threshold) &&
+        read_string(HENSUN_CONFIG_KEY_AUDIO_VAD_MODE, config.audio_vad_mode) &&
+        read_int(HENSUN_CONFIG_KEY_AUDIO_VAD_MIN_NOISE_MS, nullptr,
+                 config.audio_vad_min_noise_ms) &&
+        read_int(HENSUN_CONFIG_KEY_DISPLAY_LIP_SYNC_NOISE_FLOOR, nullptr,
+                 config.display_lip_sync_noise_floor) &&
+        read_int(HENSUN_CONFIG_KEY_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE, nullptr,
+                 config.display_lip_sync_reference_amplitude);
+    const bool valid_vad_mode = config.audio_vad_mode == "normal" ||
+                                config.audio_vad_mode == "sensitive" ||
+                                config.audio_vad_mode == "conservative";
+    const bool valid =
+        parsed && version >= 1 && schema == HENSUN_DEVICE_CONFIG_SCHEMA_VERSION &&
+        config.audio_speaker_volume >= HENSUN_CONFIG_MIN_AUDIO_SPEAKER_VOLUME &&
+        config.audio_speaker_volume <= HENSUN_CONFIG_MAX_AUDIO_SPEAKER_VOLUME &&
+        config.display_brightness >= HENSUN_CONFIG_MIN_DISPLAY_BRIGHTNESS &&
+        config.display_brightness <= HENSUN_CONFIG_MAX_DISPLAY_BRIGHTNESS &&
+        config.audio_wake_threshold >= HENSUN_CONFIG_MIN_AUDIO_WAKE_THRESHOLD &&
+        config.audio_wake_threshold <= HENSUN_CONFIG_MAX_AUDIO_WAKE_THRESHOLD &&
+        valid_vad_mode &&
+        config.audio_vad_min_noise_ms >= HENSUN_CONFIG_MIN_AUDIO_VAD_MIN_NOISE_MS &&
+        config.audio_vad_min_noise_ms <= HENSUN_CONFIG_MAX_AUDIO_VAD_MIN_NOISE_MS &&
+        config.display_lip_sync_noise_floor >=
+            HENSUN_CONFIG_MIN_DISPLAY_LIP_SYNC_NOISE_FLOOR &&
+        config.display_lip_sync_noise_floor <=
+            HENSUN_CONFIG_MAX_DISPLAY_LIP_SYNC_NOISE_FLOOR &&
+        config.display_lip_sync_reference_amplitude >=
+            HENSUN_CONFIG_MIN_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE &&
+        config.display_lip_sync_reference_amplitude <=
+            HENSUN_CONFIG_MAX_DISPLAY_LIP_SYNC_REFERENCE_AMPLITUDE;
+    if (!valid) {
+        protocol_->SendDeviceConfigAck(id, version, schema, false, nullptr,
+                                       "invalid-config");
+        return;
+    }
+
+    Schedule([this, id, version, schema, config]() {
         auto& board = Board::GetInstance();
         auto codec = board.GetAudioCodec();
         auto backlight = board.GetBacklight();
+        auto display = board.GetDisplay();
         if (codec == nullptr || backlight == nullptr) {
             protocol_->SendDeviceConfigAck(
-                id, version, false, 0, 0, "unsupported-hardware");
+                id, version, schema, false, nullptr, "unsupported-hardware");
             return;
         }
-        codec->SetOutputVolume(volume);
-        backlight->SetBrightness(static_cast<uint8_t>(brightness), true);
+        codec->SetOutputVolume(config.audio_speaker_volume);
+        backlight->SetBrightness(
+            static_cast<uint8_t>(config.display_brightness), true);
+        if (display != nullptr) {
+            display->ConfigureSpeechEnvelope(
+                config.display_lip_sync_noise_floor,
+                config.display_lip_sync_reference_amplitude);
+        }
         Settings settings("hensun_config", true);
         settings.SetInt("version", version);
-        protocol_->SendDeviceConfigAck(id, version, true, volume, brightness);
-        ESP_LOGI(TAG, "Applied device configuration v%d (volume=%d, brightness=%d)",
-                 version, volume, brightness);
+        settings.SetInt("speaker", config.audio_speaker_volume);
+        settings.SetInt("brightness", config.display_brightness);
+        settings.SetInt("wake_threshold", config.audio_wake_threshold);
+        settings.SetString("vad_mode", config.audio_vad_mode);
+        settings.SetInt("vad_noise_ms", config.audio_vad_min_noise_ms);
+        settings.SetInt("lip_noise", config.display_lip_sync_noise_floor);
+        settings.SetInt("lip_ref", config.display_lip_sync_reference_amplitude);
+        protocol_->SendDeviceConfigAck(id, version, schema, true, &config);
+        ESP_LOGI(TAG,
+                 "Applied device configuration v%d schema=%d (volume=%d, brightness=%d)",
+                 version, schema, config.audio_speaker_volume,
+                 config.display_brightness);
     });
 }
 

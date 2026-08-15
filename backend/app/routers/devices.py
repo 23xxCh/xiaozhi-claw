@@ -76,6 +76,10 @@ async def _device_detail_response(
         active_profile_id=device.active_profile_id,
         online=online,
         last_seen_at=device.last_seen_at,
+        hardware_profile_id=device.hardware_profile_id,
+        display_profile_id=device.display_profile_id,
+        profile_schema_version=device.profile_schema_version,
+        device_config_schema_version=device.device_config_schema_version,
     )
 
 

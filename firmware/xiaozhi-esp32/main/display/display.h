@@ -42,6 +42,8 @@ public:
     virtual void SetChatMessage(const char* role, const char* content);
     virtual bool SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
                                  int width, int height, int stride_bytes);
+    virtual void ConfigureSpeechEnvelope(uint32_t noise_floor,
+                                         uint32_t reference_amplitude);
     virtual void ClearChatMessages();
     virtual void SetTheme(Theme* theme);
     virtual Theme* GetTheme() { return current_theme_; }

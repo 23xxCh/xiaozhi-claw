@@ -26,6 +26,8 @@ public:
     void SetChatMessage(const char* role, const char* content) override;
     bool SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
                          int width, int height, int stride_bytes) override;
+    void ConfigureSpeechEnvelope(uint32_t noise_floor,
+                                 uint32_t reference_amplitude) override;
     void UpdateStatusBar(bool update_all = false) override;
     void SetPowerSaveMode(bool on) override;
 

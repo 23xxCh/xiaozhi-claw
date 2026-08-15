@@ -1,0 +1,56 @@
+{
+  "hello": {
+    "type": "hello",
+    "version": 1,
+    "protocol_version": 1,
+    "hardware_profile_id": "hensun-cam-pilot-v1",
+    "display_profile_id": "st7789-320x240-landscape-v1",
+    "profile_schema_version": 1,
+    "profile_sha256": "example",
+    "device_config_schema_version": 1
+  },
+  "listen": {
+    "type": "listen",
+    "state": "start"
+  },
+  "tts": {
+    "type": "tts",
+    "state": "ready",
+    "reply_id": "example"
+  },
+  "mcp": {
+    "type": "mcp",
+    "payload": {
+      "jsonrpc": "2.0",
+      "method": "tools/list"
+    }
+  },
+  "system": {
+    "type": "system",
+    "command": "apply_config",
+    "command_id": "example",
+    "config_version": 1,
+    "schema_version": 1,
+    "values": {
+      "audio.speaker_volume": 70,
+      "display.brightness": 75
+    }
+  },
+  "alert": {
+    "type": "alert",
+    "status": "offline",
+    "message": "网络不可用",
+    "emotion": "caring"
+  },
+  "device_config_ack": {
+    "type": "device_config_ack",
+    "command_id": "example",
+    "config_version": 1,
+    "schema_version": 1,
+    "status": "applied",
+    "applied_values": {
+      "audio.speaker_volume": 70,
+      "display.brightness": 75
+    }
+  }
+}

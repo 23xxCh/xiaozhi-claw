@@ -1960,6 +1960,172 @@
         }
       }
     },
+    "/v1/devices/{device_id}/configuration-schema": {
+      "get": {
+        "tags": [
+          "device-configuration"
+        ],
+        "summary": "Get Device Configuration Schema",
+        "operationId": "get_device_configuration_schema_v1_devices__device_id__configuration_schema_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceConfigurationSchemaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/devices/{device_id}/configuration-schema": {
+      "get": {
+        "tags": [
+          "admin-device-configuration"
+        ],
+        "summary": "Admin Device Configuration Schema",
+        "operationId": "admin_device_configuration_schema_v1_admin_devices__device_id__configuration_schema_get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceConfigurationSchemaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/devices/{device_id}/configuration": {
+      "patch": {
+        "tags": [
+          "admin-device-configuration"
+        ],
+        "summary": "Admin Update Device Configuration",
+        "operationId": "admin_update_device_configuration_v1_admin_devices__device_id__configuration_patch",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceConfigurationUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/devices/{device_id}/memories": {
       "get": {
         "tags": [
@@ -4351,6 +4517,100 @@
         ],
         "title": "DeviceBootstrapResponse"
       },
+      "DeviceConfigurationFieldResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "integer",
+              "string"
+            ],
+            "title": "Type"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "enum": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Default"
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "engineering"
+            ],
+            "title": "Permission"
+          },
+          "apply": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "next_reply",
+              "next_boot"
+            ],
+            "title": "Apply"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "type",
+          "default",
+          "permission",
+          "apply",
+          "label"
+        ],
+        "title": "DeviceConfigurationFieldResponse"
+      },
       "DeviceConfigurationResponse": {
         "properties": {
           "device_id": {
@@ -4364,6 +4624,45 @@
           "applied_version": {
             "type": "integer",
             "title": "Applied Version"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "applied_values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Values"
           },
           "speaker_volume": {
             "type": "integer",
@@ -4450,6 +4749,9 @@
           "device_id",
           "desired_version",
           "applied_version",
+          "schema_version",
+          "values",
+          "applied_values",
           "speaker_volume",
           "screen_brightness",
           "applied_speaker_volume",
@@ -4461,26 +4763,84 @@
         ],
         "title": "DeviceConfigurationResponse"
       },
-      "DeviceConfigurationUpdateRequest": {
+      "DeviceConfigurationSchemaResponse": {
         "properties": {
-          "speaker_volume": {
+          "schema_version": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 10.0,
-            "title": "Speaker Volume"
+            "title": "Schema Version"
           },
-          "screen_brightness": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 10.0,
-            "title": "Screen Brightness"
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceConfigurationFieldResponse"
+            },
+            "type": "array",
+            "title": "Fields"
           }
         },
         "type": "object",
         "required": [
-          "speaker_volume",
-          "screen_brightness"
+          "schema_version",
+          "fields"
         ],
+        "title": "DeviceConfigurationSchemaResponse"
+      },
+      "DeviceConfigurationUpdateRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "default": 1
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values"
+          },
+          "speaker_volume": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 10.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Volume"
+          },
+          "screen_brightness": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100.0,
+                "minimum": 10.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screen Brightness"
+          }
+        },
+        "type": "object",
         "title": "DeviceConfigurationUpdateRequest"
       },
       "DeviceCredentialRotationRequest": {
@@ -4572,6 +4932,44 @@
               }
             ],
             "title": "Last Seen At"
+          },
+          "hardware_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hardware Profile Id"
+          },
+          "display_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Profile Id"
+          },
+          "profile_schema_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Schema Version"
+          },
+          "device_config_schema_version": {
+            "type": "integer",
+            "title": "Device Config Schema Version",
+            "default": 1
           }
         },
         "type": "object",

@@ -635,7 +635,13 @@ void HensunFaceDisplay::SetSpeechLevel(uint8_t level) {
 }
 
 void HensunFaceDisplay::SetSpeechPcm(const std::vector<int16_t>& pcm) {
-    SetSpeechLevel(SpeechEnvelope::MeasureLevel(pcm));
+    SetSpeechLevel(SpeechEnvelope::MeasureLevel(pcm, speech_envelope_parameters_));
+}
+
+void HensunFaceDisplay::ConfigureSpeechEnvelope(
+    uint32_t noise_floor, uint32_t reference_amplitude) {
+    speech_envelope_parameters_.noise_floor = noise_floor;
+    speech_envelope_parameters_.reference_amplitude = reference_amplitude;
 }
 
 void HensunFaceDisplay::AnimationTimerCallback(lv_timer_t* timer) {

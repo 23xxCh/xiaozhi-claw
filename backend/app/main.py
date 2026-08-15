@@ -110,6 +110,7 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
     app.include_router(onboarding.router)
     app.include_router(devices.router)
     app.include_router(device_configurations.router)
+    app.include_router(device_configurations.admin_router)
     app.include_router(memories.router)
     app.include_router(memory_portability.router)
     app.include_router(conversations.router)

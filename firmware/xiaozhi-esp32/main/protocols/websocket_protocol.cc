@@ -3,6 +3,10 @@
 #include "board.h"
 #include "settings.h"
 #include "system_info.h"
+#include "generated/device_contracts_v1.h"
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+#include "hensun_profile_generated.h"
+#endif
 
 #include <esp_log.h>
 #include <arpa/inet.h>
@@ -200,6 +204,19 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "hello");
     cJSON_AddNumberToObject(root, "version", version_);
+    cJSON_AddNumberToObject(root, "protocol_version",
+                            HENSUN_DEVICE_WS_PROTOCOL_VERSION);
+    cJSON_AddNumberToObject(root, "device_config_schema_version",
+                            HENSUN_DEVICE_CONFIG_SCHEMA_VERSION);
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    cJSON_AddStringToObject(root, "hardware_profile_id",
+                            HENSUN_HARDWARE_PROFILE_ID);
+    cJSON_AddStringToObject(root, "display_profile_id",
+                            HENSUN_DISPLAY_PROFILE_ID);
+    cJSON_AddNumberToObject(root, "profile_schema_version",
+                            HENSUN_PROFILE_SCHEMA_VERSION);
+    cJSON_AddStringToObject(root, "profile_sha256", HENSUN_PROFILE_SHA256);
+#endif
     cJSON* features = cJSON_CreateObject();
 #if CONFIG_USE_SERVER_AEC
     cJSON_AddBoolToObject(features, "aec", true);

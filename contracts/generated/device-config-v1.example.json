@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "values": {
+    "audio.speaker_volume": 70,
+    "display.brightness": 75,
+    "audio.wake_threshold": 15,
+    "audio.vad_mode": "normal",
+    "audio.vad_min_noise_ms": 1200,
+    "display.lip_sync_noise_floor": 180,
+    "display.lip_sync_reference_amplitude": 5000
+  }
+}

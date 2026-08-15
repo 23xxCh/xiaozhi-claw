@@ -3,14 +3,21 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { ErrorMessage, InlineResult, Loading, SectionError } from "@/components/page-state";
-import { api } from "@/lib/api";
-import type { Agent, Device, DeviceConfiguration, UsageProfile } from "@/lib/types";
+import { api, typedApi, unwrapTyped } from "@/lib/api";
+import type {
+  Agent,
+  Device,
+  DeviceConfiguration,
+  DeviceConfigurationSchema,
+  UsageProfile,
+} from "@/lib/types";
 
 export default function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<UsageProfile[]>([]);
   const [configurations, setConfigurations] = useState<Record<string, DeviceConfiguration>>({});
+  const [configurationSchemas, setConfigurationSchemas] = useState<Record<string, DeviceConfigurationSchema>>({});
   const [claimCode, setClaimCode] = useState("");
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,10 +31,17 @@ export default function DevicesPage() {
         api<Device[]>("/v1/devices"), api<Agent[]>("/v1/agents"), api<UsageProfile[]>("/v1/profiles"),
       ]);
       const deviceConfigurations = await Promise.all(
-        deviceList.map(async (device) => [device.id, await api<DeviceConfiguration>(`/v1/devices/${device.id}/configuration`)] as const),
+        deviceList.map(async (device) => {
+          const [configuration, schema] = await Promise.all([
+            unwrapTyped<DeviceConfiguration>(typedApi.GET("/v1/devices/{device_id}/configuration", { params: { path: { device_id: device.id } } })),
+            unwrapTyped<DeviceConfigurationSchema>(typedApi.GET("/v1/devices/{device_id}/configuration-schema", { params: { path: { device_id: device.id } } })),
+          ]);
+          return [device.id, { configuration, schema }] as const;
+        }),
       );
       setDevices(deviceList); setAgents(agentList); setProfiles(profileList);
-      setConfigurations(Object.fromEntries(deviceConfigurations));
+      setConfigurations(Object.fromEntries(deviceConfigurations.map(([id, item]) => [id, item.configuration])));
+      setConfigurationSchemas(Object.fromEntries(deviceConfigurations.map(([id, item]) => [id, item.schema])));
       setReady(true); setUpdatedAt(new Date()); setError(null);
     } catch (reason) {
       setReady(true); setError(reason instanceof Error ? reason.message : "设备状态暂时无法更新");
@@ -61,14 +75,17 @@ export default function DevicesPage() {
   async function saveConfiguration(event: FormEvent<HTMLFormElement>, device: Device) {
     event.preventDefault(); setError(null); setMessage(null); setSubmitting(true);
     const data = new FormData(event.currentTarget);
+    const schema = configurationSchemas[device.id];
+    if (!schema) { setError("设备配置定义尚未加载，请重试"); setSubmitting(false); return; }
+    const values = Object.fromEntries(schema.fields.map((field) => {
+      const raw = data.get(field.key);
+      return [field.key, field.type === "integer" ? Number(raw) : String(raw ?? "")];
+    }));
     try {
-      await api(`/v1/devices/${device.id}/configuration`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          speaker_volume: Number(data.get("speaker_volume")),
-          screen_brightness: Number(data.get("screen_brightness")),
-        }),
-      });
+      await unwrapTyped<DeviceConfiguration>(typedApi.PATCH("/v1/devices/{device_id}/configuration", {
+        params: { path: { device_id: device.id } },
+        body: { schema_version: schema.schema_version, values },
+      }));
       setMessage(device.online ? "设置已发送，等待设备确认。" : "设置已保存，设备上线后会自动应用。");
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "设备设置保存失败"); }
@@ -93,18 +110,25 @@ export default function DevicesPage() {
         {devices.map((device) => {
           const profile = profiles.find((item) => item.id === device.active_profile_id);
           const configuration = configurations[device.id];
+          const configurationSchema = configurationSchemas[device.id];
           return (
             <section className="card stack" key={device.id}>
               <div className="split"><h2>{device.name}</h2><span className={`status ${device.online ? "online" : "warning"}`}>{device.online ? "在线，可以聊天" : "离线"}</span></div>
               {!device.online ? <InlineResult tone="warning">请确认本机服务正在运行、设备与电脑连接同一 Wi‑Fi，然后重启设备。</InlineResult> : null}
               <div className="field"><label htmlFor={`agent-${device.id}`}>当前助手</label><select id={`agent-${device.id}`} value={device.active_agent_id ?? ""} disabled={submitting} onChange={(event) => void update(device, { active_agent_id: event.target.value })}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></div>
               <div><span className="label">当前使用者</span><p style={{ margin: "5px 0 0" }}>{profile?.display_name ?? "本人"} <span className="hint">· {profile?.kind === "youth" ? "家庭档案" : "成人档案"}</span></p></div>
-              {configuration ? <form className="card soft stack" key={configuration.desired_version} onSubmit={(event) => void saveConfiguration(event, device)}>
+              {configuration && configurationSchema ? <form className="card soft stack" key={configuration.desired_version} onSubmit={(event) => void saveConfiguration(event, device)}>
                 <div className="split"><h3>声音与屏幕</h3><span className={`status ${configuration.sync_status === "synced" ? "online" : "warning"}`}>{configuration.sync_status === "synced" ? `已生效 v${configuration.applied_version}` : configuration.sync_status === "failed" ? "应用失败" : configuration.sync_status === "pending" ? "等待设备确认" : "尚未确认"}</span></div>
                 {configuration.sync_status === "pending" ? <div className="hint">{device.online ? "配置已经下发，收到设备回执后会显示已生效。" : "设备离线；配置已排队，上线后自动下发。"}</div> : null}
                 {configuration.sync_status === "failed" ? <InlineResult tone="warning">设备拒绝了这次设置：{configuration.last_error_code ?? "未知原因"}。请恢复到有效范围后重试。</InlineResult> : null}
-                <div className="field"><label htmlFor={`volume-${device.id}`}>扬声器音量（10–100）</label><input id={`volume-${device.id}`} name="speaker_volume" type="number" min="10" max="100" defaultValue={configuration.speaker_volume} /></div>
-                <div className="field"><label htmlFor={`brightness-${device.id}`}>屏幕亮度（10–100）</label><input id={`brightness-${device.id}`} name="screen_brightness" type="number" min="10" max="100" defaultValue={configuration.screen_brightness} /></div>
+                {configurationSchema.fields.map((field) => {
+                  const id = `${field.key.replaceAll(".", "-")}-${device.id}`;
+                  const value = configuration.values[field.key] ?? field.default;
+                  return <div className="field" key={field.key}>
+                    <label htmlFor={id}>{field.label}{field.type === "integer" ? `（${field.minimum}–${field.maximum}）` : ""}</label>
+                    {field.type === "string" ? <select id={id} name={field.key} defaultValue={String(value)}>{field.enum?.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input id={id} name={field.key} type="number" min={field.minimum ?? undefined} max={field.maximum ?? undefined} defaultValue={Number(value)} />}
+                  </div>;
+                })}
                 <button className="button secondary" type="submit" disabled={submitting}>{submitting ? "正在保存…" : "保存并下发"}</button>
               </form> : null}
               <details className="details"><summary>设备信息</summary><div className="stack hint"><div className="mono">SN {device.serial_number}</div><div>固件 {device.firmware_version} · 硬件 {device.hardware_version}</div><label className="check"><input type="checkbox" checked={device.ota_auto_update} disabled={submitting} onChange={(event) => void update(device, { ota_auto_update: event.target.checked })} />自动接收灰度更新</label></div></details>

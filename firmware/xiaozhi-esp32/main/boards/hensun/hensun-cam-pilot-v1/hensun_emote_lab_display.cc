@@ -77,6 +77,14 @@ bool HensunEmoteLabDisplay::SetPreviewFrame(
     return preview_.Show(pixels, pixel_count, width, height, stride_bytes);
 }
 
+void HensunEmoteLabDisplay::ConfigureSpeechEnvelope(
+    uint32_t noise_floor, uint32_t reference_amplitude) {
+    SpeechEnvelopeParameters parameters;
+    parameters.noise_floor = noise_floor;
+    parameters.reference_amplitude = reference_amplitude;
+    speech_envelope_.SetParameters(parameters);
+}
+
 void HensunEmoteLabDisplay::UpdateStatusBar(bool update_all) {
     (void)update_all;
 }

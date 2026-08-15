@@ -100,6 +100,10 @@ class DeviceDetailResponse(DeviceResponse):
     active_profile_id: str | None
     online: bool
     last_seen_at: datetime | None
+    hardware_profile_id: str | None = None
+    display_profile_id: str | None = None
+    profile_schema_version: int | None = None
+    device_config_schema_version: int = 1
 
 
 class DeviceUpdateRequest(BaseModel):
@@ -109,14 +113,42 @@ class DeviceUpdateRequest(BaseModel):
 
 
 class DeviceConfigurationUpdateRequest(BaseModel):
-    speaker_volume: int = Field(ge=10, le=100)
-    screen_brightness: int = Field(ge=10, le=100)
+    schema_version: int = Field(default=1, ge=1)
+    values: dict[str, int | str] | None = None
+    speaker_volume: int | None = Field(default=None, ge=10, le=100)
+    screen_brightness: int | None = Field(default=None, ge=10, le=100)
+
+    @model_validator(mode="after")
+    def require_values(self) -> "DeviceConfigurationUpdateRequest":
+        if self.values is None and self.speaker_volume is None and self.screen_brightness is None:
+            raise ValueError("at least one configuration value is required")
+        return self
+
+
+class DeviceConfigurationFieldResponse(BaseModel):
+    key: str
+    type: Literal["integer", "string"]
+    minimum: int | None = None
+    maximum: int | None = None
+    enum: list[str] | None = None
+    default: int | str
+    permission: Literal["customer", "engineering"]
+    apply: Literal["immediate", "next_reply", "next_boot"]
+    label: str
+
+
+class DeviceConfigurationSchemaResponse(BaseModel):
+    schema_version: int
+    fields: list[DeviceConfigurationFieldResponse]
 
 
 class DeviceConfigurationResponse(BaseModel):
     device_id: str
     desired_version: int
     applied_version: int
+    schema_version: int
+    values: dict[str, int | str]
+    applied_values: dict[str, int | str] | None
     speaker_volume: int
     screen_brightness: int
     applied_speaker_volume: int | None

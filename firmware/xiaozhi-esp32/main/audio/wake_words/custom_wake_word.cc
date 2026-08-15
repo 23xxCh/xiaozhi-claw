@@ -2,6 +2,8 @@
 #include "audio_service.h"
 #include "system_info.h"
 #include "assets.h"
+#include "settings.h"
+#include "generated/device_contracts_v1.h"
 
 #include <esp_log.h>
 #include <esp_mn_iface.h>
@@ -96,6 +98,15 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
 #ifdef CONFIG_CUSTOM_WAKE_WORD
     language_ = "cn";
     threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    Settings device_config("hensun_config");
+    int threshold_percent = device_config.GetInt(
+        "wake_threshold", HENSUN_CONFIG_DEFAULT_AUDIO_WAKE_THRESHOLD);
+    if (threshold_percent >= HENSUN_CONFIG_MIN_AUDIO_WAKE_THRESHOLD &&
+        threshold_percent <= HENSUN_CONFIG_MAX_AUDIO_WAKE_THRESHOLD) {
+        threshold_ = threshold_percent / 100.0f;
+    }
+#endif
     commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
     ESP_LOGI(TAG, "Using compiled custom wake command: %s", CONFIG_CUSTOM_WAKE_WORD);
 #else

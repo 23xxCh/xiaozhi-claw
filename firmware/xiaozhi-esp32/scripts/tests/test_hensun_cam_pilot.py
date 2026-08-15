@@ -188,14 +188,16 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION", body)
         self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
 
-    def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
+    def test_hensun_cam_uses_versioned_vad_settings(self):
         self.assertIn(
             "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
             self.audio_engine_source,
         )
-        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
+        self.assertIn('GetString(\n        "vad_mode"', self.audio_engine_source)
+        self.assertIn('vad_mode == "sensitive"', self.audio_engine_source)
+        self.assertIn('vad_mode == "conservative"', self.audio_engine_source)
         self.assertIn(
-            "afe_config->vad_min_noise_ms = 1200",
+            'GetInt(\n        "vad_noise_ms"',
             self.audio_engine_source,
         )
 

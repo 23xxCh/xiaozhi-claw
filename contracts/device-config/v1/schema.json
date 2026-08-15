@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "fields": [
+    {
+      "key": "audio.speaker_volume",
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 100,
+      "default": 70,
+      "permission": "customer",
+      "apply": "immediate",
+      "label": "扬声器音量"
+    },
+    {
+      "key": "display.brightness",
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 100,
+      "default": 75,
+      "permission": "customer",
+      "apply": "immediate",
+      "label": "屏幕亮度"
+    },
+    {
+      "key": "audio.wake_threshold",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 95,
+      "default": 15,
+      "permission": "engineering",
+      "apply": "next_boot",
+      "label": "唤醒阈值"
+    },
+    {
+      "key": "audio.vad_mode",
+      "type": "string",
+      "enum": ["normal", "sensitive", "conservative"],
+      "default": "normal",
+      "permission": "engineering",
+      "apply": "next_boot",
+      "label": "语音端点模式"
+    },
+    {
+      "key": "audio.vad_min_noise_ms",
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 2000,
+      "default": 1200,
+      "permission": "engineering",
+      "apply": "next_boot",
+      "label": "静音判定时长"
+    },
+    {
+      "key": "display.lip_sync_noise_floor",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5000,
+      "default": 180,
+      "permission": "engineering",
+      "apply": "next_reply",
+      "label": "口型静音阈值"
+    },
+    {
+      "key": "display.lip_sync_reference_amplitude",
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 30000,
+      "default": 5000,
+      "permission": "engineering",
+      "apply": "next_reply",
+      "label": "口型参考幅度"
+    }
+  ]
+}

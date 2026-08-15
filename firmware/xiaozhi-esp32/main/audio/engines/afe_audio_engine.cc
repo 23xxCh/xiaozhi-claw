@@ -10,6 +10,8 @@
 #include <esp_vadn_models.h>
 
 #include "audio_service.h"
+#include "generated/device_contracts_v1.h"
+#include "settings.h"
 #include "wake_words/custom_wake_word.h"
 
 #define TAG "AfeAudioEngine"
@@ -143,8 +145,15 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
     // aggressive mode that clipped quiet syllables. Keep enough silence tail
     // for a natural clause pause without returning to the old stuck-listening
     // behavior.
-    afe_config->vad_mode = VAD_MODE_1;
-    afe_config->vad_min_noise_ms = 1200;
+    Settings device_config("hensun_config");
+    const std::string vad_mode = device_config.GetString(
+        "vad_mode", HENSUN_CONFIG_DEFAULT_AUDIO_VAD_MODE);
+    afe_config->vad_mode = vad_mode == "sensitive"
+                               ? VAD_MODE_0
+                               : (vad_mode == "conservative" ? VAD_MODE_2
+                                                              : VAD_MODE_1);
+    afe_config->vad_min_noise_ms = device_config.GetInt(
+        "vad_noise_ms", HENSUN_CONFIG_DEFAULT_AUDIO_VAD_MIN_NOISE_MS);
 #else
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;

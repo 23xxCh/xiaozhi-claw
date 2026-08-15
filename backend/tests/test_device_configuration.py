@@ -3,6 +3,7 @@ import json
 from fastapi.testclient import TestClient
 
 from backend.app.models import DeviceCommand, DeviceCommandStatus
+from backend.generated.device_contracts import default_device_config
 
 from .conftest import provision_owned_device
 
@@ -30,6 +31,9 @@ def test_offline_device_configuration_is_versioned_and_queued(
         "device_id": owned["device_id"],
         "desired_version": 0,
         "applied_version": 0,
+        "schema_version": 1,
+        "values": default_device_config(),
+        "applied_values": None,
         "speaker_volume": 70,
         "screen_brightness": 75,
         "applied_speaker_volume": None,
@@ -61,6 +65,12 @@ def test_offline_device_configuration_is_versioned_and_queued(
                 "command": "apply_config",
                 "command_id": command.id,
                 "config_version": 1,
+                "schema_version": 1,
+                "values": {
+                    **default_device_config(),
+                    "audio.speaker_volume": 62,
+                    "display.brightness": 48,
+                },
                 "config": {"speaker_volume": 62, "screen_brightness": 48},
             }
 
@@ -84,8 +94,22 @@ def test_online_device_ack_is_persisted_as_applied(
 ) -> None:
     owned = provision_owned_device(client, admin_headers)
     with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
-        websocket.send_json({"type": "hello", "version": 1})
-        assert websocket.receive_json()["type"] == "hello"
+        websocket.send_json(
+            {
+                "type": "hello",
+                "version": 1,
+                "protocol_version": 1,
+                "hardware_profile_id": "hensun-cam-pilot-v1",
+                "display_profile_id": "st7789-320x240-landscape-v1",
+                "profile_schema_version": 1,
+                "profile_sha256": "a" * 64,
+                "device_config_schema_version": 1,
+            }
+        )
+        hello = websocket.receive_json()
+        assert hello["type"] == "hello"
+        assert hello["protocol_version"] == 1
+        assert hello["device_config_schema_version"] == 1
 
         changed = client.patch(
             f"/v1/devices/{owned['device_id']}/configuration",
@@ -97,14 +121,16 @@ def test_online_device_ack_is_persisted_as_applied(
         assert command["type"] == "system"
         assert command["command"] == "apply_config"
         assert command["config_version"] == 1
+        assert command["schema_version"] == 1
 
         websocket.send_json(
             {
                 "type": "device_config_ack",
                 "command_id": command["command_id"],
                 "config_version": 1,
+                "schema_version": 1,
                 "status": "applied",
-                "applied": {"speaker_volume": 66, "screen_brightness": 44},
+                "applied_values": command["values"],
             }
         )
         websocket.send_json({"type": "hello", "version": 1})
@@ -118,6 +144,74 @@ def test_online_device_ack_is_persisted_as_applied(
     assert current.json()["applied_version"] == 1
     assert current.json()["applied_speaker_volume"] == 66
     assert current.json()["applied_screen_brightness"] == 44
+    assert current.json()["applied_values"] == {
+        **default_device_config(),
+        "audio.speaker_volume": 66,
+        "display.brightness": 44,
+    }
+    device = client.get("/v1/devices", headers=_user_headers(owned)).json()[0]
+    assert device["hardware_profile_id"] == "hensun-cam-pilot-v1"
+    assert device["display_profile_id"] == "st7789-320x240-landscape-v1"
+    assert device["profile_schema_version"] == 1
+
+
+def test_customer_configuration_schema_hides_engineering_fields(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers)
+    response = client.get(
+        f"/v1/devices/{owned['device_id']}/configuration-schema",
+        headers=_user_headers(owned),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["schema_version"] == 1
+    assert {field["key"] for field in response.json()["fields"]} == {
+        "audio.speaker_volume",
+        "display.brightness",
+    }
+
+    forbidden = client.patch(
+        f"/v1/devices/{owned['device_id']}/configuration",
+        headers=_user_headers(owned),
+        json={"schema_version": 1, "values": {"audio.wake_threshold": 35}},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_legacy_device_configuration_ack_remains_compatible(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers)
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        websocket.receive_json()
+        changed = client.patch(
+            f"/v1/devices/{owned['device_id']}/configuration",
+            headers=_user_headers(owned),
+            json={"speaker_volume": 61, "screen_brightness": 47},
+        )
+        command = websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "device_config_ack",
+                "command_id": command["command_id"],
+                "config_version": changed.json()["desired_version"],
+                "status": "applied",
+                "applied": {"speaker_volume": 61, "screen_brightness": 47},
+            }
+        )
+        websocket.send_json({"type": "hello", "version": 1})
+        websocket.receive_json()
+
+    current = client.get(
+        f"/v1/devices/{owned['device_id']}/configuration",
+        headers=_user_headers(owned),
+    ).json()
+    assert current["sync_status"] == "synced"
+    assert current["applied_values"] == {
+        "audio.speaker_volume": 61,
+        "display.brightness": 47,
+    }
 
 
 def test_agent_runtime_parameters_are_bounded_and_versioned(

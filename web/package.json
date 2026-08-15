@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "generate:api": "openapi-typescript ../docs/openapi.json -o lib/generated/openapi.ts",
+    "check:api": "openapi-typescript ../docs/openapi.json -o lib/generated/openapi.ts --check",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -17,6 +19,7 @@
     "@radix-ui/themes": "^3.3.0",
     "geist": "^1.7.2",
     "next": "16.3.0",
+    "openapi-fetch": "^0.17.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
@@ -28,6 +31,7 @@
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.39.0",
     "eslint-config-next": "16.3.0",
-    "typescript": "6.0.3"
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3"
   }
 }

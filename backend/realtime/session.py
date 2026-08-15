@@ -43,6 +43,11 @@ from backend.app.security import (
     verify_device_session_token,
     verify_secret,
 )
+from backend.generated.device_contracts import (
+    DEVICE_CONFIG_SCHEMA_VERSION,
+    DEVICE_WS_PROTOCOL_VERSION,
+    validate_device_config,
+)
 
 from .emotion import EmotionRouter
 from .mcp import DeviceMcpClient, DeviceMcpError
@@ -780,11 +785,15 @@ async def _handle_device_config_ack(
     command_id = message.get("command_id")
     config_version = message.get("config_version")
     ack_status = message.get("status")
-    applied = message.get("applied")
+    schema_version = message.get("schema_version", DEVICE_CONFIG_SCHEMA_VERSION)
+    applied_values = message.get("applied_values")
+    legacy_applied = message.get("applied")
     if (
         not isinstance(command_id, str)
         or not isinstance(config_version, int)
         or isinstance(config_version, bool)
+        or not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
         or ack_status not in {"applied", "failed"}
     ):
         logger.warning("ignored malformed device configuration acknowledgement")
@@ -802,7 +811,11 @@ async def _handle_device_config_ack(
             logger.warning("ignored unknown device configuration acknowledgement %s", command_id)
             return
         try:
-            expected_version = int(json.loads(command.payload_json)["config_version"])
+            command_payload = json.loads(command.payload_json)
+            expected_version = int(command_payload["config_version"])
+            expected_schema_version = int(
+                command_payload.get("schema_version", DEVICE_CONFIG_SCHEMA_VERSION)
+            )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-command-payload"
@@ -811,6 +824,11 @@ async def _handle_device_config_ack(
         if config_version != expected_version:
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "ack-version-mismatch"
+            await session.commit()
+            return
+        if schema_version != expected_schema_version:
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = "ack-schema-version-mismatch"
             await session.commit()
             return
 
@@ -826,23 +844,22 @@ async def _handle_device_config_ack(
             await session.commit()
             return
 
-        if not isinstance(applied, dict):
+        if applied_values is None and isinstance(legacy_applied, dict):
+            applied_values = {}
+            if "speaker_volume" in legacy_applied:
+                applied_values["audio.speaker_volume"] = legacy_applied["speaker_volume"]
+            if "screen_brightness" in legacy_applied:
+                applied_values["display.brightness"] = legacy_applied["screen_brightness"]
+        if not isinstance(applied_values, dict):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-ack-payload"
             if config_version == configuration.desired_version:
                 configuration.last_error_code = command.error_code
             await session.commit()
             return
-        speaker_volume = applied.get("speaker_volume")
-        screen_brightness = applied.get("screen_brightness")
-        if (
-            not isinstance(speaker_volume, int)
-            or isinstance(speaker_volume, bool)
-            or not 10 <= speaker_volume <= 100
-            or not isinstance(screen_brightness, int)
-            or isinstance(screen_brightness, bool)
-            or not 10 <= screen_brightness <= 100
-        ):
+        try:
+            validated_values = validate_device_config(applied_values)
+        except (PermissionError, ValueError):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-ack-values"
             if config_version == configuration.desired_version:
@@ -855,8 +872,14 @@ async def _handle_device_config_ack(
         command.error_code = None
         if config_version >= configuration.applied_version:
             configuration.applied_version = config_version
-            configuration.applied_speaker_volume = speaker_volume
-            configuration.applied_screen_brightness = screen_brightness
+            configuration.schema_version = schema_version
+            configuration.applied_values = validated_values
+            speaker_volume = validated_values.get("audio.speaker_volume")
+            screen_brightness = validated_values.get("display.brightness")
+            if isinstance(speaker_volume, int):
+                configuration.applied_speaker_volume = speaker_volume
+            if isinstance(screen_brightness, int):
+                configuration.applied_screen_brightness = screen_brightness
             configuration.applied_at = now
         if config_version == configuration.desired_version:
             configuration.last_error_code = None
@@ -867,6 +890,31 @@ async def _handle_device_config_ack(
             action="device.configuration-applied",
             payload={"command_id": command.id, "config_version": config_version},
         )
+        await session.commit()
+
+
+async def _record_device_hello(
+    session_factory: async_sessionmaker[AsyncSession],
+    device_id: str,
+    message: dict[str, object],
+) -> None:
+    text_fields = {
+        "hardware_profile_id": 80,
+        "display_profile_id": 80,
+        "profile_sha256": 64,
+    }
+    async with session_factory() as session:
+        device = await session.get(Device, device_id)
+        if device is None:
+            return
+        for field, max_length in text_fields.items():
+            value = message.get(field)
+            if isinstance(value, str) and value and len(value) <= max_length:
+                setattr(device, field, value)
+        for field in ("profile_schema_version", "device_config_schema_version"):
+            value = message.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+                setattr(device, field, value)
         await session.commit()
 
 
@@ -1028,12 +1076,15 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 continue
             message_type = message.get("type")
             if message_type == "hello":
+                await _record_device_hello(session_factory, device_id, message)
                 await websocket.app.state.device_connections.send_json(
                     serial,
                     {
                         "type": "hello",
                         "transport": "websocket",
                         "version": 1,
+                        "protocol_version": DEVICE_WS_PROTOCOL_VERSION,
+                        "device_config_schema_version": DEVICE_CONFIG_SCHEMA_VERSION,
                         "audio_params": {
                             "format": "mock-utf8"
                             if websocket.app.state.realtime_providers.mock

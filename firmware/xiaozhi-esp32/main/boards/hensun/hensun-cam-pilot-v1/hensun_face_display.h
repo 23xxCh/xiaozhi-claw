@@ -2,6 +2,7 @@
 #define HENSUN_FACE_DISPLAY_H
 
 #include "display/lcd_display.h"
+#include "speech_envelope.h"
 
 #include <atomic>
 #include <cstdint>
@@ -85,6 +86,8 @@ public:
     void ShowNotification(const char* notification, int duration_ms = 3000) override;
     void SetEmotion(const char* emotion) override;
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
+    void ConfigureSpeechEnvelope(uint32_t noise_floor,
+                                 uint32_t reference_amplitude) override;
 
     void SetSpeechPcm(const std::vector<int16_t>& pcm);
     void SetSpeechLevel(uint8_t level);
@@ -128,6 +131,7 @@ private:
     uint32_t transient_frames_remaining_ = 0;
     std::atomic<uint8_t> speech_level_{0};
     std::atomic<uint32_t> speech_level_updated_ms_{0};
+    SpeechEnvelopeParameters speech_envelope_parameters_;
     uint8_t speech_level_smoothed_ = 0;
     uint32_t ambient_frame_ = 0;
     uint32_t pseudo_random_state_ = 0x48A53C1Du;
