@@ -27,7 +27,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             "CONFIG_USE_CUSTOM_WAKE_WORD=y",
             'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
             'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
-            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
+            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15",
             "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
             'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_hensun_emote_lab.csv"',
         ):
@@ -41,6 +41,64 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("kSpeechSwitchMinIntervalMs", self.source)
         self.assertIn("speech_level_", self.header)
         self.assertIn("speaking_active_", self.header)
+
+    def test_lcd_completion_callback_is_ready_before_render_task_starts(self):
+        register_callback = self.source.index(
+            "esp_lcd_panel_io_register_event_callbacks"
+        )
+        start_player = self.source.index("emote_gen_player_init")
+
+        self.assertLess(register_callback, start_player)
+
+        board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("io_config.trans_queue_depth = 10", board)
+
+    def test_emote_assets_preload_before_audio_engine_starts(self):
+        constructor = self.source.split(
+            "HensunEmoteLabDisplay::HensunEmoteLabDisplay", 1
+        )[1].split("HensunEmoteLabDisplay::~HensunEmoteLabDisplay", 1)[0]
+
+        mount_assets = constructor.index("emote_gen_player_mount_assets")
+        start_switch_task = constructor.index("xTaskCreate")
+        self.assertLess(mount_assets, start_switch_task)
+        self.assertIn(".preload_to_spiram = 1", constructor)
+        self.assertIn(
+            "Hensun emote assets preloaded before audio engine start", constructor
+        )
+        self.assertNotIn("OnAudioEngineReady", self.header)
+
+    def test_emote_runtime_fixes_use_tracked_local_components(self):
+        component_manifest = (ROOT / "main/idf_component.yml").read_text(
+            encoding="utf-8"
+        )
+        player_assets = (
+            ROOT
+            / "third_party/esp_emote_gen_player/src/emote_gen_player_assets.c"
+        ).read_text(encoding="utf-8")
+        player_source = (
+            ROOT / "third_party/esp_emote_gen_player/src/emote_gen_player.c"
+        ).read_text(encoding="utf-8")
+        gfx_render = (
+            ROOT / "third_party/esp_emote_gfx/src/core/display/gfx_render.c"
+        ).read_text(encoding="utf-8")
+        eaf_decoder = (
+            ROOT / "third_party/esp_emote_gfx/src/lib/eaf/gfx_eaf_dec.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("override_path: ../third_party/esp_emote_gen_player", component_manifest)
+        self.assertIn("override_path: ../third_party/esp_emote_gfx", component_manifest)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", player_assets)
+        self.assertIn("flash mmap retained until teardown", player_assets)
+        self.assertIn("handle->preloaded_assets[index]", player_source)
+        copy_area = gfx_render.index(
+            "gfx_area_copy(&disp->sync_pending.areas[sync_points], area)"
+        )
+        increment_sync = gfx_render.index("sync_points++;", copy_area)
+        self.assertLess(copy_area, increment_sync)
+        self.assertIn("EAF_HUFFMAN_MAX_NODES", eaf_decoder)
+        self.assertIn("Huffman output overflow", eaf_decoder)
 
     def test_camera_uses_display_independent_rgb565_preview(self):
         display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")

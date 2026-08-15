@@ -124,8 +124,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertRegex(partition, r"(?m)^emote_gen,\s+data,\s+spiffs,\s+0xB00000,\s+5M")
 
         component_manifest = (ROOT / "main/idf_component.yml").read_text(encoding="utf-8")
-        self.assertIn("https://github.com/espressif2022/esp_emote_gen_player.git", component_manifest)
-        self.assertIn("7139b46c6616d466ff153cb9d2ddf63661434f22", component_manifest)
+        self.assertIn("override_path: ../third_party/esp_emote_gen_player", component_manifest)
+        self.assertIn("override_path: ../third_party/esp_emote_gfx", component_manifest)
 
     def test_display_routes_six_states_through_a_worker_queue(self):
         header = (BOARD / "hensun_emote_lab_display.h").read_text(encoding="utf-8")
@@ -153,7 +153,9 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertIn("new HensunEmoteLabDisplay", board)
         self.assertRegex(
             board,
-            r"OnLongPress\(\[this\]\(\) \{\s*#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE\s*"
+            r"OnLongPress\(\[this\]\(\) \{\s*"
+            r'ESP_LOGI\(TAG, "BOOT long press"\);\s*'
+            r"#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE\s*"
             r"display_->StartShowcase\(\);",
         )
         self.assertIn("BOARD_TYPE_HENSUN_CAM_PILOT_V1", kconfig)

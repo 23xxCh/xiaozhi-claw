@@ -54,6 +54,11 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
     height_ = height;
     active_display_ = this;
 
+    const esp_lcd_panel_io_callbacks_t callbacks = {
+        .on_color_trans_done = IoReadyCallback,
+    };
+    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(panel_io_, &callbacks, this));
+
     const emote_gen_player_config_t config = {
         .flags = {
             .swap = true,
@@ -84,11 +89,9 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
         return;
     }
 
-    const esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = IoReadyCallback,
-    };
-    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(panel_io_, &callbacks, this));
-
+    /* Map and copy the emote pack before ESP-SR starts its worker task. Both
+     * subsystems use the external-memory cache, so changing flash mappings
+     * after MultiNet is already executing can trigger an MMU entry fault. */
     const emote_gen_player_data_t assets = {
         .type = EMOTE_GEN_PLAYER_SOURCE_PARTITION,
         .source = {
@@ -96,6 +99,7 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
         },
         .flags = {
             .mmap_enable = 1,
+            .preload_to_spiram = 1,
         },
     };
     if (emote_gen_player_mount_assets(player_, &assets) != ESP_OK || !ValidatePack()) {
@@ -103,6 +107,7 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
         return;
     }
     emote_gen_player_set_tip_text(player_, "");
+    ESP_LOGI(kTag, "Hensun emote assets preloaded before audio engine start");
 
     switch_queue_ = xQueueCreate(6, sizeof(SwitchRequest));
     if (switch_queue_ == nullptr) {
