@@ -37,15 +37,13 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         for option in (
             "CONFIG_USE_EMOTE_MESSAGE_STYLE=y",
             "CONFIG_FLASH_NONE_ASSETS=y",
-            "CONFIG_USE_CUSTOM_WAKE_WORD=y",
-            'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
-            'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
-            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15",
-            "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
             'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_hensun_emote_lab.csv"',
         ):
             self.assertIn(option, selfhosted)
             self.assertNotIn(option, official)
+        self.assertIn("CONFIG_WAKE_WORD_DISABLED=y", selfhosted)
+        self.assertNotIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", selfhosted)
+        self.assertNotIn("CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y", selfhosted)
 
     def test_speaking_uses_four_rate_limited_audio_levels(self):
         for name in ("speaking_0", "speaking_1", "speaking", "speaking_3"):

@@ -4,11 +4,11 @@
   "mode": "selfhosted",
   "provisioning": "softap",
   "wake": {
-    "enabled": true,
-    "command": "ni hao xiao can",
-    "display_name": "你好小灿",
+    "enabled": false,
+    "command": "",
+    "display_name": "",
     "threshold": 15,
-    "model": "multinet5-cn-q8"
+    "model": "none"
   },
   "features": {
     "send_wake_word_data": false,

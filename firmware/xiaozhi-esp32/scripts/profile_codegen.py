@@ -262,6 +262,18 @@ def _render_sdkconfig(
         )
         if wake["model"] == "multinet5-cn-q8":
             result.append("CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y")
+    else:
+        # Kconfig defaults ESP32-S3 builds to AFE WakeNet. Select the disabled
+        # choice explicitly so a Profile with wake.enabled=false cannot retain
+        # a model from a previous incremental build.
+        result.extend(
+            [
+                "CONFIG_USE_AFE_WAKE_WORD=n",
+                "CONFIG_USE_ESP_WAKE_WORD=n",
+                "CONFIG_USE_CUSTOM_WAKE_WORD=n",
+                "CONFIG_WAKE_WORD_DISABLED=y",
+            ]
+        )
     features = product["features"]
     if features["one_shot_conversation"]:
         result.append("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y")
