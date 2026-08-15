@@ -92,11 +92,11 @@ class HensunLandscapeBuildTests(unittest.TestCase):
         self.assertIn("portrait CAM firmware", release_gate)
 
     def test_landscape_camera_preview_is_native_qvga_and_portrait_still_rotates(self):
-        display = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
+        preview = (BOARD / "camera_preview.cc").read_text(encoding="utf-8")
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(encoding="utf-8")
-        self.assertIn("width == width_ && height == height_", display)
-        self.assertIn("width == height_ && height == width_", display)
-        self.assertIn("RotateRgb565Clockwise", display)
+        self.assertIn("width == width_ && height == height_", preview)
+        self.assertIn("width == height_ && height == width_", preview)
+        self.assertIn("RotateRgb565Clockwise", preview)
         self.assertIn("camera_config.frame_size = FRAMESIZE_QVGA", board)
 
 

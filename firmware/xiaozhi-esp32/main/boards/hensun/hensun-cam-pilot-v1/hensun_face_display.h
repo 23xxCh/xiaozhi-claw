@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 enum class HensunFaceState : uint8_t {
     kListeningStarted = 0,
@@ -85,6 +86,7 @@ public:
     void SetEmotion(const char* emotion) override;
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
+    void SetSpeechPcm(const std::vector<int16_t>& pcm);
     void SetSpeechLevel(uint8_t level);
     void StartShowcase();
 

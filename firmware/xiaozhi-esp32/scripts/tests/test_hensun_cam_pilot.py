@@ -500,15 +500,19 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("average LVGL face update below 8 ms", self.animation_spec)
 
     def test_face_uses_real_speaker_pcm_for_lip_sync(self):
+        envelope_header = (BOARD / "speech_envelope.h").read_text(encoding="utf-8")
+        envelope_source = (BOARD / "speech_envelope.cc").read_text(encoding="utf-8")
         self.assertIn("class HensunAudioCodecSimplex", self.source)
         self.assertRegex(
             self.source,
             r"void\s+OutputData\(std::vector<int16_t>&\s+data\)\s+override",
         )
-        self.assertIn("kSpeechPcmSampleStride = 8", self.source)
-        self.assertIn("display_->SetSpeechLevel", self.source)
+        self.assertIn("sample_stride = 8", envelope_header)
+        self.assertIn("SpeechEnvelope::MeasureLevel", envelope_source)
+        self.assertIn("display_->SetSpeechPcm", self.source)
         self.assertIn("AudioCodec::OutputData(data)", self.source)
 
+        self.assertIn("void SetSpeechPcm(const std::vector<int16_t>& pcm)", self.face_header)
         self.assertIn("void SetSpeechLevel(uint8_t level)", self.face_header)
         self.assertIn("std::atomic<uint8_t> speech_level_", self.face_header)
         self.assertIn("std::atomic<uint32_t> speech_level_updated_ms_", self.face_header)

@@ -22,6 +22,10 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             }
         self.header = (BOARD / "hensun_emote_lab_display.h").read_text(encoding="utf-8")
         self.source = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
+        self.renderer = (BOARD / "emote_renderer.cc").read_text(encoding="utf-8")
+        self.panel = (BOARD / "hensun_panel.cc").read_text(encoding="utf-8")
+        self.preview = (BOARD / "camera_preview.cc").read_text(encoding="utf-8")
+        self.envelope = (BOARD / "speech_envelope.cc").read_text(encoding="utf-8")
 
     def test_selfhosted_uses_accepted_emote_engine_but_official_does_not(self):
         selfhosted = "\n".join(
@@ -45,31 +49,33 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
 
     def test_speaking_uses_four_rate_limited_audio_levels(self):
         for name in ("speaking_0", "speaking_1", "speaking", "speaking_3"):
-            self.assertIn(f'"{name}"', self.source)
-        self.assertIn("QuantizeSpeechLevel", self.source)
-        self.assertIn("kSpeechSwitchMinIntervalMs", self.source)
-        self.assertIn("speech_level_", self.header)
-        self.assertIn("speaking_active_", self.header)
+            self.assertIn(f'"{name}"', self.envelope)
+        self.assertIn("SpeechEnvelope::Quantize", self.envelope)
+        self.assertIn("switch_min_interval_ms", self.envelope)
+        self.assertIn("SpeechEnvelope speech_envelope_", self.header)
+        self.assertIn("speaking_", (BOARD / "speech_envelope.h").read_text(encoding="utf-8"))
 
     def test_lcd_completion_callback_is_ready_before_render_task_starts(self):
-        register_callback = self.source.index(
+        register_callback = self.panel.index(
             "esp_lcd_panel_io_register_event_callbacks"
         )
-        start_player = self.source.index("emote_gen_player_init")
+        enable_flush = self.renderer.index("panel_.EnableEmoteFlush()")
+        start_player = self.renderer.index("emote_gen_player_init")
 
-        self.assertLess(register_callback, start_player)
+        self.assertGreater(register_callback, 0)
+        self.assertLess(enable_flush, start_player)
 
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "io_config.trans_queue_depth = DISPLAY_SPI_QUEUE_DEPTH", board
+            "io_config.trans_queue_depth = DISPLAY_SPI_QUEUE_DEPTH", self.panel
         )
 
     def test_emote_assets_preload_before_audio_engine_starts(self):
-        constructor = self.source.split(
-            "HensunEmoteLabDisplay::HensunEmoteLabDisplay", 1
-        )[1].split("HensunEmoteLabDisplay::~HensunEmoteLabDisplay", 1)[0]
+        constructor = self.renderer.split(
+            "EmoteRenderer::EmoteRenderer", 1
+        )[1].split("EmoteRenderer::~EmoteRenderer", 1)[0]
 
         mount_assets = constructor.index("emote_gen_player_mount_assets")
         start_switch_task = constructor.index("xTaskCreate")
@@ -123,8 +129,8 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("SetPreviewFrame", display_header)
         self.assertIn("SetPreviewFrame", lvgl_header)
         self.assertIn("SetPreviewFrame", self.header)
-        self.assertIn("RotateRgb565Clockwise", self.source)
-        self.assertIn("gfx_emote_lock", self.source)
+        self.assertIn("RotateRgb565Clockwise", self.preview)
+        self.assertIn("renderer_.Lock()", self.preview)
         self.assertIn("SetPreviewFrame", camera_source)
         self.assertNotIn("dynamic_cast<LvglDisplay", camera_source)
 
@@ -139,7 +145,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             self.assertIn(phrase, spec)
 
     def test_selfhosted_build_keeps_custom_wake_word_configuration(self):
-        build_script_path = Path.cwd() / "scripts/build_firmware.ps1"
+        build_script_path = ROOT.parents[1] / "scripts/build_firmware.ps1"
         self.assertTrue(build_script_path.is_file(), build_script_path)
         build_script = build_script_path.read_text(encoding="utf-8")
         self.assertIn('if ($Variant -eq "official")', build_script)

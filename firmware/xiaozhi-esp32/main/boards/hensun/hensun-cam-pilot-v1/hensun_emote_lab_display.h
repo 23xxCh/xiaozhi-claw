@@ -1,22 +1,22 @@
 #pragma once
 
+#include "camera_preview.h"
 #include "display/display.h"
-#include "emote_gen_player.h"
+#include "emote_renderer.h"
+#include "speech_envelope.h"
 
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
-#include <esp_lcd_panel_io.h>
-#include <esp_lcd_panel_ops.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <freertos/semphr.h>
 #include <freertos/task.h>
+
+class HensunPanel;
 
 class HensunEmoteLabDisplay final : public Display {
 public:
-    HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
-                          int width, int height);
+    HensunEmoteLabDisplay(HensunPanel& panel, int width, int height);
     ~HensunEmoteLabDisplay() override;
 
     void SetupUI() override;
@@ -29,49 +29,19 @@ public:
     void UpdateStatusBar(bool update_all = false) override;
     void SetPowerSaveMode(bool on) override;
 
+    void SetSpeechPcm(const std::vector<int16_t>& pcm);
     void SetSpeechLevel(uint8_t level);
     void StartShowcase();
 
 private:
-    struct SwitchRequest {
-        char animation[16];
-        bool urgent;
-        bool immediate;
-    };
-
-    static void FlushCallback(int x_start, int y_start, int x_end, int y_end,
-                              const void* data, emote_gen_player_handle_t manager);
-    static bool IoReadyCallback(esp_lcd_panel_io_handle_t panel_io,
-                                esp_lcd_panel_io_event_data_t* event_data, void* user_ctx);
-    static void SwitchTaskEntry(void* context);
     static void ShowcaseTaskEntry(void* context);
-
     bool Lock(int timeout_ms = 0) override;
     void Unlock() override;
-    void SwitchTask();
     void ShowcaseTask();
-    void QueueAnimation(const char* animation, bool urgent = false, bool immediate = false);
-    bool ValidatePack() const;
-    const char* MapEmotion(const char* emotion, bool* urgent) const;
-    static uint8_t QuantizeSpeechLevel(uint8_t level, uint8_t current_level);
-    static void RotateRgb565Clockwise(const uint16_t* source, int source_width,
-                                      int source_height, int source_stride_pixels,
-                                      uint16_t* destination);
 
-    static HensunEmoteLabDisplay* active_display_;
-
-    esp_lcd_panel_io_handle_t panel_io_ = nullptr;
-    esp_lcd_panel_handle_t panel_ = nullptr;
-    emote_gen_player_handle_t player_ = nullptr;
-    QueueHandle_t switch_queue_ = nullptr;
-    SemaphoreHandle_t preview_flush_semaphore_ = nullptr;
-    TaskHandle_t switch_task_ = nullptr;
+    HensunPanel& panel_;
+    EmoteRenderer renderer_;
+    SpeechEnvelope speech_envelope_;
+    CameraPreview preview_;
     std::atomic<bool> showcase_active_{false};
-    std::atomic<bool> speaking_active_{false};
-    std::atomic<bool> preview_active_{false};
-    std::atomic<bool> preview_flush_pending_{false};
-    std::atomic<uint32_t> animation_flushes_pending_{0};
-    std::atomic<uint8_t> speech_level_{2};
-    std::atomic<int64_t> last_speech_switch_ms_{0};
-    char current_animation_[16] = {};
 };

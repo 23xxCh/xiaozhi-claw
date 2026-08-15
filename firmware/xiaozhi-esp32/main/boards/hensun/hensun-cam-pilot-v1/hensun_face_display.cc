@@ -1,6 +1,7 @@
 #include "hensun_face_display.h"
 
 #include "hensun_face_assets.h"
+#include "speech_envelope.h"
 
 #include "application.h"
 #include "assets/lang_config.h"
@@ -631,6 +632,10 @@ void HensunFaceDisplay::StartShowcase() {
 void HensunFaceDisplay::SetSpeechLevel(uint8_t level) {
     speech_level_.store(std::min<uint8_t>(100, level));
     speech_level_updated_ms_.store(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+}
+
+void HensunFaceDisplay::SetSpeechPcm(const std::vector<int16_t>& pcm) {
+    SetSpeechLevel(SpeechEnvelope::MeasureLevel(pcm));
 }
 
 void HensunFaceDisplay::AnimationTimerCallback(lv_timer_t* timer) {

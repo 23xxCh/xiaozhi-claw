@@ -137,15 +137,17 @@ class HensunEmoteLabTests(unittest.TestCase):
     def test_display_routes_six_states_through_a_worker_queue(self):
         header = (BOARD / "hensun_emote_lab_display.h").read_text(encoding="utf-8")
         source = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
+        renderer = (BOARD / "emote_renderer.cc").read_text(encoding="utf-8")
+        mapper = (BOARD / "emotion_mapper.cc").read_text(encoding="utf-8")
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(encoding="utf-8")
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
 
         self.assertIn("class HensunEmoteLabDisplay", header)
-        self.assertIn("xQueueCreate", source)
-        self.assertIn("emote_gen_player_anim_fade_name", source)
-        self.assertIn("emote_gen_player_anim_now_name", source)
+        self.assertIn("xQueueCreate", renderer)
+        self.assertIn("emote_gen_player_anim_fade_name", renderer)
+        self.assertIn("emote_gen_player_anim_now_name", renderer)
         for animation in EXPECTED:
-            self.assertRegex(source, rf'"{re.escape(animation)}"')
+            self.assertRegex(source + renderer, rf'"{re.escape(animation)}"')
         for alias in (
             "idle_entered",
             "listening_started",
@@ -154,8 +156,8 @@ class HensunEmoteLabTests(unittest.TestCase):
             "positive_response",
             "comfort_mode_entered",
         ):
-            self.assertIn(alias, source)
-        self.assertIn("unknown emotion", source)
+            self.assertIn(alias, mapper)
+        self.assertIn("unknown emotion", mapper)
         self.assertIn("CONFIG_USE_EMOTE_MESSAGE_STYLE", board)
         self.assertIn("new HensunEmoteLabDisplay", board)
         self.assertRegex(
