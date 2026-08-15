@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-DEVICE_CONFIG_SCHEMA_VERSION = 1
+DEVICE_CONFIG_SCHEMA_VERSION = 2
 DEVICE_WS_PROTOCOL_VERSION = 1
 DEVICE_WS_MESSAGE_TYPES = frozenset(
     ('hello',
@@ -13,7 +13,9 @@ DEVICE_WS_MESSAGE_TYPES = frozenset(
      'mcp',
      'system',
      'alert',
-     'device_config_ack')
+     'device_config_ack',
+     'device_command_ack',
+     'device_state')
 )
 DEVICE_CONFIG_FIELDS: dict[str, dict[str, Any]] = (
     {'audio.speaker_volume': {'key': 'audio.speaker_volume',
@@ -32,6 +34,14 @@ DEVICE_CONFIG_FIELDS: dict[str, dict[str, Any]] = (
                             'permission': 'customer',
                             'apply': 'immediate',
                             'label': '屏幕亮度'},
+     'conversation.idle_timeout_seconds': {'key': 'conversation.idle_timeout_seconds',
+                                           'type': 'integer',
+                                           'minimum': 3,
+                                           'maximum': 30,
+                                           'default': 3,
+                                           'permission': 'customer',
+                                           'apply': 'immediate',
+                                           'label': '无人说话后待机（秒）'},
      'audio.wake_threshold': {'key': 'audio.wake_threshold',
                               'type': 'integer',
                               'minimum': 5,
@@ -72,18 +82,153 @@ DEVICE_CONFIG_FIELDS: dict[str, dict[str, Any]] = (
                                               'apply': 'next_reply',
                                               'label': '口型参考幅度'}}
 )
+DEVICE_CONFIG_SCHEMAS: dict[int, dict[str, dict[str, Any]]] = (
+    {1: {'audio.speaker_volume': {'key': 'audio.speaker_volume',
+                                  'type': 'integer',
+                                  'minimum': 10,
+                                  'maximum': 100,
+                                  'default': 70,
+                                  'permission': 'customer',
+                                  'apply': 'immediate',
+                                  'label': '扬声器音量'},
+         'display.brightness': {'key': 'display.brightness',
+                                'type': 'integer',
+                                'minimum': 10,
+                                'maximum': 100,
+                                'default': 75,
+                                'permission': 'customer',
+                                'apply': 'immediate',
+                                'label': '屏幕亮度'},
+         'audio.wake_threshold': {'key': 'audio.wake_threshold',
+                                  'type': 'integer',
+                                  'minimum': 5,
+                                  'maximum': 95,
+                                  'default': 15,
+                                  'permission': 'engineering',
+                                  'apply': 'next_boot',
+                                  'label': '唤醒阈值'},
+         'audio.vad_mode': {'key': 'audio.vad_mode',
+                            'type': 'string',
+                            'enum': ['normal', 'sensitive', 'conservative'],
+                            'default': 'normal',
+                            'permission': 'engineering',
+                            'apply': 'next_boot',
+                            'label': '语音端点模式'},
+         'audio.vad_min_noise_ms': {'key': 'audio.vad_min_noise_ms',
+                                    'type': 'integer',
+                                    'minimum': 100,
+                                    'maximum': 2000,
+                                    'default': 1200,
+                                    'permission': 'engineering',
+                                    'apply': 'next_boot',
+                                    'label': '静音判定时长'},
+         'display.lip_sync_noise_floor': {'key': 'display.lip_sync_noise_floor',
+                                          'type': 'integer',
+                                          'minimum': 0,
+                                          'maximum': 5000,
+                                          'default': 180,
+                                          'permission': 'engineering',
+                                          'apply': 'next_reply',
+                                          'label': '口型静音阈值'},
+         'display.lip_sync_reference_amplitude': {'key': 'display.lip_sync_reference_amplitude',
+                                                  'type': 'integer',
+                                                  'minimum': 500,
+                                                  'maximum': 30000,
+                                                  'default': 5000,
+                                                  'permission': 'engineering',
+                                                  'apply': 'next_reply',
+                                                  'label': '口型参考幅度'}},
+     2: {'audio.speaker_volume': {'key': 'audio.speaker_volume',
+                                  'type': 'integer',
+                                  'minimum': 10,
+                                  'maximum': 100,
+                                  'default': 70,
+                                  'permission': 'customer',
+                                  'apply': 'immediate',
+                                  'label': '扬声器音量'},
+         'display.brightness': {'key': 'display.brightness',
+                                'type': 'integer',
+                                'minimum': 10,
+                                'maximum': 100,
+                                'default': 75,
+                                'permission': 'customer',
+                                'apply': 'immediate',
+                                'label': '屏幕亮度'},
+         'conversation.idle_timeout_seconds': {'key': 'conversation.idle_timeout_seconds',
+                                               'type': 'integer',
+                                               'minimum': 3,
+                                               'maximum': 30,
+                                               'default': 3,
+                                               'permission': 'customer',
+                                               'apply': 'immediate',
+                                               'label': '无人说话后待机（秒）'},
+         'audio.wake_threshold': {'key': 'audio.wake_threshold',
+                                  'type': 'integer',
+                                  'minimum': 5,
+                                  'maximum': 95,
+                                  'default': 15,
+                                  'permission': 'engineering',
+                                  'apply': 'next_boot',
+                                  'label': '唤醒阈值'},
+         'audio.vad_mode': {'key': 'audio.vad_mode',
+                            'type': 'string',
+                            'enum': ['normal', 'sensitive', 'conservative'],
+                            'default': 'normal',
+                            'permission': 'engineering',
+                            'apply': 'next_boot',
+                            'label': '语音端点模式'},
+         'audio.vad_min_noise_ms': {'key': 'audio.vad_min_noise_ms',
+                                    'type': 'integer',
+                                    'minimum': 100,
+                                    'maximum': 2000,
+                                    'default': 1200,
+                                    'permission': 'engineering',
+                                    'apply': 'next_boot',
+                                    'label': '静音判定时长'},
+         'display.lip_sync_noise_floor': {'key': 'display.lip_sync_noise_floor',
+                                          'type': 'integer',
+                                          'minimum': 0,
+                                          'maximum': 5000,
+                                          'default': 180,
+                                          'permission': 'engineering',
+                                          'apply': 'next_reply',
+                                          'label': '口型静音阈值'},
+         'display.lip_sync_reference_amplitude': {'key': 'display.lip_sync_reference_amplitude',
+                                                  'type': 'integer',
+                                                  'minimum': 500,
+                                                  'maximum': 30000,
+                                                  'default': 5000,
+                                                  'permission': 'engineering',
+                                                  'apply': 'next_reply',
+                                                  'label': '口型参考幅度'}}}
+)
 
 
-def default_device_config() -> dict[str, int | str]:
-    return {key: spec["default"] for key, spec in DEVICE_CONFIG_FIELDS.items()}
+def device_config_fields(
+    schema_version: int = DEVICE_CONFIG_SCHEMA_VERSION,
+) -> dict[str, dict[str, Any]]:
+    try:
+        return DEVICE_CONFIG_SCHEMAS[schema_version]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported device configuration schema version: {schema_version}"
+        ) from exc
+
+
+def default_device_config(
+    schema_version: int = DEVICE_CONFIG_SCHEMA_VERSION,
+) -> dict[str, int | str]:
+    return {key: spec["default"] for key, spec in device_config_fields(schema_version).items()}
 
 
 def validate_device_config(
-    values: Mapping[str, object], *, allowed_permissions: set[str] | None = None
+    values: Mapping[str, object], *, allowed_permissions: set[str] | None = None,
+    schema_version: int = DEVICE_CONFIG_SCHEMA_VERSION,
 ) -> dict[str, int | str]:
     validated: dict[str, int | str] = {}
+    fields = device_config_fields(schema_version)
     for key, value in values.items():
-        spec = DEVICE_CONFIG_FIELDS.get(key)
+        spec = fields.get(key)
         if spec is None:
             raise ValueError(f"unknown configuration field: {key}")
         if allowed_permissions is not None and spec["permission"] not in allowed_permissions:

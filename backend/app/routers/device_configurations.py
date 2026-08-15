@@ -7,9 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.generated.device_contracts import (
-    DEVICE_CONFIG_FIELDS,
-    DEVICE_CONFIG_SCHEMA_VERSION,
+    DEVICE_CONFIG_SCHEMAS,
     default_device_config,
+    device_config_fields,
     validate_device_config,
 )
 
@@ -52,39 +52,55 @@ async def _configuration(session: AsyncSession, device_id: str) -> DeviceConfigu
     return configuration
 
 
-def _desired_values(configuration: DeviceConfiguration) -> dict[str, int | str]:
-    values = default_device_config()
+def _supported_schema_version(device: Device) -> int:
+    advertised = device.device_config_schema_version or 1
+    supported = [version for version in DEVICE_CONFIG_SCHEMAS if version <= advertised]
+    return max(supported, default=1)
+
+
+def _desired_values(
+    configuration: DeviceConfiguration, schema_version: int
+) -> dict[str, int | str]:
+    fields = device_config_fields(schema_version)
+    values = default_device_config(schema_version)
     stored_values = configuration.desired_values or {}
     values.update(
         {
             key: value
             for key, value in stored_values.items()
+            if key in fields
             if isinstance(value, (int, str)) and not isinstance(value, bool)
         }
     )
-    if not configuration.desired_values:
+    if not stored_values:
         values["audio.speaker_volume"] = configuration.speaker_volume
         values["display.brightness"] = configuration.screen_brightness
+    if configuration.schema_version != schema_version or stored_values != values:
+        configuration.schema_version = schema_version
         configuration.desired_values = cast(dict[str, object], values)
     return values
 
 
-def _configuration_schema(*permissions: str) -> DeviceConfigurationSchemaResponse:
+def _configuration_schema(
+    schema_version: int, *permissions: str
+) -> DeviceConfigurationSchemaResponse:
     fields = [
         DeviceConfigurationFieldResponse(**spec)
-        for spec in DEVICE_CONFIG_FIELDS.values()
+        for spec in device_config_fields(schema_version).values()
         if spec["permission"] in permissions
     ]
     return DeviceConfigurationSchemaResponse(
-        schema_version=DEVICE_CONFIG_SCHEMA_VERSION,
+        schema_version=schema_version,
         fields=fields,
     )
 
 
 def _response(
-    configuration: DeviceConfiguration, command_id: str | None = None
+    configuration: DeviceConfiguration,
+    schema_version: int,
+    command_id: str | None = None,
 ) -> DeviceConfigurationResponse:
-    values = _desired_values(configuration)
+    values = _desired_values(configuration, schema_version)
     applied_values = cast(
         dict[str, int | str] | None, configuration.applied_values
     )
@@ -137,14 +153,17 @@ async def _update_configuration(
     actor_type: str,
     actor_id: str,
 ) -> DeviceConfigurationResponse:
-    if payload.schema_version != DEVICE_CONFIG_SCHEMA_VERSION:
+    schema_version = _supported_schema_version(device)
+    if payload.schema_version != schema_version:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="unsupported device configuration schema version",
         )
     try:
         patch = validate_device_config(
-            _payload_values(payload), allowed_permissions=permissions
+            _payload_values(payload),
+            allowed_permissions=permissions,
+            schema_version=schema_version,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
@@ -169,9 +188,9 @@ async def _update_configuration(
         older.status = DeviceCommandStatus.EXPIRED.value
         older.error_code = "superseded"
 
-    values = _desired_values(configuration)
+    values = _desired_values(configuration, schema_version)
     values.update(patch)
-    configuration.schema_version = DEVICE_CONFIG_SCHEMA_VERSION
+    configuration.schema_version = schema_version
     configuration.desired_values = cast(dict[str, object], values)
     configuration.speaker_volume = int(values["audio.speaker_volume"])
     configuration.screen_brightness = int(values["display.brightness"])
@@ -191,7 +210,7 @@ async def _update_configuration(
         "command": "apply_config",
         "command_id": command.id,
         "config_version": configuration.desired_version,
-        "schema_version": DEVICE_CONFIG_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "values": values,
         # Retained until all pilot devices advertise device-config/v1.
         "config": {
@@ -219,7 +238,7 @@ async def _update_configuration(
         },
     )
     await session.commit()
-    return _response(configuration, command.id)
+    return _response(configuration, schema_version, command.id)
 
 
 @router.get("/{device_id}/configuration", response_model=DeviceConfigurationResponse)
@@ -228,10 +247,10 @@ async def get_device_configuration(
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceConfigurationResponse:
-    await _owned_device(session, user, device_id)
+    device = await _owned_device(session, user, device_id)
     configuration = await _configuration(session, device_id)
     await session.commit()
-    return _response(configuration)
+    return _response(configuration, _supported_schema_version(device))
 
 
 @router.get(
@@ -243,8 +262,8 @@ async def get_device_configuration_schema(
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceConfigurationSchemaResponse:
-    await _owned_device(session, user, device_id)
-    return _configuration_schema("customer")
+    device = await _owned_device(session, user, device_id)
+    return _configuration_schema(_supported_schema_version(device), "customer")
 
 
 @router.patch("/{device_id}/configuration", response_model=DeviceConfigurationResponse)
@@ -276,9 +295,12 @@ async def admin_device_configuration_schema(
     _: StaffUser = Depends(require_staff(StaffRole.SUPERADMIN, StaffRole.ENGINEERING)),
     session: AsyncSession = Depends(get_session),
 ) -> DeviceConfigurationSchemaResponse:
-    if await session.get(Device, device_id) is None:
+    device = await session.get(Device, device_id)
+    if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
-    return _configuration_schema("customer", "engineering")
+    return _configuration_schema(
+        _supported_schema_version(device), "customer", "engineering"
+    )
 
 
 @admin_router.patch(

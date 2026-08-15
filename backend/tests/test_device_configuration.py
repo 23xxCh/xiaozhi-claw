@@ -32,7 +32,7 @@ def test_offline_device_configuration_is_versioned_and_queued(
         "desired_version": 0,
         "applied_version": 0,
         "schema_version": 1,
-        "values": default_device_config(),
+        "values": default_device_config(1),
         "applied_values": None,
         "speaker_volume": 70,
         "screen_brightness": 75,
@@ -67,7 +67,7 @@ def test_offline_device_configuration_is_versioned_and_queued(
                 "config_version": 1,
                 "schema_version": 1,
                 "values": {
-                    **default_device_config(),
+                    **default_device_config(1),
                     "audio.speaker_volume": 62,
                     "display.brightness": 48,
                 },
@@ -109,7 +109,7 @@ def test_online_device_ack_is_persisted_as_applied(
         hello = websocket.receive_json()
         assert hello["type"] == "hello"
         assert hello["protocol_version"] == 1
-        assert hello["device_config_schema_version"] == 1
+        assert hello["device_config_schema_version"] == 2
 
         changed = client.patch(
             f"/v1/devices/{owned['device_id']}/configuration",
@@ -145,7 +145,7 @@ def test_online_device_ack_is_persisted_as_applied(
     assert current.json()["applied_speaker_volume"] == 66
     assert current.json()["applied_screen_brightness"] == 44
     assert current.json()["applied_values"] == {
-        **default_device_config(),
+        **default_device_config(1),
         "audio.speaker_volume": 66,
         "display.brightness": 44,
     }
@@ -176,6 +176,59 @@ def test_customer_configuration_schema_hides_engineering_fields(
         json={"schema_version": 1, "values": {"audio.wake_threshold": 35}},
     )
     assert forbidden.status_code == 403
+
+
+def test_schema_v2_exposes_and_applies_idle_timeout(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers)
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json(
+            {
+                "type": "hello",
+                "version": 1,
+                "protocol_version": 1,
+                "device_config_schema_version": 2,
+            }
+        )
+        assert websocket.receive_json()["device_config_schema_version"] == 2
+
+        schema = client.get(
+            f"/v1/devices/{owned['device_id']}/configuration-schema",
+            headers=_user_headers(owned),
+        )
+        assert schema.status_code == 200, schema.text
+        assert schema.json()["schema_version"] == 2
+        assert {field["key"] for field in schema.json()["fields"]} == {
+            "audio.speaker_volume",
+            "display.brightness",
+            "conversation.idle_timeout_seconds",
+        }
+
+        for timeout in (3, 10, 30):
+            changed = client.patch(
+                f"/v1/devices/{owned['device_id']}/configuration",
+                headers=_user_headers(owned),
+                json={
+                    "schema_version": 2,
+                    "values": {"conversation.idle_timeout_seconds": timeout},
+                },
+            )
+            assert changed.status_code == 200, changed.text
+            command = websocket.receive_json()
+            assert command["schema_version"] == 2
+            assert command["values"]["conversation.idle_timeout_seconds"] == timeout
+
+        for timeout in (2, 31):
+            rejected = client.patch(
+                f"/v1/devices/{owned['device_id']}/configuration",
+                headers=_user_headers(owned),
+                json={
+                    "schema_version": 2,
+                    "values": {"conversation.idle_timeout_seconds": timeout},
+                },
+            )
+            assert rejected.status_code == 422
 
 
 def test_legacy_device_configuration_ack_remains_compatible(

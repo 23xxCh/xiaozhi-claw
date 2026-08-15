@@ -25,7 +25,13 @@ from backend.generated.device_contracts import (
     DEVICE_WS_PROTOCOL_VERSION,
 )
 
-from .device_state import handle_device_config_ack, heartbeat, record_device_hello
+from .device_state import (
+    handle_device_command_ack,
+    handle_device_config_ack,
+    handle_device_state,
+    heartbeat,
+    record_device_hello,
+)
 from .mcp import DeviceMcpClient, DeviceMcpError
 from .messaging import send_error
 from .playback import PlaybackHandshake
@@ -272,6 +278,16 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             if message_type == "device_config_ack":
                 await handle_device_config_ack(session_factory, device_id, message)
                 continue
+            if message_type == "device_command_ack":
+                await handle_device_command_ack(session_factory, device_id, message)
+                continue
+            if message_type == "device_state":
+                standby_reason = await handle_device_state(
+                    session_factory, device_id, message
+                )
+                if message.get("state") == "standby" and standby_reason is not None:
+                    end_reason = f"standby-{standby_reason}"
+                continue
             if message_type != "listen":
                 logger.info("ignored unknown device message type %r from %s", message_type, serial)
                 await send_error(
@@ -298,6 +314,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         end_reason = "user-exit"
                         await websocket.close(code=1000, reason="user requested exit")
                         break
+                await handle_device_state(
+                    session_factory,
+                    device_id,
+                    {"state": "listening"},
+                )
                 if turn_state.state == VoiceTurnState.IDLE:
                     turn_state.transition(VoiceTurnState.LISTENING)
                 async with session_factory() as session:
@@ -435,6 +456,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             if stored_conversation is not None:
                 stored_conversation.ended_at = now
                 stored_conversation.end_reason = end_reason
+            stored_device = await session.get(Device, device_id)
+            if stored_device is not None and stored_device.runtime_state != "standby":
+                stored_device.runtime_state = "offline"
+                stored_device.runtime_state_at = now
+                stored_device.runtime_reason = None
             await session.commit()
         turn_state.reset()
         await websocket.app.state.device_connections.disconnect(serial, websocket)

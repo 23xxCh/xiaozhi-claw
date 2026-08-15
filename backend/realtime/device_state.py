@@ -21,6 +21,8 @@ from backend.generated.device_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+RUNTIME_STATES = frozenset({"offline", "standby", "listening", "speaking"})
+STANDBY_REASONS = frozenset({"button", "idle-timeout", "remote"})
 
 
 async def heartbeat(
@@ -49,15 +51,20 @@ async def handle_device_config_ack(
     command_id = message.get("command_id")
     config_version = message.get("config_version")
     ack_status = message.get("status")
-    schema_version = message.get("schema_version", DEVICE_CONFIG_SCHEMA_VERSION)
+    schema_version = message.get("schema_version")
     applied_values = message.get("applied_values")
     legacy_applied = message.get("applied")
     if (
         not isinstance(command_id, str)
         or not isinstance(config_version, int)
         or isinstance(config_version, bool)
-        or not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
+        or (
+            schema_version is not None
+            and (
+                not isinstance(schema_version, int)
+                or isinstance(schema_version, bool)
+            )
+        )
         or ack_status not in {"applied", "failed"}
     ):
         logger.warning("ignored malformed device configuration acknowledgement")
@@ -90,6 +97,8 @@ async def handle_device_config_ack(
             command.error_code = "ack-version-mismatch"
             await session.commit()
             return
+        if schema_version is None:
+            schema_version = expected_schema_version
         if schema_version != expected_schema_version:
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "ack-schema-version-mismatch"
@@ -125,7 +134,10 @@ async def handle_device_config_ack(
             await session.commit()
             return
         try:
-            validated_values = validate_device_config(cast(dict[str, object], applied_values))
+            validated_values = validate_device_config(
+                cast(dict[str, object], applied_values),
+                schema_version=schema_version,
+            )
         except (PermissionError, ValueError):
             command.status = DeviceCommandStatus.FAILED.value
             command.error_code = "invalid-ack-values"
@@ -158,6 +170,88 @@ async def handle_device_config_ack(
             payload={"command_id": command.id, "config_version": config_version},
         )
         await session.commit()
+
+
+async def handle_device_command_ack(
+    session_factory: async_sessionmaker[AsyncSession],
+    device_id: str,
+    message: dict[str, object],
+) -> None:
+    command_id = message.get("command_id")
+    ack_status = message.get("status")
+    if not isinstance(command_id, str) or ack_status not in {"applied", "failed"}:
+        logger.warning("ignored malformed device command acknowledgement")
+        return
+    async with session_factory() as session:
+        command = await session.get(DeviceCommand, command_id)
+        if (
+            command is None
+            or command.device_id != device_id
+            or command.command_type != "enter-standby"
+        ):
+            logger.warning("ignored unknown device command acknowledgement %s", command_id)
+            return
+        now = datetime.now(UTC)
+        if command.expires_at is not None:
+            expires_at = command.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at <= now:
+                command.status = DeviceCommandStatus.EXPIRED.value
+                command.error_code = "command-expired"
+                await session.commit()
+                return
+        if ack_status == "applied":
+            command.status = DeviceCommandStatus.APPLIED.value
+            command.applied_at = now
+            command.error_code = None
+        else:
+            error_code = message.get("error_code")
+            command.status = DeviceCommandStatus.FAILED.value
+            command.error_code = (
+                error_code[:80]
+                if isinstance(error_code, str) and error_code
+                else "device-rejected"
+            )
+        add_audit_event(
+            session,
+            actor_type="device",
+            actor_id=device_id,
+            action="device.command-acknowledged",
+            payload={
+                "command_id": command.id,
+                "status": command.status,
+                "command_type": command.command_type,
+            },
+        )
+        await session.commit()
+
+
+async def handle_device_state(
+    session_factory: async_sessionmaker[AsyncSession],
+    device_id: str,
+    message: dict[str, object],
+) -> str | None:
+    state = message.get("state")
+    reason = message.get("reason")
+    if state not in RUNTIME_STATES:
+        logger.warning("ignored invalid device runtime state %r", state)
+        return None
+    if state == "standby":
+        if reason not in STANDBY_REASONS:
+            logger.warning("ignored invalid standby reason %r", reason)
+            return None
+    elif reason is not None:
+        reason = None
+    async with session_factory() as session:
+        device = await session.get(Device, device_id)
+        if device is None:
+            return None
+        device.runtime_state = str(state)
+        device.runtime_state_at = datetime.now(UTC)
+        device.runtime_reason = str(reason) if reason is not None else None
+        await session.commit()
+    return str(reason) if reason is not None else None
 
 
 async def record_device_hello(

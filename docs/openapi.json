@@ -2126,6 +2126,119 @@
         }
       }
     },
+    "/v1/devices/{device_id}/standby": {
+      "post": {
+        "tags": [
+          "device-commands"
+        ],
+        "summary": "Enter Device Standby",
+        "operationId": "enter_device_standby_v1_devices__device_id__standby_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCommandResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/devices/{device_id}/commands/{command_id}": {
+      "get": {
+        "tags": [
+          "device-commands"
+        ],
+        "summary": "Get Device Command",
+        "operationId": "get_device_command_v1_devices__device_id__commands__command_id__get",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "command_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Command Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCommandResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/devices/{device_id}/memories": {
       "get": {
         "tags": [
@@ -3632,6 +3745,33 @@
               }
             ],
             "title": "Last Seen At"
+          },
+          "runtime_state": {
+            "type": "string",
+            "title": "Runtime State"
+          },
+          "runtime_state_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime State At"
+          },
+          "runtime_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Reason"
           }
         },
         "type": "object",
@@ -3644,7 +3784,10 @@
           "active_agent_id",
           "hardware_version",
           "firmware_version",
-          "last_seen_at"
+          "last_seen_at",
+          "runtime_state",
+          "runtime_state_at",
+          "runtime_reason"
         ],
         "title": "AdminDeviceResponse"
       },
@@ -4517,6 +4660,93 @@
         ],
         "title": "DeviceBootstrapResponse"
       },
+      "DeviceCommandResponse": {
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "title": "Command Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "delivered",
+              "applied",
+              "failed",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command_id",
+          "device_id",
+          "status",
+          "error_code",
+          "created_at",
+          "expires_at",
+          "delivered_at",
+          "applied_at"
+        ],
+        "title": "DeviceCommandResponse"
+      },
       "DeviceConfigurationFieldResponse": {
         "properties": {
           "key": {
@@ -4970,6 +5200,34 @@
             "type": "integer",
             "title": "Device Config Schema Version",
             "default": 1
+          },
+          "runtime_state": {
+            "type": "string",
+            "title": "Runtime State",
+            "default": "offline"
+          },
+          "runtime_state_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime State At"
+          },
+          "runtime_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Reason"
           }
         },
         "type": "object",

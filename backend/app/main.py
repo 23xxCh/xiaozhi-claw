@@ -19,6 +19,7 @@ from .routers import (
     agents,
     auth,
     conversations,
+    device_commands,
     device_configurations,
     device_events,
     device_ws,
@@ -111,6 +112,7 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
     app.include_router(devices.router)
     app.include_router(device_configurations.router)
     app.include_router(device_configurations.admin_router)
+    app.include_router(device_commands.router)
     app.include_router(memories.router)
     app.include_router(memory_portability.router)
     app.include_router(conversations.router)

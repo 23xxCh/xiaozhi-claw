@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+STARTUP_TIMEOUT_SECONDS = 30
 
 
 def _json(url: str) -> dict[str, object]:
@@ -67,7 +69,7 @@ def main() -> int:
             for command in commands
         ]
         try:
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
             while time.monotonic() < deadline:
                 if any(process.poll() is not None for process in processes):
                     errors = "\n".join(
@@ -87,10 +89,23 @@ def main() -> int:
                         return 0
                 except (OSError, KeyError, json.JSONDecodeError):
                     time.sleep(0.25)
-            raise TimeoutError("services did not become healthy within 15 seconds")
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+            for process in processes:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+            errors = "\n".join(
+                process.stderr.read() if process.stderr else "" for process in processes
+            )
+            raise TimeoutError(
+                f"services did not become healthy within {STARTUP_TIMEOUT_SECONDS} seconds:\n"
+                f"{errors}"
+            )
         finally:
             for process in processes:
-                process.terminate()
+                if process.poll() is None:
+                    process.terminate()
             for process in processes:
                 try:
                     process.wait(timeout=5)

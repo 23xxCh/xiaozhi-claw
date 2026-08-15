@@ -80,6 +80,9 @@ async def _device_detail_response(
         display_profile_id=device.display_profile_id,
         profile_schema_version=device.profile_schema_version,
         device_config_schema_version=device.device_config_schema_version,
+        runtime_state=device.runtime_state,
+        runtime_state_at=device.runtime_state_at,
+        runtime_reason=device.runtime_reason,
     )
 
 

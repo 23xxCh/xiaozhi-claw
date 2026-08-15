@@ -233,6 +233,11 @@ class Device(Base):
     profile_schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     profile_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     device_config_schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    runtime_state: Mapped[str] = mapped_column(String(24), default="offline")
+    runtime_state_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    runtime_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     reset_epoch: Mapped[int] = mapped_column(Integer, default=0)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

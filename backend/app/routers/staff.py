@@ -287,6 +287,9 @@ def _admin_device_response(device: Device) -> AdminDeviceResponse:
         hardware_version=device.hardware_version,
         firmware_version=device.firmware_version,
         last_seen_at=device.last_seen_at,
+        runtime_state=device.runtime_state,
+        runtime_state_at=device.runtime_state_at,
+        runtime_reason=device.runtime_reason,
     )
 
 

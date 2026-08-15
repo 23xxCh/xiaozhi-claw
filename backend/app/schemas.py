@@ -104,6 +104,20 @@ class DeviceDetailResponse(DeviceResponse):
     display_profile_id: str | None = None
     profile_schema_version: int | None = None
     device_config_schema_version: int = 1
+    runtime_state: str = "offline"
+    runtime_state_at: datetime | None = None
+    runtime_reason: str | None = None
+
+
+class DeviceCommandResponse(BaseModel):
+    command_id: str
+    device_id: str
+    status: Literal["pending", "delivered", "applied", "failed", "expired"]
+    error_code: str | None
+    created_at: datetime
+    expires_at: datetime | None
+    delivered_at: datetime | None
+    applied_at: datetime | None
 
 
 class DeviceUpdateRequest(BaseModel):
@@ -436,6 +450,9 @@ class AdminDeviceResponse(BaseModel):
     hardware_version: str
     firmware_version: str
     last_seen_at: datetime | None
+    runtime_state: str
+    runtime_state_at: datetime | None
+    runtime_reason: str | None
 
 
 class AdminUserResponse(BaseModel):
