@@ -19,14 +19,6 @@ class HensunDisplayComponentTests(unittest.TestCase):
         self.assertNotIn("emote_gen_player_mount_assets", panel)
         self.assertNotIn("RotateRgb565Clockwise", panel)
 
-    def test_panel_recovers_a_stalled_animation_flush(self):
-        panel = source("hensun_panel.cc")
-        header = source("hensun_panel.h")
-        self.assertIn("kAnimationFlushTimeoutMs", panel)
-        self.assertIn("AnimationFlushWatchdog", panel)
-        self.assertIn("animation flush timed out", panel)
-        self.assertIn("animation_flush_started_us_", header)
-
     def test_renderer_owns_assets_queue_and_animation_switching(self):
         renderer = source("emote_renderer.cc")
         for marker in (

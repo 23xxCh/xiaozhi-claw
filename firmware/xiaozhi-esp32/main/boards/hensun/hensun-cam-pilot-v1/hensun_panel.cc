@@ -6,12 +6,9 @@
 #include <esp_err.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 
 namespace {
 constexpr char kTag[] = "HensunPanel";
-constexpr int kAnimationFlushTimeoutMs = 1000;
-constexpr int kAnimationFlushWatchdogPeriodMs = 250;
 }
 
 HensunPanel* HensunPanel::active_panel_ = nullptr;
@@ -64,20 +61,11 @@ void HensunPanel::EnableEmoteFlush() {
     };
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(
         panel_io_, &callbacks, this));
-    ESP_ERROR_CHECK(
-        xTaskCreate(AnimationFlushWatchdogEntry, "hensun_lcd_watchdog", 2048,
-                    this, 3, &animation_flush_watchdog_task_) == pdPASS
-            ? ESP_OK
-            : ESP_ERR_NO_MEM);
 }
 
 HensunPanel::~HensunPanel() {
     if (active_panel_ == this) {
         active_panel_ = nullptr;
-    }
-    if (animation_flush_watchdog_task_ != nullptr) {
-        vTaskDelete(animation_flush_watchdog_task_);
-        animation_flush_watchdog_task_ = nullptr;
     }
     if (preview_flush_semaphore_ != nullptr) {
         vSemaphoreDelete(preview_flush_semaphore_);
@@ -95,34 +83,7 @@ HensunPanel::~HensunPanel() {
 }
 
 void HensunPanel::AttachPlayer(emote_gen_player_handle_t player) {
-    player_.store(player);
-}
-
-void HensunPanel::AnimationFlushWatchdogEntry(void* context) {
-    static_cast<HensunPanel*>(context)->AnimationFlushWatchdog();
-}
-
-void HensunPanel::AnimationFlushWatchdog() {
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(kAnimationFlushWatchdogPeriodMs));
-        const int64_t started_us = animation_flush_started_us_.load();
-        if (started_us <= 0 || animation_flushes_pending_.load() == 0 ||
-            esp_timer_get_time() - started_us < kAnimationFlushTimeoutMs * 1000LL) {
-            continue;
-        }
-
-        const uint32_t stalled = animation_flushes_pending_.exchange(0);
-        if (stalled == 0) {
-            continue;
-        }
-        animation_flush_started_us_.store(0);
-        ESP_LOGE(kTag, "animation flush timed out after %d ms; releasing renderer",
-                 kAnimationFlushTimeoutMs);
-        const emote_gen_player_handle_t player = player_.load();
-        if (player != nullptr) {
-            emote_gen_player_notify_flush_finished(player);
-        }
-    }
+    player_ = player;
 }
 
 bool HensunPanel::WaitForAnimationFlushes(int timeout_ms) {
@@ -171,17 +132,11 @@ void HensunPanel::FlushAnimation(int x_start, int y_start, int x_end,
         emote_gen_player_notify_flush_finished(manager);
         return;
     }
-    const uint32_t previous = panel->animation_flushes_pending_.fetch_add(1);
-    if (previous == 0) {
-        panel->animation_flush_started_us_.store(esp_timer_get_time());
-    }
+    panel->animation_flushes_pending_.fetch_add(1);
     const esp_err_t result = esp_lcd_panel_draw_bitmap(
         panel->panel_, x_start, y_start, x_end, y_end, data);
     if (result != ESP_OK) {
-        const uint32_t pending = panel->animation_flushes_pending_.exchange(0);
-        if (pending > 0) {
-            panel->animation_flush_started_us_.store(0);
-        }
+        panel->animation_flushes_pending_.fetch_sub(1);
         emote_gen_player_notify_flush_finished(manager);
     }
 }
@@ -200,18 +155,10 @@ bool HensunPanel::IoReadyCallback(esp_lcd_panel_io_handle_t panel_io,
         xSemaphoreGiveFromISR(panel->preview_flush_semaphore_, &task_woken);
         return task_woken == pdTRUE;
     }
-    uint32_t pending = panel->animation_flushes_pending_.load();
-    while (pending > 0 &&
-           !panel->animation_flushes_pending_.compare_exchange_weak(
-               pending, pending - 1)) {
-    }
-    if (pending > 0) {
-        if (pending == 1) {
-            panel->animation_flush_started_us_.store(0);
-        }
-        const emote_gen_player_handle_t player = panel->player_.load();
-        if (player != nullptr) {
-            emote_gen_player_notify_flush_finished(player);
+    if (panel->animation_flushes_pending_.load() > 0) {
+        panel->animation_flushes_pending_.fetch_sub(1);
+        if (panel->player_ != nullptr) {
+            emote_gen_player_notify_flush_finished(panel->player_);
         }
     }
     return false;
