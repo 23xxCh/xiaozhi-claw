@@ -1,5 +1,6 @@
 param(
     [string]$HostAddress = "192.168.5.49",
+    [string]$PythonPath = "",
     [switch]$NoBrowser
 )
 
@@ -7,7 +8,12 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $runtimeRoot = Join-Path $projectRoot "run\local-pilot"
 $statePath = Join-Path $runtimeRoot "processes.json"
-$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$python = if ($PythonPath) {
+    $PythonPath
+}
+else {
+    Join-Path $projectRoot ".venv\Scripts\python.exe"
+}
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 
@@ -29,7 +35,11 @@ function Test-TrackedProcess {
 }
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "Python environment is missing: $python"
+    $systemPython = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($PythonPath -or -not $systemPython) {
+        throw "Python environment is missing: $python"
+    }
+    $python = $systemPython.Source
 }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot ".env"))) {
     throw "Backend .env is missing."

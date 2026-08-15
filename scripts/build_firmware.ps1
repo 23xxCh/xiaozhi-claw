@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted", "selfhosted-landscape", "selfhosted-portrait")]
+    [ValidateSet("official", "selfhosted", "selfhosted-landscape", "selfhosted-portrait", "emote-lab")]
     [string]$Variant,
 
     [string]$BootstrapUrl = ""
@@ -34,6 +34,7 @@ $buildName = switch ($Variant) {
     "selfhosted" { "hensun-cam-selfhosted-v1" }
     "selfhosted-landscape" { "hensun-cam-selfhosted-landscape-v1" }
     "selfhosted-portrait" { "hensun-cam-selfhosted-portrait-v1" }
+    "emote-lab" { "hensun-cam-emote-lab-v1" }
 }
 $isSelfHosted = $Variant -ne "official"
 
