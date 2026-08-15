@@ -24,6 +24,12 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.audio_engine_source = (
             ROOT / "main/audio/engines/afe_audio_engine.cc"
         ).read_text(encoding="utf-8")
+        self.camera_header = (ROOT / "main/boards/common/esp32_camera.h").read_text(
+            encoding="utf-8"
+        )
+        self.camera_source = (ROOT / "main/boards/common/esp32_camera.cc").read_text(
+            encoding="utf-8"
+        )
         self.face_header = (BOARD / "hensun_face_display.h").read_text(
             encoding="utf-8"
         )
@@ -152,14 +158,34 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             self.application_source,
         )
 
+    def test_selfhosted_custom_wake_returns_to_idle_after_each_reply(self):
+        selfhosted = "\n".join(
+            self.builds["hensun-cam-selfhosted-v1"]["sdkconfig_append"]
+        )
+        official = "\n".join(
+            self.builds["hensun-cam-official-v1"]["sdkconfig_append"]
+        )
+        self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y", selfhosted)
+        self.assertNotIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y", official)
+
+        finish = re.search(
+            r"void Application::FinishTtsPlayback\(std::string reply_id\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(finish)
+        body = finish.group(1)
+        self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION", body)
+        self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
+
     def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
         self.assertIn(
             "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
             self.audio_engine_source,
         )
-        self.assertIn("afe_config->vad_mode = VAD_MODE_2", self.audio_engine_source)
+        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
         self.assertIn(
-            "afe_config->vad_min_noise_ms = 600",
+            "afe_config->vad_min_noise_ms = 1200",
             self.audio_engine_source,
         )
 
@@ -210,6 +236,33 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("LAMP_GPIO", self.pins)
         self.assertEqual(len(re.findall(r"\bDECLARE_BOARD\(", self.source)), 1)
 
+    def test_camera_starts_only_when_first_capture_is_requested(self):
+        self.assertIn("new Esp32Camera(camera_config, true)", self.source)
+        self.assertIn(
+            "Esp32Camera(const camera_config_t &config, bool defer_init = false)",
+            self.camera_header,
+        )
+        self.assertIn("bool Initialize()", self.camera_header)
+        self.assertIn("if (!Initialize())", self.camera_source)
+        constructor = re.search(
+            r"Esp32Camera::Esp32Camera\(.*?\)\s*\{(.*?)\n\}",
+            self.camera_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(constructor)
+        self.assertIn("if (!defer_init)", constructor.group(1))
+
+    def test_hensun_i2s_microphone_uses_the_upper_16_bits_without_clipping(self):
+        codec = re.search(
+            r"class HensunAudioCodecSimplex.*?\n\};",
+            self.source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(codec)
+        body = codec.group(0)
+        self.assertRegex(body, r"int\s+Read\(int16_t\*\s+dest,\s*int\s+samples\)\s+override")
+        self.assertIn("bit32_buffer[index] >> 16", body)
+
     def test_boot_click_cannot_start_local_audio_loopback_before_network_ready(self):
         handler = re.search(
             r"boot_button_\.OnClick\(\[this\]\(\) \{(.*?)\n\s*\}\);",
@@ -229,6 +282,12 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("return;", guard.group(1))
         self.assertLess(guard.start(), body.index("app.ToggleChatState()"))
         self.assertNotIn("EnterWifiConfigMode()", body)
+
+    def test_boot_button_events_are_observable_in_serial_logs(self):
+        self.assertIn('ESP_LOGI(TAG, "BOOT press down")', self.source)
+        self.assertIn('ESP_LOGI(TAG, "BOOT press up")', self.source)
+        self.assertIn('ESP_LOGI(TAG, "BOOT single click (state=%d)"', self.source)
+        self.assertIn('ESP_LOGI(TAG, "BOOT long press")', self.source)
 
     def test_build_chain_selects_the_new_board(self):
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")

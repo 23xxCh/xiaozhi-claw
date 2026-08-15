@@ -1203,6 +1203,9 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     ESP_LOGI(TAG, "TTS playback drained (decode drops=%lu)",
              (unsigned long)audio_service_.GetDecodeDropCount());
     if (GetDeviceState() == kDeviceStateSpeaking) {
+#if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+        SetDeviceState(kDeviceStateIdle);
+#else
         if (listening_mode_ == kListeningModeManualStop) {
             SetDeviceState(kDeviceStateIdle);
         } else {
@@ -1220,6 +1223,7 @@ void Application::FinishTtsPlayback(std::string reply_id) {
             }
             SetDeviceState(kDeviceStateListening);
         }
+#endif
     }
 }
 

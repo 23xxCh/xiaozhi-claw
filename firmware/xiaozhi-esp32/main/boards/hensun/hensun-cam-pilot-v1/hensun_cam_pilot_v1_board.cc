@@ -66,6 +66,27 @@ public:
         AudioCodec::OutputData(data);
     }
 
+protected:
+    int Read(int16_t* dest, int samples) override {
+        size_t bytes_read = 0;
+        constexpr uint32_t kReadTimeoutMs = 200;
+        std::vector<int32_t> bit32_buffer(samples);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                             samples * sizeof(int32_t), &bytes_read,
+                             kReadTimeoutMs) != ESP_OK) {
+            return 0;
+        }
+
+        samples = bytes_read / sizeof(int32_t);
+        for (int index = 0; index < samples; ++index) {
+            // The pilot board's 24-bit I2S microphone is left-aligned in the
+            // 32-bit slot. Keep the upper 16 bits; the generic >>12 path adds
+            // 16x gain and clips most of this microphone's samples.
+            dest[index] = static_cast<int16_t>(bit32_buffer[index] >> 16);
+        }
+        return samples;
+    }
+
 private:
     HensunPilotDisplay* display_ = nullptr;
 };
@@ -127,9 +148,16 @@ private:
     }
 
     void InitializeButtons() {
+        boot_button_.OnPressDown([]() {
+            ESP_LOGI(TAG, "BOOT press down");
+        });
+        boot_button_.OnPressUp([]() {
+            ESP_LOGI(TAG, "BOOT press up");
+        });
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             const auto state = app.GetDeviceState();
+            ESP_LOGI(TAG, "BOOT single click (state=%d)", state);
             if (state == kDeviceStateStarting ||
                 state == kDeviceStateWifiConfiguring ||
                 state == kDeviceStateAudioTesting) {
@@ -142,6 +170,7 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnLongPress([this]() {
+            ESP_LOGI(TAG, "BOOT long press");
 #ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE
             display_->StartShowcase();
 #else
@@ -149,6 +178,7 @@ private:
 #endif
         });
         boot_button_.OnDoubleClick([this]() {
+            ESP_LOGI(TAG, "BOOT double click");
             display_->StartShowcase();
         });
     }
@@ -180,7 +210,10 @@ private:
         camera_config.fb_location = CAMERA_FB_IN_PSRAM;
         camera_config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
-        camera_ = new Esp32Camera(camera_config);
+        // Cloud vision is disabled for the pilot. Keep the sensor off while the
+        // face is idle so camera DMA/interrupts cannot starve the display; the
+        // first explicit Capture() initializes it on demand.
+        camera_ = new Esp32Camera(camera_config, true);
         camera_->SetHMirror(false);
         camera_->SetVFlip(true);
     }

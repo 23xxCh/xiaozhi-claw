@@ -29,11 +29,24 @@ static constexpr bool kConfiguredVFlip = false;
 #endif
 #endif
 
-Esp32Camera::Esp32Camera(const camera_config_t &config) {
-    esp_err_t err = esp_camera_init(&config);
+Esp32Camera::Esp32Camera(const camera_config_t &config, bool defer_init)
+    : config_(config) {
+    if (!defer_init) {
+        Initialize();
+    } else {
+        ESP_LOGI(TAG, "Camera initialization deferred until first capture");
+    }
+}
+
+bool Esp32Camera::Initialize() {
+    if (streaming_on_) {
+        return true;
+    }
+
+    esp_err_t err = esp_camera_init(&config_);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
-        return;
+        return false;
     }
 
     sensor_t *s = esp_camera_sensor_get();
@@ -45,10 +58,17 @@ Esp32Camera::Esp32Camera(const camera_config_t &config) {
         s->set_hmirror(s, kConfiguredHMirror ? 1 : 0);
         s->set_vflip(s, kConfiguredVFlip ? 1 : 0);
 #endif
-        ESP_LOGI(TAG, "Camera initialized: format=%d", config.pixel_format);
+        if (hmirror_configured_) {
+            s->set_hmirror(s, hmirror_enabled_ ? 1 : 0);
+        }
+        if (vflip_configured_) {
+            s->set_vflip(s, vflip_enabled_ ? 1 : 0);
+        }
+        ESP_LOGI(TAG, "Camera initialized: format=%d", config_.pixel_format);
     }
 
     streaming_on_ = true;
+    return true;
 }
 
 Esp32Camera::~Esp32Camera() {
@@ -77,7 +97,7 @@ bool Esp32Camera::Capture() {
         encoder_thread_.join();
     }
 
-    if (!streaming_on_) {
+    if (!Initialize()) {
         return false;
     }
 
@@ -141,6 +161,11 @@ bool Esp32Camera::Capture() {
 }
 
 bool Esp32Camera::SetHMirror(bool enabled) {
+    hmirror_enabled_ = enabled;
+    hmirror_configured_ = true;
+    if (!streaming_on_) {
+        return true;
+    }
     sensor_t *s = esp_camera_sensor_get();
     if (!s) {
         return false;
@@ -150,6 +175,11 @@ bool Esp32Camera::SetHMirror(bool enabled) {
 }
 
 bool Esp32Camera::SetVFlip(bool enabled) {
+    vflip_enabled_ = enabled;
+    vflip_configured_ = true;
+    if (!streaming_on_) {
+        return true;
+    }
     sensor_t *s = esp_camera_sensor_get();
     if (!s) {
         return false;

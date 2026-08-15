@@ -909,6 +909,14 @@ config WAKE_WORD_DETECTION_IN_LISTENING
         which allows interrupting the current conversation.
         When disabled (default), wake word detection is turned off during listening.
 
+config HENSUN_ONE_SHOT_CONVERSATION
+    bool "Return Hensun device to wake-word standby after each reply"
+    default n
+    depends on BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    help
+        End the current listening turn after TTS playback drains so the device
+        returns to local wake-word standby instead of opening a follow-up turn.
+
 config USE_AUDIO_PROCESSOR
     bool "Enable AFE Audio Processing"
     default y
