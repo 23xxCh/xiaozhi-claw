@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hensun.example/schemas/display-profile-v1.json",
+  "title": "Hensun DisplayProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "controller", "physical", "logical", "transform", "offset", "color_order", "invert_color", "spi", "emote_assets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "controller": {"enum": ["st7789"]},
+    "physical": {"$ref": "#/$defs/size"},
+    "logical": {"$ref": "#/$defs/size"},
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["swap_xy", "mirror_x", "mirror_y"],
+      "properties": {
+        "swap_xy": {"type": "boolean"},
+        "mirror_x": {"type": "boolean"},
+        "mirror_y": {"type": "boolean"}
+      }
+    },
+    "offset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "integer", "minimum": -1024, "maximum": 1024},
+        "y": {"type": "integer", "minimum": -1024, "maximum": 1024}
+      }
+    },
+    "color_order": {"enum": ["rgb", "bgr"]},
+    "invert_color": {"type": "boolean"},
+    "spi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "mode", "frequency_hz", "queue_depth"],
+      "properties": {
+        "host": {"enum": [2, 3]},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 3},
+        "frequency_hz": {"type": "integer", "minimum": 1000000, "maximum": 80000000},
+        "queue_depth": {"type": "integer", "minimum": 1, "maximum": 20}
+      }
+    },
+    "emote_assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directory", "binary", "manifest"],
+      "properties": {
+        "directory": {"type": "string", "pattern": "^[a-zA-Z0-9_./-]+$"},
+        "binary": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]+\\.bin$"},
+        "manifest": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]+\\.json$"}
+      }
+    }
+  },
+  "$defs": {
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1, "maximum": 2048},
+        "height": {"type": "integer", "minimum": 1, "maximum": 2048}
+      }
+    }
+  }
+}

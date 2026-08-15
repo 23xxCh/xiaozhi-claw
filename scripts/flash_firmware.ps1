@@ -19,13 +19,13 @@ $result = & (Join-Path $PSScriptRoot "build_firmware.ps1") @buildArgs
 
 Push-Location $firmwareRoot
 try {
-    if ($Variant -in @("selfhosted", "selfhosted-landscape")) {
+    if ($Variant -ne "official") {
         $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
         $appPath = Join-Path $firmwareRoot "build\xiaozhi.bin"
-        $emotePath = Join-Path $firmwareRoot "build\mmap_build\emote_landscape\emote_gen\emote_gen.bin"
+        $emotePath = $result.EmoteAssetsPath
         foreach ($requiredPath in ($idfPython, $appPath, $emotePath)) {
             if (-not (Test-Path -LiteralPath $requiredPath)) {
-                throw "Landscape self-hosted flash input is missing: $requiredPath"
+                throw "Profile-selected self-hosted flash input is missing: $requiredPath"
             }
         }
         & $idfPython -m esptool --chip esp32s3 --port $Port write_flash `

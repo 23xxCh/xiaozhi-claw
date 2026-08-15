@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hensun.example/schemas/hardware-profile-v1.json",
+  "title": "Hensun HardwareProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "target", "flash_bytes", "psram_bytes", "audio", "pins", "camera", "capabilities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "target": {"enum": ["esp32s3"]},
+    "flash_bytes": {"type": "integer", "minimum": 8388608},
+    "psram_bytes": {"type": "integer", "minimum": 2097152},
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_sample_rate", "output_sample_rate"],
+      "properties": {
+        "input_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 48000},
+        "output_sample_rate": {"type": "integer", "minimum": 8000, "maximum": 48000}
+      }
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio", "display", "camera", "buttons"],
+      "properties": {
+        "audio": {"$ref": "#/$defs/pinMap"},
+        "display": {"$ref": "#/$defs/pinMap"},
+        "camera": {"$ref": "#/$defs/pinMap"},
+        "buttons": {"$ref": "#/$defs/pinMap"}
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["xclk_hz", "frame_width", "frame_height", "pixel_format", "defer_init"],
+      "properties": {
+        "xclk_hz": {"type": "integer", "minimum": 1000000, "maximum": 40000000},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1},
+        "pixel_format": {"enum": ["rgb565"]},
+        "defer_init": {"type": "boolean"}
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": {"type": "boolean"}
+    }
+  },
+  "$defs": {
+    "pinMap": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "integer", "minimum": -1, "maximum": 48}
+    }
+  }
+}

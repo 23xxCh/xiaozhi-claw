@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "st7789-240x320-portrait-v1",
+  "controller": "st7789",
+  "physical": {"width": 240, "height": 320},
+  "logical": {"width": 240, "height": 320},
+  "transform": {"swap_xy": false, "mirror_x": false, "mirror_y": false},
+  "offset": {"x": 0, "y": 0},
+  "color_order": "rgb",
+  "invert_color": true,
+  "spi": {"host": 3, "mode": 0, "frequency_hz": 40000000, "queue_depth": 10},
+  "emote_assets": {
+    "directory": "emote_lab",
+    "binary": "hensun_emote_lab_v1.bin",
+    "manifest": "manifest.json"
+  }
+}

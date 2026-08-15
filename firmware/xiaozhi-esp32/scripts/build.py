@@ -1504,6 +1504,7 @@ def build_board(
     for build in builds:
         name = _get_reported_name(build)
         final_name = _get_release_full_name(manufacturer, build)
+        rendered_profile = None
 
         # Process sdkconfig_append
         build_sdkconfig_append = build.get("sdkconfig_append", [])
@@ -1523,6 +1524,17 @@ def build_board(
             )
             sdkconfig_append = [f"{board_type_config}=y"]
             sdkconfig_append.extend(build_sdkconfig_append)
+
+        if "profile_bundle" in build:
+            from profile_codegen import render_profile_bundle
+
+            rendered_profile = render_profile_bundle(
+                Path.cwd(),
+                cfg_path.parent,
+                build,
+                bootstrap_url=os.environ.get("HENSUN_BOOTSTRAP_URL"),
+            )
+            sdkconfig_append.extend(rendered_profile.sdkconfig)
 
         option_definitions = _build_option_definitions(
             board_type,
@@ -1595,6 +1607,8 @@ def build_board(
         _emit_build_stage("dependencies_resolving")
         os.environ.pop("IDF_TARGET", None)
         _prepare_target(target, preview)
+        if rendered_profile is not None:
+            rendered_profile.write(Path("build/generated"))
         _configure_build(
             target,
             sdkconfig_append,

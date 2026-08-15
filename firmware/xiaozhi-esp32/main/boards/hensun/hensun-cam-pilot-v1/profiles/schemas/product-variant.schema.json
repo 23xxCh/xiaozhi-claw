@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hensun.example/schemas/product-variant-v1.json",
+  "title": "Hensun ProductVariant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "mode", "provisioning", "wake", "features", "partition", "bootstrap"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$"},
+    "mode": {"enum": ["official", "selfhosted", "emote-lab"]},
+    "provisioning": {"enum": ["softap"]},
+    "wake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "command", "display_name", "threshold", "model"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "command": {"type": "string"},
+        "display_name": {"type": "string"},
+        "threshold": {"type": "integer", "minimum": 1, "maximum": 99},
+        "model": {"enum": ["none", "multinet5-cn-q8"]}
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["send_wake_word_data", "emote_engine", "one_shot_conversation", "camera", "cloud_vision"],
+      "properties": {
+        "send_wake_word_data": {"type": "boolean"},
+        "emote_engine": {"type": "boolean"},
+        "one_shot_conversation": {"type": "boolean"},
+        "camera": {"type": "boolean"},
+        "cloud_vision": {"type": "boolean"}
+      }
+    },
+    "partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["custom", "file", "model_max_bytes", "emote_max_bytes"],
+      "properties": {
+        "custom": {"type": "boolean"},
+        "file": {"type": "string"},
+        "model_max_bytes": {"type": "integer", "minimum": 0},
+        "emote_max_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "fixed_url"],
+      "properties": {
+        "strategy": {"enum": ["fixed", "build-parameter"]},
+        "fixed_url": {"type": "string"}
+      }
+    }
+  }
+}

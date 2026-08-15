@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import struct
+import sys
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,8 @@ ASSET_ROOT = BOARD / "emote_lab"
 SOURCE_ROOT = ASSET_ROOT / "source"
 GIF_ROOT = ASSET_ROOT / "gifs"
 PARTITION = ROOT / "partitions/v2/16m_hensun_emote_lab.csv"
+sys.path.insert(0, str(ROOT / "scripts"))
+from profile_codegen import render_profile_bundle  # noqa: E402
 
 EXPECTED = {
     "idle": (48, 6, 42),
@@ -108,7 +111,11 @@ class HensunEmoteLabTests(unittest.TestCase):
         config = json.loads((BOARD / "config.json").read_text(encoding="utf-8"))
         builds = {build["name"]: build for build in config["builds"]}
         self.assertIn("hensun-cam-emote-lab-v1", builds)
-        lab_sdkconfig = "\n".join(builds["hensun-cam-emote-lab-v1"]["sdkconfig_append"])
+        lab_sdkconfig = "\n".join(
+            render_profile_bundle(
+                ROOT, BOARD, builds["hensun-cam-emote-lab-v1"]
+            ).sdkconfig
+        )
         self.assertIn("CONFIG_USE_EMOTE_MESSAGE_STYLE=y", lab_sdkconfig)
         self.assertIn(
             'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_hensun_emote_lab.csv"',
@@ -167,7 +174,7 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertIn("InitializeCamera();", board)
         self.assertIn("new Esp32Camera", board)
         self.assertIn("spiffs_create_partition_assets", cmake)
-        self.assertIn("hensun_emote_lab_v1.bin", cmake)
+        self.assertIn("HENSUN_EMOTE_ASSET_BIN", cmake)
         self.assertIn("FLASH_IN_PROJECT", cmake)
 
 

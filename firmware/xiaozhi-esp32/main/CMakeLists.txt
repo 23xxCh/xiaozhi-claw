@@ -42,7 +42,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "${CMAKE_BINARY_DIR}/generated")
 
 # Add board common files
 list(APPEND SOURCES
@@ -1092,21 +1092,17 @@ idf_component_register(SRCS ${SOURCES}
 if(CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
    AND CONFIG_USE_EMOTE_MESSAGE_STYLE
    AND CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/v2/16m_hensun_emote_lab.csv")
-    if(CONFIG_HENSUN_DISPLAY_LANDSCAPE)
-        set(HENSUN_EMOTE_LAB_DIR
-            "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_landscape")
-        set(HENSUN_EMOTE_LAB_BIN
-            "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_landscape_v1.bin")
-    else()
-        set(HENSUN_EMOTE_LAB_DIR
-            "${CMAKE_CURRENT_SOURCE_DIR}/boards/hensun/hensun-cam-pilot-v1/emote_lab")
-        set(HENSUN_EMOTE_LAB_BIN "${HENSUN_EMOTE_LAB_DIR}/hensun_emote_lab_v1.bin")
+    include("${CMAKE_BINARY_DIR}/generated/hensun_profile.cmake" OPTIONAL)
+    if(NOT HENSUN_PROFILE_GENERATED)
+        message(FATAL_ERROR
+            "Hensun Profile output is missing. Build through scripts/build.py or scripts/build_firmware.ps1."
+        )
     endif()
     spiffs_create_partition_assets(
         emote_gen
-        "${HENSUN_EMOTE_LAB_DIR}"
+        "${HENSUN_EMOTE_ASSET_DIR}"
         FLASH_IN_PROJECT
-        COPY_PREBUILT_BIN "${HENSUN_EMOTE_LAB_BIN}"
+        COPY_PREBUILT_BIN "${HENSUN_EMOTE_ASSET_BIN}"
     )
 endif()
 

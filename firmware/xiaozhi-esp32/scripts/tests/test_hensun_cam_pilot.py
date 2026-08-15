@@ -1,17 +1,27 @@
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BOARD = ROOT / "main/boards/hensun/hensun-cam-pilot-v1"
+sys.path.insert(0, str(ROOT / "scripts"))
+from profile_codegen import render_profile_bundle  # noqa: E402
 
 
 class HensunCamPilotBoardTests(unittest.TestCase):
     def setUp(self):
         self.config = json.loads((BOARD / "config.json").read_text(encoding="utf-8"))
-        self.builds = {build["name"]: build for build in self.config["builds"]}
-        self.pins = (BOARD / "config.h").read_text(encoding="utf-8")
+        self.builds = {}
+        for build in self.config["builds"]:
+            rendered = render_profile_bundle(ROOT, BOARD, build)
+            self.builds[build["name"]] = {
+                **build,
+                "sdkconfig_append": list(rendered.sdkconfig),
+            }
+            if build["name"] == "hensun-cam-selfhosted-v1":
+                self.pins = rendered.header
         self.source = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(
             encoding="utf-8"
         )

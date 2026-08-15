@@ -10,39 +10,6 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $firmwareRoot = Join-Path $projectRoot "firmware\xiaozhi-esp32"
-$boardRelativePath = "main\boards\hensun\hensun-cam-pilot-v1"
-$boardRoot = Join-Path $firmwareRoot $boardRelativePath
-$baseConfigPath = Join-Path $boardRoot "config.json"
-$temporaryConfigName = "config.hensun-build-$PID.json"
-$temporaryConfigPath = Join-Path $boardRoot $temporaryConfigName
-
-function Repair-WhitespaceUnsafeComponentLinkFlags {
-    if ($projectRoot -notmatch "\s") {
-        return
-    }
-
-    $unsafeLinkFlag = '"-L ${CMAKE_CURRENT_SOURCE_DIR}/lib/${CONFIG_IDF_TARGET}"'
-    $safeLinkFlag = '"-L${CMAKE_CURRENT_SOURCE_DIR}/lib/${CONFIG_IDF_TARGET}"'
-    $componentCMakeFiles = @(
-        Join-Path $firmwareRoot "managed_components\espressif__esp_audio_codec\CMakeLists.txt"
-        Join-Path $firmwareRoot "managed_components\espressif__esp_image_effects\CMakeLists.txt"
-    )
-    foreach ($componentCMakeFile in $componentCMakeFiles) {
-        if (-not (Test-Path -LiteralPath $componentCMakeFile)) {
-            throw "Required ESP-IDF managed component is missing: $componentCMakeFile"
-        }
-        $content = Get-Content -Raw -LiteralPath $componentCMakeFile
-        if ($content.Contains($unsafeLinkFlag)) {
-            $content.Replace($unsafeLinkFlag, $safeLinkFlag) |
-                Set-Content -LiteralPath $componentCMakeFile -Encoding utf8 -NoNewline
-        }
-        elseif (-not $content.Contains($safeLinkFlag)) {
-            throw "Managed component link flag changed unexpectedly: $componentCMakeFile"
-        }
-    }
-}
-
-Repair-WhitespaceUnsafeComponentLinkFlags
 
 if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
     $idfCandidates = @(
@@ -69,9 +36,7 @@ $buildName = switch ($Variant) {
     "selfhosted-portrait" { "hensun-cam-selfhosted-portrait-v1" }
 }
 $isSelfHosted = $Variant -ne "official"
-$emoteAssetDirectory = if ($Variant -in @("selfhosted", "selfhosted-landscape")) { "emote_landscape" } else { "emote_lab" }
 
-$configName = "config.json"
 if ($isSelfHosted) {
     $parsedUrl = $null
     if (
@@ -83,64 +48,73 @@ if ($isSelfHosted) {
     if ($parsedUrl.Host.EndsWith(".invalid")) {
         throw "Self-hosted field firmware cannot use the reserved .invalid endpoint."
     }
-
-    $config = Get-Content -Raw -LiteralPath $baseConfigPath | ConvertFrom-Json
-    $build = $config.builds | Where-Object { $_.name -eq $buildName }
-    if (-not $build) {
-        throw "Build variant $buildName is missing from $baseConfigPath."
-    }
-    $otaEntry = [string]::Format('CONFIG_OTA_URL="{0}"', $BootstrapUrl.TrimEnd("/"))
-    $build.sdkconfig_append = @(
-        $build.sdkconfig_append | Where-Object { $_ -notlike "CONFIG_OTA_URL=*" }
-    ) + $otaEntry
-    $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $temporaryConfigPath -Encoding utf8
-    $configName = $temporaryConfigName
 }
 
+$previousBootstrapUrl = $env:HENSUN_BOOTSTRAP_URL
 try {
-    Push-Location $firmwareRoot
-    $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
-    if (-not (Test-Path -LiteralPath $idfPython)) {
-        throw "The active ESP-IDF Python environment was not found: $idfPython"
+    if ($isSelfHosted) {
+        $env:HENSUN_BOOTSTRAP_URL = $BootstrapUrl.TrimEnd("/")
     }
-    $firmwareBuildArgs = @(
-        "scripts\build.py",
-        "hensun/hensun-cam-pilot-v1",
-        "--config", $configName,
-        "--name", $buildName,
-        "--language", "zh-CN",
-        "--zip"
-    )
-    if ($Variant -eq "official") {
-        $firmwareBuildArgs += @("--wake-word", "nihaoxiaozhi")
-    }
-    & $idfPython @firmwareBuildArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Firmware build failed for $Variant."
+    else {
+        Remove-Item Env:HENSUN_BOOTSTRAP_URL -ErrorAction SilentlyContinue
     }
 
-    if ($isSelfHosted) {
-        $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
-        $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\$emoteAssetDirectory\emote_gen\emote_gen.bin"
-        $resourceLimits = @(
-            @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 0x2FC000 },
-            @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = 5MB }
-        )
-        foreach ($resource in $resourceLimits) {
-            if (-not (Test-Path -LiteralPath $resource.Path)) {
-                throw "Missing $($resource.Name): $($resource.Path)"
-            }
-            $resourceSize = (Get-Item -LiteralPath $resource.Path).Length
-            if ($resourceSize -gt $resource.Limit) {
-                throw "$($resource.Name) exceeds its partition: $resourceSize > $($resource.Limit) bytes"
-            }
+    Push-Location $firmwareRoot
+    try {
+        $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $idfPython)) {
+            throw "The active ESP-IDF Python environment was not found: $idfPython"
         }
+        $firmwareBuildArgs = @(
+            "scripts\build.py",
+            "hensun/hensun-cam-pilot-v1",
+            "--name", $buildName,
+            "--language", "zh-CN",
+            "--zip"
+        )
+        if ($Variant -eq "official") {
+            $firmwareBuildArgs += @("--wake-word", "nihaoxiaozhi")
+        }
+        & $idfPython @firmwareBuildArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Firmware build failed for $Variant."
+        }
+    }
+    finally {
+        Pop-Location
     }
 }
 finally {
-    Pop-Location
-    if (Test-Path -LiteralPath $temporaryConfigPath) {
-        Remove-Item -LiteralPath $temporaryConfigPath
+    if ($null -eq $previousBootstrapUrl) {
+        Remove-Item Env:HENSUN_BOOTSTRAP_URL -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:HENSUN_BOOTSTRAP_URL = $previousBootstrapUrl
+    }
+}
+
+$generatedMetadataPath = Join-Path $firmwareRoot "build\generated\hensun_profile.json"
+if (-not (Test-Path -LiteralPath $generatedMetadataPath)) {
+    throw "Generated Hensun Profile metadata is missing: $generatedMetadataPath"
+}
+$generatedMetadata = Get-Content -Raw -LiteralPath $generatedMetadataPath | ConvertFrom-Json
+$modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
+$emoteAssetsPath = Join-Path $firmwareRoot (
+    "build\mmap_build\{0}\emote_gen\emote_gen.bin" -f $generatedMetadata.emote_asset_directory
+)
+if ($isSelfHosted) {
+    $resourceLimits = @(
+        @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = [int64]$generatedMetadata.model_max_bytes },
+        @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = [int64]$generatedMetadata.emote_max_bytes }
+    )
+    foreach ($resource in $resourceLimits) {
+        if (-not (Test-Path -LiteralPath $resource.Path)) {
+            throw "Missing $($resource.Name): $($resource.Path)"
+        }
+        $resourceSize = (Get-Item -LiteralPath $resource.Path).Length
+        if ($resourceSize -gt $resource.Limit) {
+            throw "$($resource.Name) exceeds its Profile partition limit: $resourceSize > $($resource.Limit) bytes"
+        }
     }
 }
 
@@ -155,6 +129,11 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
-    ModelAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
-    EmoteAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\$emoteAssetDirectory\emote_gen\emote_gen.bin")).Length } else { $null }
+    HardwareProfile = $generatedMetadata.hardware_profile_id
+    DisplayProfile = $generatedMetadata.display_profile_id
+    ProductVariant = $generatedMetadata.product_variant_id
+    ProfileSha256 = $generatedMetadata.profile_sha256
+    ModelAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath $modelAssetsPath).Length } else { $null }
+    EmoteAssetsBytes = if ($isSelfHosted) { (Get-Item -LiteralPath $emoteAssetsPath).Length } else { $null }
+    EmoteAssetsPath = if ($isSelfHosted) { $emoteAssetsPath } else { $null }
 }

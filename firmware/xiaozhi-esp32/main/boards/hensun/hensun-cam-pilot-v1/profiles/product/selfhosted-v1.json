@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "hensun-selfhosted-v1",
+  "mode": "selfhosted",
+  "provisioning": "softap",
+  "wake": {
+    "enabled": true,
+    "command": "ni hao xiao can",
+    "display_name": "你好小灿",
+    "threshold": 15,
+    "model": "multinet5-cn-q8"
+  },
+  "features": {
+    "send_wake_word_data": false,
+    "emote_engine": true,
+    "one_shot_conversation": true,
+    "camera": true,
+    "cloud_vision": false
+  },
+  "partition": {
+    "custom": true,
+    "file": "partitions/v2/16m_hensun_emote_lab.csv",
+    "model_max_bytes": 3129344,
+    "emote_max_bytes": 5242880
+  },
+  "bootstrap": {
+    "strategy": "build-parameter",
+    "fixed_url": ""
+  }
+}

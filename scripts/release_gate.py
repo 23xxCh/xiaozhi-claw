@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+FIRMWARE_ROOT = ROOT / "firmware" / "xiaozhi-esp32"
 BOARD_ROOT = (
     ROOT
     / "firmware"
@@ -13,11 +14,24 @@ BOARD_ROOT = (
     / "boards"
     / "hensun"
 )
+sys.path.insert(0, str(FIRMWARE_ROOT / "scripts"))
+from profile_codegen import render_profile_bundle  # noqa: E402
 
 BOARD_CONFIGS = {
     "hensun-cam-pilot-v1": BOARD_ROOT / "hensun-cam-pilot-v1" / "config.json",
     "hensun-desk-v1": BOARD_ROOT / "hensun-desk-v1" / "config.json",
 }
+
+
+def _sdkconfig_for_build(board_type: str, build: dict[str, object]) -> str:
+    if "profile_bundle" not in build:
+        return "\n".join(build.get("sdkconfig_append", []))
+    rendered = render_profile_bundle(
+        FIRMWARE_ROOT,
+        BOARD_CONFIGS[board_type].parent,
+        build,
+    )
+    return "\n".join(rendered.sdkconfig)
 
 
 def main() -> int:
@@ -32,7 +46,11 @@ def main() -> int:
         if config.get("manufacturer") != "hensun":
             errors.append(f"{board_type} manufacturer is not hensun")
         for build in config["builds"]:
-            sdkconfig = "\n".join(build.get("sdkconfig_append", []))
+            try:
+                sdkconfig = _sdkconfig_for_build(board_type, build)
+            except ValueError as exc:
+                errors.append(f"{build['name']} Profile invalid: {exc}")
+                continue
             if "CONFIG_SEND_WAKE_WORD_DATA=n" not in sdkconfig:
                 errors.append(f"{build['name']} still uploads wake-word audio")
 
@@ -43,7 +61,7 @@ def main() -> int:
         errors.append("hensun-desk-v1 device-side AEC is not enabled")
 
     cam_builds = {
-        build["name"]: "\n".join(build.get("sdkconfig_append", []))
+        build["name"]: _sdkconfig_for_build("hensun-cam-pilot-v1", build)
         for build in configs["hensun-cam-pilot-v1"]["builds"]
     }
     expected_cam_builds = {"hensun-cam-official-v1", "hensun-cam-selfhosted-v1"}

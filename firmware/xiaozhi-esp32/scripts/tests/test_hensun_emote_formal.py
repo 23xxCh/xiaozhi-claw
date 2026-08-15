@@ -1,16 +1,25 @@
 import json
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BOARD = ROOT / "main/boards/hensun/hensun-cam-pilot-v1"
+sys.path.insert(0, str(ROOT / "scripts"))
+from profile_codegen import render_profile_bundle  # noqa: E402
 
 
 class HensunEmoteFormalMergeTests(unittest.TestCase):
     def setUp(self):
         config = json.loads((BOARD / "config.json").read_text(encoding="utf-8"))
-        self.builds = {build["name"]: build for build in config["builds"]}
+        self.builds = {}
+        for build in config["builds"]:
+            rendered = render_profile_bundle(ROOT, BOARD, build)
+            self.builds[build["name"]] = {
+                **build,
+                "sdkconfig_append": list(rendered.sdkconfig),
+            }
         self.header = (BOARD / "hensun_emote_lab_display.h").read_text(encoding="utf-8")
         self.source = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
 
@@ -53,7 +62,9 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(
             encoding="utf-8"
         )
-        self.assertIn("io_config.trans_queue_depth = 10", board)
+        self.assertIn(
+            "io_config.trans_queue_depth = DISPLAY_SPI_QUEUE_DEPTH", board
+        )
 
     def test_emote_assets_preload_before_audio_engine_starts(self):
         constructor = self.source.split(

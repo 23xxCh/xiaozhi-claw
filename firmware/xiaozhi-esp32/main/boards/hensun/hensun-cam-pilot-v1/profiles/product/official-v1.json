@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "hensun-official-v1",
+  "mode": "official",
+  "provisioning": "softap",
+  "wake": {
+    "enabled": false,
+    "command": "",
+    "display_name": "",
+    "threshold": 25,
+    "model": "none"
+  },
+  "features": {
+    "send_wake_word_data": false,
+    "emote_engine": false,
+    "one_shot_conversation": false,
+    "camera": true,
+    "cloud_vision": false
+  },
+  "partition": {
+    "custom": false,
+    "file": "",
+    "model_max_bytes": 0,
+    "emote_max_bytes": 0
+  },
+  "bootstrap": {
+    "strategy": "fixed",
+    "fixed_url": "https://api.tenclass.net/xiaozhi/ota/"
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "hensun-cam-pilot-v1",
+  "target": "esp32s3",
+  "flash_bytes": 16777216,
+  "psram_bytes": 8388608,
+  "audio": {
+    "input_sample_rate": 16000,
+    "output_sample_rate": 24000
+  },
+  "pins": {
+    "audio": {
+      "mic_ws": 1,
+      "mic_sck": 2,
+      "mic_din": 42,
+      "speaker_dout": 39,
+      "speaker_bclk": 40,
+      "speaker_lrck": 41
+    },
+    "display": {
+      "backlight": 38,
+      "mosi": 20,
+      "clock": 19,
+      "dc": 47,
+      "reset": 21,
+      "cs": 45
+    },
+    "camera": {
+      "d0": 11,
+      "d1": 9,
+      "d2": 8,
+      "d3": 10,
+      "d4": 12,
+      "d5": 18,
+      "d6": 17,
+      "d7": 16,
+      "xclk": 15,
+      "pclk": 13,
+      "vsync": 6,
+      "href": 7,
+      "sioc": 5,
+      "siod": 4,
+      "pwdn": -1,
+      "reset": -1
+    },
+    "buttons": {
+      "boot": 0
+    }
+  },
+  "camera": {
+    "xclk_hz": 20000000,
+    "frame_width": 320,
+    "frame_height": 240,
+    "pixel_format": "rgb565",
+    "defer_init": true
+  },
+  "capabilities": {
+    "camera": true,
+    "display": true,
+    "microphone": true,
+    "speaker": true,
+    "psram": true
+  }
+}
