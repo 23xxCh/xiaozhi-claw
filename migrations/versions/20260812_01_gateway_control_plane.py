@@ -85,7 +85,10 @@ def upgrade() -> None:
         sa.Column("model_preset_id", sa.String(64), sa.ForeignKey("model_presets.id")),
         sa.Column("voice_preset_id", sa.String(64), sa.ForeignKey("voice_presets.id")),
         sa.Column("memory_consent", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("tools_json", sa.Text(), nullable=False, server_default="{}"),
+        # MySQL does not allow defaults on TEXT columns. The ORM supplies this
+        # value for newly created agents, while existing migrations only create
+        # the column on a brand-new table.
+        sa.Column("tools_json", sa.Text(), nullable=False),
         sa.Column("config_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
