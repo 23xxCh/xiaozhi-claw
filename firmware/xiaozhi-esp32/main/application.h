@@ -161,6 +161,7 @@ private:
     std::string pending_tts_stop_reply_id_;
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started
     bool listening_capture_active_ = false;
+    bool conversation_idle_timeout_armed_ = false;
     int listening_idle_ticks_ = 0;
     int conversation_idle_timeout_seconds_ = 3;
     bool standby_visual_active_ = false;

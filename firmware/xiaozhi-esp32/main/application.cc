@@ -22,6 +22,7 @@
 
 namespace {
 constexpr int kMaxAutoStopUtteranceSeconds = 15;
+constexpr int kInitialListeningTimeoutSeconds = 15;
 constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
 constexpr int kDefaultConversationIdleTimeoutSeconds = 3;
 constexpr int kMinimumConversationIdleTimeoutSeconds = 3;
@@ -124,7 +125,9 @@ void Application::Initialize() {
             }
             if (speaking) {
                 vad_speech_detected_ = true;
+                conversation_idle_timeout_armed_ = false;
                 listening_idle_ticks_ = 0;
+                clock_ticks_ = 0;
             } else if (vad_speech_detected_) {
                 vad_speech_detected_ = false;
                 StopListening();
@@ -336,12 +339,16 @@ void Application::Run() {
             if (GetDeviceState() == kDeviceStateListening &&
                 listening_mode_ == kListeningModeAutoStop &&
                 listening_capture_active_) {
-                if (!vad_speech_detected_) {
+                if (conversation_idle_timeout_armed_ && !vad_speech_detected_) {
                     listening_idle_ticks_++;
                     if (listening_idle_ticks_ >= conversation_idle_timeout_seconds_) {
                         ESP_LOGI(TAG, "Conversation idle timeout; entering standby");
                         EnterStandby("idle-timeout");
                     }
+                } else if (!vad_speech_detected_ &&
+                           clock_ticks_ >= kInitialListeningTimeoutSeconds) {
+                    ESP_LOGI(TAG, "Initial listening timeout; entering standby");
+                    EnterStandby("idle-timeout");
                 } else if (clock_ticks_ >= kMaxAutoStopUtteranceSeconds) {
                     ESP_LOGW(TAG, "Auto listening safety limit reached; finishing utterance");
                     StopListening();
@@ -1146,6 +1153,7 @@ void Application::HandleStopListeningEvent() {
         return;
     } else if (state == kDeviceStateListening) {
         listening_capture_active_ = false;
+        conversation_idle_timeout_armed_ = false;
         listening_idle_ticks_ = 0;
         if (protocol_) {
             protocol_->SendStopListening();
@@ -1178,6 +1186,7 @@ void Application::HandleEnterStandbyEvent() {
     pending_listening_start_ = false;
     post_playback_guard_active_ = false;
     listening_capture_active_ = false;
+    conversation_idle_timeout_armed_ = false;
     listening_idle_ticks_ = 0;
     vad_speech_detected_ = false;
     play_popup_on_listening_ = false;
@@ -1475,6 +1484,7 @@ void Application::FinishTtsPlayback(std::string reply_id) {
         if (listening_mode_ == kListeningModeManualStop) {
             SetDeviceState(kDeviceStateIdle);
         } else {
+            conversation_idle_timeout_armed_ = true;
             post_playback_guard_active_ = true;
             esp_err_t guard_status = ESP_ERR_INVALID_STATE;
             if (post_playback_listen_timer_handle_ != nullptr) {
@@ -1514,6 +1524,7 @@ void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     vad_speech_detected_ = false;
     listening_capture_active_ = false;
+    conversation_idle_timeout_armed_ = false;
     listening_idle_ticks_ = 0;
     SetDeviceState(kDeviceStateListening);
 }

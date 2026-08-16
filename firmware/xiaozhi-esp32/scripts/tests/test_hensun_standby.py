@@ -26,10 +26,24 @@ class HensunStandbyTests(unittest.TestCase):
 
     def test_idle_window_enters_soft_standby_only_before_user_speech(self) -> None:
         self.assertIn("conversation_idle_timeout_seconds_", self.application_header)
+        self.assertIn("conversation_idle_timeout_armed_", self.application_header)
         self.assertIn("listening_idle_ticks_", self.application_header)
         self.assertIn("listening_capture_active_", self.application_header)
         self.assertIn('EnterStandby("idle-timeout")', self.application)
         self.assertIn("!vad_speech_detected_", self.application)
+        self.assertIn(
+            "conversation_idle_timeout_armed_ && !vad_speech_detected_",
+            self.application,
+        )
+        self.assertIn(
+            "conversation_idle_timeout_armed_ = true;",
+            self.application,
+        )
+        self.assertIn(
+            "conversation_idle_timeout_armed_ = false;",
+            self.application,
+        )
+        self.assertIn("kInitialListeningTimeoutSeconds", self.application)
 
         start = re.search(
             r"void Application::StartListeningAudio\(\) \{(.*?)\n\}",
