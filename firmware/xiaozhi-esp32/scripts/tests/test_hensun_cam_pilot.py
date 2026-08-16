@@ -140,14 +140,34 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             self.application_source,
         )
 
+    def test_selfhosted_custom_wake_returns_to_idle_after_each_reply(self):
+        selfhosted = "\n".join(
+            self.builds["hensun-cam-selfhosted-v1"]["sdkconfig_append"]
+        )
+        official = "\n".join(
+            self.builds["hensun-cam-official-v1"]["sdkconfig_append"]
+        )
+        self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y", selfhosted)
+        self.assertNotIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y", official)
+
+        finish = re.search(
+            r"void Application::FinishTtsPlayback\(std::string reply_id\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(finish)
+        body = finish.group(1)
+        self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION", body)
+        self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
+
     def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
         self.assertIn(
             "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
             self.audio_engine_source,
         )
-        self.assertIn("afe_config->vad_mode = VAD_MODE_2", self.audio_engine_source)
+        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
         self.assertIn(
-            "afe_config->vad_min_noise_ms = 600",
+            "afe_config->vad_min_noise_ms = 1200",
             self.audio_engine_source,
         )
 
@@ -197,6 +217,17 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("PowerSaveTimer", self.source)
         self.assertNotIn("LAMP_GPIO", self.pins)
         self.assertEqual(len(re.findall(r"\bDECLARE_BOARD\(", self.source)), 1)
+
+    def test_hensun_i2s_microphone_uses_the_upper_16_bits_without_clipping(self):
+        codec = re.search(
+            r"class HensunAudioCodecSimplex.*?\n\};",
+            self.source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(codec)
+        body = codec.group(0)
+        self.assertRegex(body, r"int\s+Read\(int16_t\*\s+dest,\s*int\s+samples\)\s+override")
+        self.assertIn("bit32_buffer[index] >> 16", body)
 
     def test_build_chain_selects_the_new_board(self):
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")

@@ -66,6 +66,27 @@ public:
         AudioCodec::OutputData(data);
     }
 
+protected:
+    int Read(int16_t* dest, int samples) override {
+        size_t bytes_read = 0;
+        constexpr uint32_t kReadTimeoutMs = 200;
+        std::vector<int32_t> bit32_buffer(samples);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                             samples * sizeof(int32_t), &bytes_read,
+                             kReadTimeoutMs) != ESP_OK) {
+            return 0;
+        }
+
+        samples = bytes_read / sizeof(int32_t);
+        for (int index = 0; index < samples; ++index) {
+            // The pilot board's 24-bit I2S microphone is left-aligned in the
+            // 32-bit slot. Keep the upper 16 bits; the generic >>12 path adds
+            // 16x gain and clips most of this microphone's samples.
+            dest[index] = static_cast<int16_t>(bit32_buffer[index] >> 16);
+        }
+        return samples;
+    }
+
 private:
     HensunPilotDisplay* display_ = nullptr;
 };

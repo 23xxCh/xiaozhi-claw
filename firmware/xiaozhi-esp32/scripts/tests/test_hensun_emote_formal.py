@@ -27,7 +27,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             "CONFIG_USE_CUSTOM_WAKE_WORD=y",
             'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
             'CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"',
-            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=25",
+            "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15",
             "CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y",
             'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_hensun_emote_lab.csv"',
         ):
