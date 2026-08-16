@@ -131,7 +131,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "require('http').get('http://'+require('os').hostname()+':3000/', r=>process.exit(r.ok?0:1)).on('error',()=>process.exit(1))"
+          "require('http').get('http://'+require('os').hostname()+':3000/', r=>process.exit(r.statusCode >= 200 && r.statusCode < 400 ? 0 : 1)).on('error',()=>process.exit(1))"
         ]
       interval: 10s
       timeout: 5s
