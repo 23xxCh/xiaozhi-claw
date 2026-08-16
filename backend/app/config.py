@@ -39,6 +39,9 @@ class Settings(BaseSettings):
         "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp"
     )
     web_search_mcp_api_key: str = ""
+    web_search_qwen_enabled: bool = False
+    web_search_qwen_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    web_search_qwen_model: str = "qwen-plus"
 
     ota_signing_public_key: str = ""
     ota_base_url: str = "https://api.hensun.invalid/v1/ota/"
@@ -157,6 +160,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "WEB_SEARCH_MCP_API_KEY or an Alibaba ASR key is required "
                     "when search is enabled"
+                )
+        if self.web_search_qwen_enabled:
+            if not self.web_search_qwen_url.startswith("https://"):
+                raise ValueError("WEB_SEARCH_QWEN_URL must use HTTPS in production")
+            if not (self.web_search_mcp_api_key or self.asr_api_key):
+                raise ValueError(
+                    "WEB_SEARCH_MCP_API_KEY or an Alibaba ASR key is required "
+                    "when Qwen search is enabled"
                 )
         if self.email_delivery_mode != "smtp":
             raise ValueError("Production email login must use SMTP delivery")

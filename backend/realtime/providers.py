@@ -160,7 +160,7 @@ class QwenRealtimeAsrSession:
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.5,
-                            "silence_duration_ms": 600,
+                            "silence_duration_ms": 1200,
                         },
                     },
                 }
@@ -211,7 +211,7 @@ class QwenRealtimeAsrSession:
 
     async def finish(self) -> TranscriptionResult:
         if not self._endpoint.is_set():
-            # A healthy device may report local silence before Qwen's 600 ms
+            # A healthy device may report local silence before Qwen's 1200 ms
             # server-VAD tail. Explicit commit closes that same server-VAD
             # utterance immediately; stuck local VAD is handled by the endpoint
             # event and never reaches this path.
@@ -287,6 +287,7 @@ class DeepSeekStreamingLlmProvider:
         messages.append({"role": "user", "content": transcript})
         base_url = self.settings.llm_url.rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        tool_result_added = False
         for _ in range(3):
             request: dict[str, object] = {
                 "model": model,
@@ -296,6 +297,8 @@ class DeepSeekStreamingLlmProvider:
             }
             if tools:
                 request["tools"] = tools
+                if tool_result_added:
+                    request["tool_choice"] = "none"
             tool_calls: dict[int, dict[str, str]] = {}
             assistant_parts: list[str] = []
             reasoning_parts: list[str] = []
@@ -373,6 +376,7 @@ class DeepSeekStreamingLlmProvider:
                 messages.append(
                     {"role": "tool", "tool_call_id": call["id"], "content": result}
                 )
+            tool_result_added = True
         return
 
 
@@ -449,19 +453,41 @@ class QwenRealtimeTtsSession:
                 {"event_id": f"event_{uuid.uuid4().hex}", "type": "input_text_buffer.commit"}
             )
         )
-        while True:
-            # Time out provider silence, not downstream playback backpressure.
-            # This generator pauses at each yield while FFmpeg/device queues
-            # consume audio at playback speed, which can legitimately exceed
-            # the provider timeout for a longer reply.
-            async with asyncio.timeout(self.event_timeout_seconds):
-                event = json.loads(await self.websocket.recv())
-            event_type = event.get("type")
-            _raise_if_provider_error(event, "qwen-tts")
-            if event_type == "response.audio.delta":
-                yield base64.b64decode(str(event.get("delta") or ""))
-            if event_type == "response.done":
-                return
+        events: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
+
+        async def receive_response() -> None:
+            try:
+                while True:
+                    # Drain provider events independently from FFmpeg and the
+                    # device's real-time playback pace. Otherwise a long reply
+                    # can leave response.done unread while the consumer sleeps.
+                    async with asyncio.timeout(self.event_timeout_seconds):
+                        event = json.loads(await self.websocket.recv())
+                    event_type = event.get("type")
+                    _raise_if_provider_error(event, "qwen-tts")
+                    if event_type == "response.audio.delta":
+                        events.put_nowait(base64.b64decode(str(event.get("delta") or "")))
+                    if event_type == "response.done":
+                        return
+            except Exception as exc:
+                events.put_nowait(exc)
+            finally:
+                events.put_nowait(None)
+
+        receiver = asyncio.create_task(receive_response())
+        try:
+            while True:
+                item = await events.get()
+                if item is None:
+                    return
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            if not receiver.done():
+                receiver.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await receiver
 
     async def finish(self) -> None:
         if self.closed:

@@ -9,6 +9,7 @@ from backend.realtime import tools as realtime_tools
 from backend.realtime.mcp import DeviceMcpClient, DeviceMcpError
 from backend.realtime.providers import DeepSeekStreamingLlmProvider
 from backend.realtime.tools import (
+    DashScopeQwenSearchProvider,
     DashScopeWebSearchProvider,
     MockSearchProvider,
     ToolError,
@@ -159,6 +160,43 @@ async def test_dashscope_web_search_uses_streamable_http(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashscope_qwen_search_forces_real_web_search(monkeypatch) -> None:
+    requests: list[dict[str, object]] = []
+    original_client = httpx.AsyncClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": "带来源的联网搜索结果"}}
+                ]
+            },
+        )
+
+    def client_factory(*args, **kwargs) -> httpx.AsyncClient:
+        del args, kwargs
+        return original_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(realtime_tools.httpx, "AsyncClient", client_factory)
+    provider = DashScopeQwenSearchProvider(
+        "https://dashscope.example/compatible-mode/v1", "secret", "qwen-plus", 8
+    )
+
+    assert await provider.search("Hensun") == "带来源的联网搜索结果"
+    assert await provider.search("Hensun") == "带来源的联网搜索结果"
+    assert len(requests) == 1
+    assert requests[0]["model"] == "qwen-plus"
+    assert requests[0]["enable_search"] is True
+    assert requests[0]["search_options"] == {
+        "forced_search": True,
+        "enable_source": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_deepseek_tool_call_round_trip(monkeypatch) -> None:
     requests: list[dict[str, object]] = []
     original_client = httpx.AsyncClient
@@ -209,3 +247,4 @@ async def test_deepseek_tool_call_round_trip(monkeypatch) -> None:
     ]
     assert chunks == ["结果是4"]
     assert requests[1]["messages"][-1]["role"] == "tool"
+    assert requests[1]["tool_choice"] == "none"

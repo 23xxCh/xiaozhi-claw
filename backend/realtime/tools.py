@@ -157,10 +157,71 @@ class DashScopeWebSearchProvider:
             raise ToolError("联网搜索暂时不可用") from exc
 
 
+class DashScopeQwenSearchProvider:
+    """Qwen Chat Completions search adapter used when MCP is not activated."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+    ) -> None:
+        base_url = endpoint.rstrip("/")
+        self.endpoint = (
+            base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        )
+        self.api_key = api_key
+        self.model = model
+        self.timeout_seconds = min(max(timeout_seconds, 3.0), 15.0)
+        self._cache: dict[str, str] = {}
+
+    async def search(self, query: str) -> str:
+        cached = self._cache.get(query)
+        if cached is not None:
+            return cached
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(
+                    self.endpoint,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [{"role": "user", "content": query}],
+                        "enable_search": True,
+                        "search_options": {
+                            "forced_search": True,
+                            "enable_source": True,
+                        },
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                choices = payload.get("choices") if isinstance(payload, dict) else None
+                message = choices[0].get("message") if isinstance(choices, list) and choices else None
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, str) or not content.strip():
+                    raise ToolError("没有找到可用的搜索结果")
+                result = content.strip()[:6000]
+                self._cache[query] = result
+                return result
+        except ToolError:
+            raise
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            raise ToolError("联网搜索暂时不可用") from exc
+
+
 def create_search_provider(settings: Settings) -> SearchProvider | None:
     if settings.provider_mode == "mock":
         return MockSearchProvider()
     api_key = settings.web_search_mcp_api_key or settings.asr_api_key
+    if settings.web_search_qwen_enabled and api_key:
+        return DashScopeQwenSearchProvider(
+            settings.web_search_qwen_url,
+            api_key,
+            settings.web_search_qwen_model,
+            settings.provider_timeout_seconds,
+        )
     if not settings.web_search_mcp_enabled or not api_key:
         return None
     return DashScopeWebSearchProvider(

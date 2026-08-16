@@ -73,6 +73,28 @@ class _FakeRealtimeSocket:
         return None
 
 
+class _PlaybackSensitiveRealtimeSocket(_FakeRealtimeSocket):
+    """Simulate a provider whose final event must be drained promptly."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                {"type": "response.audio.delta", "delta": base64.b64encode(b"pcm").decode()},
+                {"type": "response.done"},
+            ]
+        )
+        self.first_audio_read_at: float | None = None
+
+    async def recv(self) -> str:
+        if self.first_audio_read_at is not None:
+            if asyncio.get_running_loop().time() - self.first_audio_read_at > 0.01:
+                raise TimeoutError("provider final event was not drained while playback was slow")
+        payload = await super().recv()
+        if self.first_audio_read_at is None:
+            self.first_audio_read_at = asyncio.get_running_loop().time()
+        return payload
+
+
 @pytest.mark.asyncio
 async def test_qwen_realtime_tts_session_includes_selected_speech_rate(monkeypatch) -> None:
     socket = _FakeRealtimeSocket()
@@ -106,6 +128,19 @@ async def test_qwen_tts_provider_timeout_does_not_count_slow_audio_consumer() ->
         ]
     )
     session = QwenRealtimeTtsSession(socket, event_timeout_seconds=0.01)
+
+    chunks: list[bytes] = []
+    async for chunk in session.synthesize("较长回复"):
+        chunks.append(chunk)
+        await asyncio.sleep(0.02)
+
+    assert chunks == [b"pcm"]
+
+
+@pytest.mark.asyncio
+async def test_qwen_tts_drains_provider_while_playback_consumer_is_slow() -> None:
+    socket = _PlaybackSensitiveRealtimeSocket()
+    session = QwenRealtimeTtsSession(socket, event_timeout_seconds=0.1)
 
     chunks: list[bytes] = []
     async for chunk in session.synthesize("较长回复"):
@@ -174,7 +209,7 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
     assert messages[0]["session"]["turn_detection"] == {
         "type": "server_vad",
         "threshold": 0.5,
-        "silence_duration_ms": 600,
+        "silence_duration_ms": 1200,
     }
     append_messages = [item for item in messages if item["type"] == "input_audio_buffer.append"]
     wrapped = b"".join(base64.b64decode(item["audio"]) for item in append_messages)
