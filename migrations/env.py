@@ -12,8 +12,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 database_url = get_settings().database_url
-for async_driver in ("+aiosqlite", "+asyncmy"):
-    database_url = database_url.replace(async_driver, "")
+database_url = database_url.replace("+aiosqlite", "")
+database_url = database_url.replace("+asyncmy", "+pymysql")
 config.set_main_option("sqlalchemy.url", database_url)
 target_metadata = Base.metadata
 
