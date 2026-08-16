@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     smtp_use_ssl: bool = False
     qwen_realtime_asr_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     qwen_realtime_tts_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    qwen_realtime_connect_host: str = ""
+    qwen_realtime_local_address: str = ""
     qwen_realtime_asr_model: str = "qwen3-asr-flash-realtime"
     qwen_realtime_tts_model: str = "qwen3-tts-flash-realtime"
     fallback_enabled: bool = True

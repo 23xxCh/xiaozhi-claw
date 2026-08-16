@@ -6,7 +6,8 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
@@ -16,6 +17,20 @@ from backend.app.config import Settings
 from backend.app.providers import ProviderBundle, create_fallback_providers
 
 logger = logging.getLogger(__name__)
+
+
+def _qwen_network_overrides(settings: Settings, url: str) -> dict[str, Any]:
+    if not settings.qwen_realtime_connect_host:
+        return {}
+    parsed = urlsplit(url)
+    overrides: dict[str, Any] = {
+        "host": settings.qwen_realtime_connect_host,
+        "port": parsed.port or 443,
+        "proxy": None,
+    }
+    if settings.qwen_realtime_local_address:
+        overrides["local_addr"] = (settings.qwen_realtime_local_address, 0)
+    return overrides
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,7 @@ class QwenRealtimeAsrSession:
             },
             open_timeout=settings.provider_timeout_seconds,
             max_size=2 * 1024 * 1024,
+            **_qwen_network_overrides(settings, url),
         )
         session = cls(websocket)
         await websocket.send(
@@ -427,6 +443,7 @@ class QwenRealtimeTtsSession:
             },
             open_timeout=settings.provider_timeout_seconds,
             max_size=2 * 1024 * 1024,
+            **_qwen_network_overrides(settings, url),
         )
         session = cls(
             websocket,

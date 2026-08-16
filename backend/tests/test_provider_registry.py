@@ -1,7 +1,9 @@
+import json
 from collections.abc import AsyncIterator
 
 import pytest
 
+import backend.realtime.providers as realtime_providers
 from backend.app.config import Settings
 from backend.realtime.providers import (
     BatchAsrSession,
@@ -113,3 +115,40 @@ async def test_realtime_asr_connect_failure_falls_back_without_dropping_device(
     session = await registry.open_asr_for("dashscope", "qwen3-asr-flash-realtime")
 
     assert isinstance(session, BatchAsrSession)
+
+
+@pytest.mark.asyncio
+async def test_qwen_realtime_can_use_explicit_network_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeWebSocket:
+        async def send(self, payload: str) -> None:
+            del payload
+
+        async def recv(self) -> str:
+            return json.dumps({"type": "session.updated"})
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_connect(url: str, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return FakeWebSocket()
+
+    monkeypatch.setattr(realtime_providers, "connect", fake_connect)
+    settings = Settings(
+        provider_mode="custom",
+        asr_api_key="test-dashscope-key",
+        qwen_realtime_connect_host="39.96.213.166",
+        qwen_realtime_local_address="192.168.5.49",
+    )
+
+    session = await QwenRealtimeAsrSession.open(settings)
+    await session.cancel()
+
+    assert calls[0]["host"] == "39.96.213.166"
+    assert calls[0]["port"] == 443
+    assert calls[0]["proxy"] is None
+    assert calls[0]["local_addr"] == ("192.168.5.49", 0)
