@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "project_slug": "hensun-desk",
+  "service": {
+    "type": "compose",
+    "compose_file": "deploy/docker-compose.server.yml",
+    "service_name": "web",
+    "container_port": 3000,
+    "static_directory": null,
+    "health_path": "/health/live",
+    "local_port": 13000
+  },
+  "resources": {
+    "cpus": "2",
+    "memory": "4g"
+  },
+  "domains": {
+    "test": "staging.hensun-desk.top",
+    "production": "hensun-desk.top"
+  },
+  "dns": {
+    "provider": "cloudflare"
+  },
+  "dependencies": {
+    "mysql": true,
+    "redis": false
+  },
+  "secrets": {
+    "server_env_file": "runtime/.env",
+    "managed_by": "user"
+  }
+}
