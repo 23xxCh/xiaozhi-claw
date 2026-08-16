@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
 from ..db import get_session
-from ..dependencies import authenticate_device, require_admin
-from ..models import FirmwareRelease
+from ..dependencies import authenticate_device, require_admin_or_staff
+from ..models import FirmwareRelease, StaffRole
 from ..schemas import FirmwareReleaseRequest, FirmwareReleaseResponse
 
 router = APIRouter(prefix="/v1/ota", tags=["ota"])
@@ -40,10 +40,43 @@ def _version_tuple(version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in base.split("."))  # type: ignore[return-value]
 
 
+async def select_release(
+    session: AsyncSession,
+    *,
+    board_type: str,
+    serial_number: str,
+    current_version: str,
+) -> FirmwareRelease | None:
+    releases = list(
+        await session.scalars(
+            select(FirmwareRelease)
+            .where(
+                FirmwareRelease.board_type == board_type,
+                FirmwareRelease.active.is_(True),
+            )
+            .order_by(FirmwareRelease.created_at.desc())
+        )
+    )
+    selected = next(
+        (
+            release
+            for release in releases
+            if _version_tuple(release.version) > _version_tuple(current_version)
+        ),
+        None,
+    )
+    if selected is None:
+        return None
+    bucket = int(hashlib.sha256(serial_number.encode()).hexdigest()[:8], 16) % 100
+    if not selected.mandatory and bucket >= selected.rollout_percent:
+        return None
+    return selected
+
+
 @router.post(
     "/releases",
     response_model=FirmwareReleaseResponse,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_admin_or_staff(StaffRole.SUPERADMIN, StaffRole.ENGINEERING))],
 )
 async def register_release(
     payload: FirmwareReleaseRequest,
@@ -109,30 +142,13 @@ async def check_release(
     device = await authenticate_device(
         request, session, device_id, authorization.removeprefix("Bearer ")
     )
-    releases = list(
-        await session.scalars(
-            select(FirmwareRelease)
-            .where(
-                FirmwareRelease.board_type == device.board_type,
-                FirmwareRelease.active.is_(True),
-            )
-            .order_by(FirmwareRelease.created_at.desc())
-        )
-    )
-    selected = next(
-        (
-            release
-            for release in releases
-            if _version_tuple(release.version) > _version_tuple(current_version)
-        ),
-        None,
+    selected = await select_release(
+        session,
+        board_type=device.board_type,
+        serial_number=device.serial_number,
+        current_version=current_version,
     )
     if selected is None:
-        response.status_code = status.HTTP_204_NO_CONTENT
-        return None
-
-    bucket = int(hashlib.sha256(device.serial_number.encode()).hexdigest()[:8], 16) % 100
-    if not selected.mandatory and bucket >= selected.rollout_percent:
         response.status_code = status.HTTP_204_NO_CONTENT
         return None
     return FirmwareReleaseResponse(

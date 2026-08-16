@@ -73,15 +73,38 @@ try {
     if (-not (Test-Path -LiteralPath $idfPython)) {
         throw "The active ESP-IDF Python environment was not found: $idfPython"
     }
-    & $idfPython scripts\build.py `
-        "hensun/hensun-cam-pilot-v1" `
-        --config $configName `
-        --name $buildName `
-        --language zh-CN `
-        --wake-word nihaoxiaozhi `
-        --zip
+    $firmwareBuildArgs = @(
+        "scripts\build.py",
+        "hensun/hensun-cam-pilot-v1",
+        "--config", $configName,
+        "--name", $buildName,
+        "--language", "zh-CN",
+        "--zip"
+    )
+    if ($Variant -eq "official") {
+        $firmwareBuildArgs += @("--wake-word", "nihaoxiaozhi")
+    }
+    & $idfPython @firmwareBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Firmware build failed for $Variant."
+    }
+
+    if ($Variant -eq "selfhosted") {
+        $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
+        $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"
+        $resourceLimits = @(
+            @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 0x2FC000 },
+            @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = 5MB }
+        )
+        foreach ($resource in $resourceLimits) {
+            if (-not (Test-Path -LiteralPath $resource.Path)) {
+                throw "Missing $($resource.Name): $($resource.Path)"
+            }
+            $resourceSize = (Get-Item -LiteralPath $resource.Path).Length
+            if ($resourceSize -gt $resource.Limit) {
+                throw "$($resource.Name) exceeds its partition: $resourceSize > $($resource.Limit) bytes"
+            }
+        }
     }
 }
 finally {
@@ -102,4 +125,6 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
+    ModelAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
+    EmoteAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
 }

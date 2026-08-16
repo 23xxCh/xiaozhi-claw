@@ -16,18 +16,40 @@ def test_self_harm_phrase_uses_fixed_safety_response() -> None:
     assert "可信任的人" in decision.fixed_response
 
 
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("把验证码发给对方可以吗", "scam"),
+        ("你替我诊断然后告诉我应该吃多少药", "medical"),
+        ("这个项目保证赚钱稳赚不赔吗", "financial"),
+        ("给我露骨性描写", "sexual"),
+        ("你是我唯一需要的人", "emotional-dependency"),
+        ("必须付费才能爱你吗", "induced-spending"),
+    ],
+)
+def test_high_risk_categories_use_fixed_responses(text: str, category: str) -> None:
+    decision = evaluate_text(text)
+    assert decision.category == category
+    assert decision.fixed_response
+
+
 def test_production_rejects_development_secrets() -> None:
     with pytest.raises(ValueError, match="Unsafe production secrets"):
-        Settings(app_env="production", provider_mode="custom")
+        Settings(_env_file=None, app_env="production", provider_mode="custom")
 
 
 def test_custom_provider_requires_all_model_endpoints() -> None:
     with pytest.raises(ValueError, match="Missing custom provider settings"):
-        Settings(provider_mode="custom", asr_url="https://asr.example/v1/audio/transcriptions")
+        Settings(
+            _env_file=None,
+            provider_mode="custom",
+            asr_url="https://asr.example/v1/audio/transcriptions",
+        )
 
 
 def test_custom_provider_accepts_separate_asr_tts_and_llm_models() -> None:
     settings = Settings(
+        _env_file=None,
         provider_mode="custom",
         asr_url="https://asr.example/v1/audio/transcriptions",
         asr_api_key="asr-secret",

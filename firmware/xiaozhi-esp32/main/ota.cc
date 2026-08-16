@@ -13,6 +13,9 @@
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
 #include <esp_heap_caps.h>
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <psa/crypto.h>
 #ifdef SOC_HMAC_SUPPORTED
 #include <esp_hmac.h>
 #endif
@@ -21,8 +24,40 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <iomanip>
 
 #define TAG "Ota"
+
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
+static std::string GetHensunDeviceSecret() {
+    auto err = nvs_flash_init_partition("hensun_keys");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Hensun credential partition is unavailable: %s", esp_err_to_name(err));
+        return "";
+    }
+    nvs_handle_t handle = 0;
+    err = nvs_open_from_partition("hensun_keys", "hensun", NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return "";
+    }
+    size_t length = 0;
+    err = nvs_get_str(handle, "device_secret", nullptr, &length);
+    if (err != ESP_OK || length <= 1) {
+        nvs_close(handle);
+        return "";
+    }
+    std::string secret(length, '\0');
+    err = nvs_get_str(handle, "device_secret", secret.data(), &length);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        return "";
+    }
+    while (!secret.empty() && secret.back() == '\0') {
+        secret.pop_back();
+    }
+    return secret;
+}
+#endif
 
 
 Ota::Ota() {
@@ -67,6 +102,15 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     http->SetHeader("User-Agent", user_agent);
     http->SetHeader("Accept-Language", Lang::CODE);
     http->SetHeader("Content-Type", "application/json");
+
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
+    auto device_secret = GetHensunDeviceSecret();
+    if (!device_secret.empty()) {
+        http->SetHeader("Authorization", "Bearer " + device_secret);
+    } else {
+        ESP_LOGW(TAG, "Hensun device credential is not provisioned");
+    }
+#endif
 
     return http;
 }
@@ -221,6 +265,10 @@ esp_err_t Ota::CheckVersion() {
         if (cJSON_IsString(url)) {
             firmware_url_ = url->valuestring;
         }
+        cJSON *sha256 = cJSON_GetObjectItem(firmware, "sha256");
+        if (cJSON_IsString(sha256)) {
+            firmware_sha256_ = sha256->valuestring;
+        }
 
         if (cJSON_IsString(version) && cJSON_IsString(url)) {
             // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
@@ -264,7 +312,7 @@ void Ota::MarkCurrentVersionValid() {
     }
 }
 
-bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {
+bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback, const std::string& expected_sha256) {
     ESP_LOGI(TAG, "Upgrading firmware from %s", firmware_url.c_str());
     esp_ota_handle_t update_handle = 0;
     auto update_partition = esp_ota_get_next_update_partition(NULL);
@@ -304,11 +352,31 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
 
     size_t buffer_offset = 0;  // Current data size in buffer
     size_t total_read = 0, recent_read = 0;
+    psa_hash_operation_t sha256_operation = PSA_HASH_OPERATION_INIT;
+    if (psa_crypto_init() != PSA_SUCCESS ||
+        psa_hash_setup(&sha256_operation, PSA_ALG_SHA_256) != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "Failed to initialize firmware SHA-256");
+        psa_hash_abort(&sha256_operation);
+        heap_caps_free(buffer);
+        return false;
+    }
     auto last_calc_time = esp_timer_get_time();
     while (true) {
+        size_t previous_offset = buffer_offset;
         int ret = http->Read(buffer + buffer_offset, PAGE_SIZE - buffer_offset);
         if (ret < 0) {
             ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
+            psa_hash_abort(&sha256_operation);
+            heap_caps_free(buffer);
+            return false;
+        }
+        if (ret > 0 && psa_hash_update(
+                &sha256_operation,
+                reinterpret_cast<const unsigned char*>(buffer + previous_offset),
+                ret) != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "Failed to update firmware SHA-256");
+            esp_ota_abort(update_handle);
+            psa_hash_abort(&sha256_operation);
             heap_caps_free(buffer);
             return false;
         }
@@ -336,6 +404,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
                 if (esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle)) {
                     esp_ota_abort(update_handle);
                     ESP_LOGE(TAG, "Failed to begin OTA");
+                    psa_hash_abort(&sha256_operation);
                     heap_caps_free(buffer);
                     return false;
                 }
@@ -352,6 +421,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to write OTA data: %s", esp_err_to_name(err));
                 esp_ota_abort(update_handle);
+                psa_hash_abort(&sha256_operation);
                 heap_caps_free(buffer);
                 return false;
             }
@@ -365,6 +435,28 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
     }
     http->Close();
     heap_caps_free(buffer);
+
+    unsigned char digest[32];
+    size_t digest_length = 0;
+    if (psa_hash_finish(
+            &sha256_operation, digest, sizeof(digest), &digest_length) != PSA_SUCCESS ||
+        digest_length != sizeof(digest)) {
+        ESP_LOGE(TAG, "Failed to finish firmware SHA-256");
+        esp_ota_abort(update_handle);
+        psa_hash_abort(&sha256_operation);
+        return false;
+    }
+    std::ostringstream digest_stream;
+    digest_stream << std::hex << std::setfill('0');
+    for (auto byte : digest) {
+        digest_stream << std::setw(2) << static_cast<int>(byte);
+    }
+    auto actual_sha256 = digest_stream.str();
+    if (!expected_sha256.empty() && actual_sha256 != expected_sha256) {
+        ESP_LOGE(TAG, "Firmware SHA-256 mismatch");
+        esp_ota_abort(update_handle);
+        return false;
+    }
 
     esp_err_t err = esp_ota_end(update_handle);
     if (err != ESP_OK) {
@@ -387,7 +479,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
 }
 
 bool Ota::StartUpgrade(std::function<void(int progress, size_t speed)> callback) {
-    return Upgrade(firmware_url_, callback);
+    return Upgrade(firmware_url_, callback, firmware_sha256_);
 }
 
 

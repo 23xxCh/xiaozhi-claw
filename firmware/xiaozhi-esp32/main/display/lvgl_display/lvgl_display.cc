@@ -1,4 +1,5 @@
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <material_symbols.h>
 #include <cstdlib>
@@ -301,6 +302,34 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
 }
 
 void LvglDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {}
+
+bool LvglDisplay::SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
+                                  int width, int height, int stride_bytes) {
+    if (pixels == nullptr || width <= 0 || height <= 0 ||
+        stride_bytes < width * static_cast<int>(sizeof(uint16_t)) ||
+        pixel_count < static_cast<size_t>(width) * height) {
+        return false;
+    }
+
+    const size_t row_bytes = static_cast<size_t>(width) * sizeof(uint16_t);
+    const size_t data_size = row_bytes * height;
+    auto* preview_data = static_cast<uint8_t*>(
+        heap_caps_malloc(data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (preview_data == nullptr) {
+        ESP_LOGE(TAG, "Failed to allocate RGB565 preview frame");
+        return false;
+    }
+
+    const auto* source = reinterpret_cast<const uint8_t*>(pixels);
+    for (int row = 0; row < height; ++row) {
+        std::memcpy(preview_data + static_cast<size_t>(row) * row_bytes,
+                    source + static_cast<size_t>(row) * stride_bytes, row_bytes);
+    }
+    SetPreviewImage(std::make_unique<LvglAllocatedImage>(
+        preview_data, data_size, width, height, static_cast<int>(row_bytes),
+        LV_COLOR_FORMAT_RGB565));
+    return true;
+}
 
 void LvglDisplay::SetPowerSaveMode(bool on) {
     if (on) {

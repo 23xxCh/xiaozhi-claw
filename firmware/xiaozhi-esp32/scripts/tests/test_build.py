@@ -1401,8 +1401,8 @@ class BoardSourceTests(unittest.TestCase):
 class ZipTests(unittest.TestCase):
     def test_zip_is_always_recreated(self):
         previous_cwd = Path.cwd()
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
                 os.chdir(temp_dir)
                 Path("build").mkdir()
                 Path("build/merged-binary.bin").write_bytes(b"new firmware")
@@ -1417,8 +1417,48 @@ class ZipTests(unittest.TestCase):
                         archive.read("merged-binary.bin"),
                         b"new firmware",
                     )
-        finally:
-            os.chdir(previous_cwd)
+                    manifest = json.loads(archive.read("flash-manifest.json"))
+                    self.assertEqual(manifest["images"], [])
+                    self.assertTrue(manifest["partial_flash_preserves_nvs"])
+                    self.assertFalse(manifest["merged_binary"]["preserves_nvs"])
+                    self.assertIn("merged-binary.bin", archive.read("SHA256SUMS.txt").decode())
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_zip_includes_individual_flash_images_and_addresses(self):
+        previous_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                os.chdir(temp_dir)
+                Path("build/bootloader").mkdir(parents=True)
+                Path("build/partition_table").mkdir()
+                Path("build/merged-binary.bin").write_bytes(b"merged")
+                Path("build/bootloader/bootloader.bin").write_bytes(b"boot")
+                Path("build/partition_table/partition-table.bin").write_bytes(b"part")
+                Path("build/xiaozhi.bin").write_bytes(b"app")
+                Path("build/flash_args").write_text(
+                    "--flash-mode dio --flash-size 16MB\n"
+                    "0x0 bootloader/bootloader.bin\n"
+                    "0x8000 partition_table/partition-table.bin\n"
+                    "0x20000 xiaozhi.bin\n",
+                    encoding="utf-8",
+                )
+
+                build.zip_bin("test-board", "1.2.3")
+
+                output = Path("releases/v1.2.3_test-board.zip")
+                with build.zipfile.ZipFile(output) as archive:
+                    manifest = json.loads(archive.read("flash-manifest.json"))
+                    self.assertEqual(
+                        [item["address"] for item in manifest["images"]],
+                        ["0x0", "0x8000", "0x20000"],
+                    )
+                    self.assertTrue(manifest["partial_flash_preserves_nvs"])
+                    self.assertFalse(manifest["merged_binary"]["preserves_nvs"])
+                    self.assertEqual(archive.read("images/xiaozhi.bin"), b"app")
+                    self.assertIn("images/bootloader.bin", archive.namelist())
+            finally:
+                os.chdir(previous_cwd)
 
 
 if __name__ == "__main__":

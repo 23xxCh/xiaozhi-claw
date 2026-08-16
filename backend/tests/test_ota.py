@@ -19,6 +19,7 @@ def test_active_release_is_served_to_authenticated_device(
             "rollout_percent": 100,
             "mandatory": False,
             "active": True,
+            "confirm": True,
         },
     )
     assert release.status_code == 200, release.text

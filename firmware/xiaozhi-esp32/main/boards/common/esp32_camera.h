@@ -1,7 +1,6 @@
 #pragma once
 #include "sdkconfig.h"
 
-#include <lvgl.h>
 #include <thread>
 #include <memory>
 #include <vector>

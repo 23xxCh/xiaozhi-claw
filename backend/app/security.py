@@ -23,13 +23,21 @@ def new_device_secret() -> str:
 
 
 def new_claim_code() -> str:
-    return secrets.token_urlsafe(24)
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def new_email_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_email_code(email: str, code: str, settings: Settings) -> str:
+    return hash_secret(f"email-code:{email}:{code}", settings.email_otp_secret)
 
 
 def create_access_token(user_id: str, settings: Settings) -> str:
     now = datetime.now(UTC)
     return jwt.encode(
-        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=12)},
+        {"sub": user_id, "typ": "user", "iat": now, "exp": now + timedelta(hours=12)},
         settings.jwt_secret,
         algorithm="HS256",
     )
@@ -37,7 +45,46 @@ def create_access_token(user_id: str, settings: Settings) -> str:
 
 def decode_access_token(token: str, settings: Settings) -> str:
     payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    if payload.get("typ") not in {None, "user"}:
+        raise jwt.InvalidTokenError("not a user token")
     return str(payload["sub"])
+
+
+def create_staff_access_token(staff_id: str, role: str, settings: Settings) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": staff_id,
+            "typ": "staff",
+            "role": role,
+            "iat": now,
+            "exp": now + timedelta(hours=8),
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+
+
+def decode_staff_access_token(token: str, settings: Settings) -> tuple[str, str]:
+    payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    if payload.get("typ") != "staff":
+        raise jwt.InvalidTokenError("not a staff token")
+    return str(payload["sub"]), str(payload["role"])
+
+
+def create_oauth_state(settings: Settings) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {"typ": "wechat-oauth", "iat": now, "exp": now + timedelta(minutes=10)},
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+
+
+def verify_oauth_state(token: str, settings: Settings) -> None:
+    payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    if payload.get("typ") != "wechat-oauth":
+        raise jwt.InvalidTokenError("invalid oauth state")
 
 
 def create_device_session_token(serial_number: str, settings: Settings) -> str:

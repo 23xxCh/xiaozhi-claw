@@ -814,7 +814,7 @@ choice DISPLAY_STYLE
 
     config USE_EMOTE_MESSAGE_STYLE
         bool "Emote animation style"
-        depends on BOARD_TYPE_ESP32_S3_BOX || BOARD_TYPE_ESP32_S3_BOX_3 || BOARD_TYPE_HENSUN_DESK_V1 \
+        depends on BOARD_TYPE_ESP32_S3_BOX || BOARD_TYPE_ESP32_S3_BOX_3 || BOARD_TYPE_HENSUN_DESK_V1 || BOARD_TYPE_HENSUN_CAM_PILOT_V1 \
             || BOARD_TYPE_ESP_VOCAT || BOARD_TYPE_LICHUANG_DEV_S3 || BOARD_TYPE_RYMCU_BIGSMART \
             || BOARD_TYPE_ESP_SENSAIRSHUTTLE
 endchoice
@@ -900,6 +900,14 @@ config WAKE_WORD_DETECTION_IN_LISTENING
         When enabled, the device can detect wake word during listening,
         which allows interrupting the current conversation.
         When disabled (default), wake word detection is turned off during listening.
+
+config HENSUN_ONE_SHOT_CONVERSATION
+    bool "Return Hensun device to wake-word standby after each reply"
+    default n
+    depends on BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    help
+        End the current listening turn after TTS playback drains so the device
+        returns to local wake-word standby instead of opening a follow-up turn.
 
 config USE_AUDIO_PROCESSOR
     bool "Enable AFE Audio Processing"

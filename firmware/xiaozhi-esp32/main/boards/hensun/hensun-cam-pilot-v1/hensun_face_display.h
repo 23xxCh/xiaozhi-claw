@@ -3,47 +3,72 @@
 
 #include "display/lcd_display.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 
 enum class HensunFaceState : uint8_t {
-    kReady = 0,
-    kIdle,
-    kListening,
-    kThinking,
-    kSpeaking,
-    kInterrupted,
-    kHappy,
-    kCurious,
-    kCaring,
-    kReminder,
-    kNetworkError,
-    kSleep,
-    kLaughing,
-    kFunny,
-    kLoving,
-    kEmbarrassed,
-    kConfident,
-    kDelicious,
-    kSad,
-    kCrying,
-    kSleepy,
-    kSilly,
-    kAngry,
-    kSurprised,
-    kShocked,
-    kWinking,
-    kRelaxed,
-    kConfused,
-    kProud,
-    kExcited,
-    kWorried,
-    kApology,
-    kPairing,
-    kNetworkOk,
-    kUpdating,
-    kSafeBlock,
+    kListeningStarted = 0,
+    kPositiveResponse,
+    kClarificationNeeded,
+    kProcessingStarted,
+    kConfirmationRequired,
+    kAsrLowConfidence,
+    kNoisyEnvironment,
+    kUserContinueExpected,
+    kUserInterruptedAssistant,
+    kBootReady,
+    kWakeWordDetected,
+    kIdleEntered,
+    kPairingModeEntered,
+    kNetworkConnected,
+    kChargingStarted,
+    kChargeComplete,
+    kSleepEntered,
+    kMildAmusement,
+    kStrongAmusement,
+    kPositiveSurprise,
+    kComplimentReceived,
+    kAchievementCelebration,
+    kEncouragementRequested,
+    kThanksReceived,
+    kAffectionReceived,
+    kCuriosityEngaged,
+    kSadnessDetected,
+    kComfortModeEntered,
+    kWorryDetected,
+    kAngerDetected,
+    kFearDetected,
+    kLonelinessDetected,
+    kFatigueDetected,
+    kUnfairnessDistress,
+    kDisappointmentDetected,
+    kAssistantApologyRequired,
+    kFirstInteraction,
+    kMorningGreeting,
+    kNoonGreeting,
+    kBedtimeGreeting,
+    kReturnAfterAbsence,
+    kBirthdayGreeting,
+    kHolidayGreeting,
+    kMealCheckIn,
+    kReminderCreated,
+    kReminderDue,
+    kTimerStarted,
+    kTimerFinished,
+    kAlarmTriggered,
+    kVolumeChanged,
+    kModeChanged,
+    kQueryResultReady,
+    kNetworkUnavailable,
+    kCloudServiceUnavailable,
+    kBatteryLow,
+    kBatteryCritical,
+    kDeviceOverheat,
+    kMicrophoneFault,
+    kContentSafetyBlocked,
+    kUserCrisisDetected,
     kCount,
 };
 
@@ -60,6 +85,7 @@ public:
     void SetEmotion(const char* emotion) override;
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
+    void SetSpeechLevel(uint8_t level);
     void StartShowcase();
 
 private:
@@ -67,6 +93,9 @@ private:
 
     void CreateFaceObjects();
     void TickAnimation();
+    void UpdateSpeechEnvelope();
+    void UpdateAmbientMotion();
+    uint32_t NextPseudoRandom();
     void RenderFace();
     void SetFaceStateLocked(HensunFaceState state);
     void ShowTransientStateLocked(HensunFaceState state, uint32_t duration_ms,
@@ -84,15 +113,27 @@ private:
     lv_obj_t* left_brow_ = nullptr;
     lv_obj_t* right_brow_ = nullptr;
     lv_obj_t* mouth_ = nullptr;
+    lv_obj_t* mouth_arc_ = nullptr;
     lv_obj_t* left_cheek_ = nullptr;
     lv_obj_t* right_cheek_ = nullptr;
-    lv_obj_t* accent_label_ = nullptr;
+    lv_obj_t* symbol_image_ = nullptr;
+    const lv_image_dsc_t* current_symbol_image_ = nullptr;
     lv_timer_t* animation_timer_ = nullptr;
 
-    HensunFaceState state_ = HensunFaceState::kReady;
+    HensunFaceState state_ = HensunFaceState::kBootReady;
     uint32_t animation_frame_ = 0;
     uint32_t showcase_frame_ = 0;
     uint32_t transient_frames_remaining_ = 0;
+    std::atomic<uint8_t> speech_level_{0};
+    std::atomic<uint32_t> speech_level_updated_ms_{0};
+    uint8_t speech_level_smoothed_ = 0;
+    uint32_t ambient_frame_ = 0;
+    uint32_t pseudo_random_state_ = 0x48A53C1Du;
+    uint32_t next_blink_frame_ = 60;
+    uint32_t next_gaze_frame_ = 40;
+    uint8_t blink_frames_remaining_ = 0;
+    int8_t gaze_target_x_ = 0;
+    int8_t gaze_x_ = 0;
     uint32_t render_samples_ = 0;
     int64_t render_total_us_ = 0;
     int64_t render_max_us_ = 0;

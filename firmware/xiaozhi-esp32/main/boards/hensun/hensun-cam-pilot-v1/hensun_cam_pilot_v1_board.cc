@@ -1,6 +1,10 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+#include "hensun_emote_lab_display.h"
+#else
 #include "hensun_face_display.h"
+#endif
 #include "application.h"
 #include "button.h"
 #include "config.h"
@@ -12,12 +16,87 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 
+#include <algorithm>
+
 #define TAG "HensunCamPilotV1Board"
+
+namespace {
+
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+using HensunPilotDisplay = HensunEmoteLabDisplay;
+#else
+using HensunPilotDisplay = HensunFaceDisplay;
+#endif
+
+constexpr size_t kSpeechPcmSampleStride = 8;
+constexpr uint32_t kSpeechNoiseFloor = 180;
+constexpr uint32_t kSpeechReferenceAmplitude = 5000;
+
+class HensunAudioCodecSimplex final : public NoAudioCodecSimplex {
+public:
+    using NoAudioCodecSimplex::NoAudioCodecSimplex;
+
+    void SetDisplay(HensunPilotDisplay* display) {
+        display_ = display;
+    }
+
+    void OutputData(std::vector<int16_t>& data) override {
+        uint64_t amplitude_sum = 0;
+        size_t sample_count = 0;
+        for (size_t index = 0; index < data.size(); index += kSpeechPcmSampleStride) {
+            const int32_t sample = data[index];
+            amplitude_sum += static_cast<uint32_t>(sample < 0 ? -sample : sample);
+            ++sample_count;
+        }
+
+        uint8_t level = 0;
+        if (sample_count > 0) {
+            const uint32_t mean_amplitude = static_cast<uint32_t>(amplitude_sum / sample_count);
+            if (mean_amplitude > kSpeechNoiseFloor) {
+                const uint32_t scaled =
+                    (mean_amplitude - kSpeechNoiseFloor) * 100 /
+                    (kSpeechReferenceAmplitude - kSpeechNoiseFloor);
+                level = static_cast<uint8_t>(std::min<uint32_t>(100, scaled));
+            }
+        }
+        if (display_ != nullptr) {
+            display_->SetSpeechLevel(level);
+        }
+
+        AudioCodec::OutputData(data);
+    }
+
+protected:
+    int Read(int16_t* dest, int samples) override {
+        size_t bytes_read = 0;
+        constexpr uint32_t kReadTimeoutMs = 200;
+        std::vector<int32_t> bit32_buffer(samples);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                             samples * sizeof(int32_t), &bytes_read,
+                             kReadTimeoutMs) != ESP_OK) {
+            return 0;
+        }
+
+        samples = bytes_read / sizeof(int32_t);
+        for (int index = 0; index < samples; ++index) {
+            // The pilot board's 24-bit I2S microphone is left-aligned in the
+            // 32-bit slot. Keep the upper 16 bits; the generic >>12 path adds
+            // 16x gain and clips most of this microphone's samples.
+            dest[index] = static_cast<int16_t>(bit32_buffer[index] >> 16);
+        }
+        return samples;
+    }
+
+private:
+    HensunPilotDisplay* display_ = nullptr;
+};
+
+}  // namespace
 
 class HensunCamPilotV1Board : public WifiBoard {
 private:
     Button boot_button_;
-    HensunFaceDisplay* display_ = nullptr;
+    HensunPilotDisplay* display_ = nullptr;
     Esp32Camera* camera_ = nullptr;
 
     void InitializeSpi() {
@@ -57,10 +136,15 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY));
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
 
+        esp_lcd_panel_disp_on_off(panel, true);
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        display_ = new HensunEmoteLabDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#else
         display_ = new HensunFaceDisplay(panel_io, panel,
             DISPLAY_WIDTH, DISPLAY_HEIGHT,
             DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+#endif
     }
 
     void InitializeButtons() {
@@ -76,6 +160,13 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnLongPress([this]() {
+#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE
+            display_->StartShowcase();
+#else
+            EnterWifiConfigMode();
+#endif
+        });
+        boot_button_.OnDoubleClick([this]() {
             display_->StartShowcase();
         });
     }
@@ -123,7 +214,7 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
-        static NoAudioCodecSimplex audio_codec(
+        static HensunAudioCodecSimplex audio_codec(
             AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_SPK_GPIO_BCLK,
@@ -132,6 +223,7 @@ public:
             AUDIO_I2S_MIC_GPIO_SCK,
             AUDIO_I2S_MIC_GPIO_WS,
             AUDIO_I2S_MIC_GPIO_DIN);
+        audio_codec.SetDisplay(display_);
         return &audio_codec;
     }
 

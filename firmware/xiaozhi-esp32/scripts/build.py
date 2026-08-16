@@ -2,7 +2,9 @@
 
 import sys
 import os
+import hashlib
 import json
+import shlex
 import zipfile
 import argparse
 import re
@@ -79,16 +81,80 @@ def merge_bin(preview: bool = False) -> None:
 
 
 def zip_bin(name: str, version: str) -> None:
-    """Zip build/merged-binary.bin to releases/v{version}_{name}.zip"""
+    """Create a recovery package with the merged image and flashable parts."""
     out_dir = Path("releases")
     out_dir.mkdir(exist_ok=True)
     output_path = out_dir / f"v{version}_{name}.zip"
+    build_dir = Path("build")
+    merged_binary = build_dir / "merged-binary.bin"
+
+    images: list[dict[str, object]] = []
+    flash_options: list[str] = []
+    flash_args_path = build_dir / "flash_args"
+    if flash_args_path.is_file():
+        for line in flash_args_path.read_text(encoding="utf-8").splitlines():
+            parts = shlex.split(line)
+            if not parts:
+                continue
+            if parts[0].startswith("--"):
+                flash_options.extend(parts)
+                continue
+            if len(parts) != 2 or not re.fullmatch(r"0x[0-9a-fA-F]+", parts[0]):
+                raise ValueError(f"unsupported flash_args line: {line}")
+            source = build_dir / parts[1]
+            if not source.is_file():
+                raise FileNotFoundError(f"flash image is missing: {source}")
+            archive_name = f"images/{source.name}"
+            images.append(
+                {
+                    "address": parts[0].lower(),
+                    "source": parts[1].replace("\\", "/"),
+                    "archive_name": archive_name,
+                    "size": source.stat().st_size,
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                }
+            )
+
+    manifest = {
+        "format": 1,
+        "firmware_name": name,
+        "firmware_version": version,
+        "flash_options": flash_options,
+        "images": images,
+        "merged_binary": {
+            "archive_name": "merged-binary.bin",
+            "size": merged_binary.stat().st_size,
+            "sha256": hashlib.sha256(merged_binary.read_bytes()).hexdigest(),
+            "preserves_nvs": False,
+            "warning": "Full-chip recovery image clears Wi-Fi and per-device credentials.",
+        },
+        "partial_flash_preserves_nvs": all(
+            image["address"] not in {"0x9000", "0x800000"} for image in images
+        ),
+    }
+
+    checksum_lines = [
+        f'{image["sha256"]}  {image["archive_name"]}' for image in images
+    ]
+    checksum_lines.append(
+        f'{manifest["merged_binary"]["sha256"]}  merged-binary.bin'
+    )
 
     if output_path.exists():
         output_path.unlink()
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        zipf.write("build/merged-binary.bin", arcname="merged-binary.bin")
+        zipf.write(merged_binary, arcname="merged-binary.bin")
+        for image in images:
+            zipf.write(
+                build_dir / str(image["source"]),
+                arcname=str(image["archive_name"]),
+            )
+        zipf.writestr(
+            "flash-manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        )
+        zipf.writestr("SHA256SUMS.txt", "\n".join(checksum_lines) + "\n")
     print(f"zip bin to {output_path} done")
 
 
@@ -649,7 +715,10 @@ def _build_options_sdkconfig(
             "CONFIG_FLASH_CUSTOM_ASSETS",
             "CONFIG_FLASH_EXPRESSION_ASSETS",
         )
-        if selected == "emote" and base_assignments.get("CONFIG_FLASH_CUSTOM_ASSETS") != "y":
+        if (
+            selected == "emote"
+            and base_assignments.get("CONFIG_FLASH_CUSTOM_ASSETS") != "y"
+        ):
             result.extend(
                 f"{symbol}={'y' if symbol == 'CONFIG_FLASH_EXPRESSION_ASSETS' else 'n'}"
                 for symbol in flash_symbols

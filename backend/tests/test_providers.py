@@ -7,6 +7,7 @@ from backend.app.config import Settings
 from backend.app.providers import (
     OpenAICompatibleLlmProvider,
     OpenAICompatibleSpeechProvider,
+    QwenDashScopeSpeechProvider,
     create_providers,
 )
 
@@ -86,3 +87,55 @@ async def test_custom_llm_provider_uses_configured_model_and_memory() -> None:
 def test_custom_provider_bundle_announces_opus() -> None:
     providers = create_providers(custom_settings())
     assert providers.audio_codec == "opus"
+
+
+@pytest.mark.asyncio
+async def test_qwen_speech_provider_uses_compatible_asr_and_dashscope_tts() -> None:
+    settings = custom_settings()
+    settings.asr_protocol = "qwen-chat-completions"
+    settings.asr_url = "https://dashscope.example/compatible-mode/v1"
+    settings.asr_model = "qwen3-asr-flash"
+    settings.tts_protocol = "dashscope-generation"
+    settings.tts_url = (
+        "https://dashscope.example/api/v1/services/aigc/multimodal-generation/generation"
+    )
+    settings.tts_model = "qwen3-tts-flash"
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("chat/completions"):
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "你好",
+                                "annotations": [{"emotion": "happy"}],
+                            }
+                        }
+                    ]
+                },
+            )
+        if request.url.path.endswith("generation"):
+            return httpx.Response(
+                200,
+                json={"output": {"audio": {"url": "https://audio.example/result.wav"}}},
+            )
+        return httpx.Response(200, content=b"vendor-wav")
+
+    normalizer = StubNormalizer()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = QwenDashScopeSpeechProvider(settings, client=client, normalizer=normalizer)
+        transcript = await provider.transcribe([b"opus-one"])
+        audio = await provider.synthesize("你好")
+
+    assert transcript == "你好"
+    assert provider.last_emotion == "happy"
+    assert audio == [b"normalized-opus-1", b"normalized-opus-2"]
+    assert requests[0].url.path.endswith("/compatible-mode/v1/chat/completions")
+    asr_payload = json.loads(requests[0].content)
+    assert asr_payload["model"] == "qwen3-asr-flash"
+    assert asr_payload["messages"][0]["content"][0]["type"] == "input_audio"
+    assert requests[1].url.path.endswith("/generation")

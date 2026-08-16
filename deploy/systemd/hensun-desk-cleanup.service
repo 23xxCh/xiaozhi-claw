@@ -1,0 +1,6 @@
+[Unit]
+Description=Clean bounded Hensun Desk logs and old release artifacts
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hensun-desk/current/deploy/scripts/cleanup-hensun-desk.sh

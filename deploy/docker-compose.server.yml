@@ -1,0 +1,151 @@
+name: hensun-desk
+
+x-backend: &backend
+  image: hensun-desk-backend:${HENSUN_RELEASE_ID:-local}
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+    args:
+      DEBIAN_MIRROR: ${HENSUN_DEBIAN_MIRROR:-http://deb.debian.org/debian}
+      DEBIAN_SECURITY_MIRROR: ${HENSUN_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
+      PIP_INDEX_URL: ${HENSUN_PIP_INDEX_URL:-https://pypi.org/simple}
+    labels:
+      com.hensun.project: hensun-desk
+  env_file:
+    - ${HENSUN_SERVER_ENV_FILE:-./server.env.example}
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - mysql
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+
+  control-api:
+    <<: *backend
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "backend.app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "127.0.0.1"
+      ]
+    ports:
+      - "127.0.0.1:13001:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: 0.50
+    mem_limit: 768m
+
+  realtime-gateway:
+    <<: *backend
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "backend.realtime.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8001",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "127.0.0.1"
+      ]
+    ports:
+      - "127.0.0.1:13002:8001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: 1.00
+    mem_limit: 2g
+
+  web:
+    image: hensun-desk-web:${HENSUN_RELEASE_ID:-local}
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+      labels:
+        com.hensun.project: hensun-desk
+      args:
+        # Empty means same-origin /v1 routes. The exact same image can be
+        # verified on staging and later promoted to the formal hostname.
+        NEXT_PUBLIC_CONTROL_API_URL: ""
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:13000:3000"
+    depends_on:
+      control-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://'+require('os').hostname()+':3000/', r=>process.exit(r.statusCode >= 200 && r.statusCode < 400 ? 0 : 1)).on('error',()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: 0.50
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+networks:
+  mysql:
+    external: true
+    name: 1panel-network

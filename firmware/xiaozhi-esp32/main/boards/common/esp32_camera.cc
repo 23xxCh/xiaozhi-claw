@@ -9,7 +9,6 @@
 #include "esp32_camera.h"
 #include "board.h"
 #include "display.h"
-#include "lvgl_display.h"
 #include "mcp_server.h"
 #include "system_info.h"
 #include "jpg/image_to_jpeg.h"
@@ -124,16 +123,11 @@ bool Esp32Camera::Capture() {
             memcpy(encode_buf_, current_fb_->buf, data_size);
         }
 
-        // Allocate separate buffer for preview display
-        uint8_t *preview_data = (uint8_t *)heap_caps_malloc(data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (preview_data != nullptr) {
-            memcpy(preview_data, encode_buf_, data_size);
-            auto display = dynamic_cast<LvglDisplay *>(Board::GetInstance().GetDisplay());
-            if (display != nullptr) {
-                display->SetPreviewImage(std::make_unique<LvglAllocatedImage>(preview_data, data_size, current_fb_->width, current_fb_->height, current_fb_->width * 2, LV_COLOR_FORMAT_RGB565));
-            } else {
-                heap_caps_free(preview_data);
-            }
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display != nullptr && !display->SetPreviewFrame(
+                dst, pixel_count, current_fb_->width, current_fb_->height,
+                current_fb_->width * static_cast<int>(sizeof(uint16_t)))) {
+            ESP_LOGW(TAG, "Display does not accept RGB565 camera preview");
         }
     } else if (current_fb_->format == PIXFORMAT_JPEG) {
         // JPEG format preview usually requires decoding, skip preview display for now, just log
