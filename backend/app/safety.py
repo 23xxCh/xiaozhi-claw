@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 SELF_HARM_TERMS = ("自杀", "不想活", "结束生命", "伤害自己")
 EXIT_TERMS = ("退出", "停止服务", "不要说了", "结束对话")
+VOICE_STANDBY_COMMAND = "小灿闭嘴"
+VOICE_COMMAND_IGNORED_CHARS = frozenset("，。！？、,.!?；;：:")
 SCAM_TERMS = ("验证码发给", "转账到安全账户", "刷单返利", "代付解冻")
 MEDICAL_TERMS = ("替我诊断", "停掉处方药", "应该吃多少药", "不用去医院")
 FINANCIAL_TERMS = ("保证赚钱", "稳赚不赔", "借钱投资", "替我下单股票")
@@ -15,6 +17,15 @@ class SafetyDecision:
     category: str | None = None
     fixed_response: str | None = None
     end_session: bool = False
+
+
+def is_voice_standby_command(text: str) -> bool:
+    normalized = "".join(
+        char
+        for char in text.strip()
+        if not char.isspace() and char not in VOICE_COMMAND_IGNORED_CHARS
+    )
+    return normalized == VOICE_STANDBY_COMMAND
 
 
 def evaluate_text(text: str) -> SafetyDecision:

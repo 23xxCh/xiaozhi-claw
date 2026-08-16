@@ -2,12 +2,13 @@ import asyncio
 import contextlib
 import logging
 import time
+import uuid
 
 from fastapi import WebSocket
 
 from backend.app.providers import ProviderBundle
 from backend.app.quota import quota_for_user
-from backend.app.safety import evaluate_text
+from backend.app.safety import evaluate_text, is_voice_standby_command
 
 from .emotion import EmotionRouter
 from .mcp import DeviceMcpClient
@@ -277,6 +278,27 @@ async def process_turn(
                 "emotion": transcription.emotion,
             },
         )
+
+        if is_voice_standby_command(transcript):
+            delivered = await websocket.app.state.device_connections.send_json(
+                serial,
+                {
+                    "type": "system",
+                    "command": "enter_standby",
+                    "command_id": f"voice-standby-{uuid.uuid4()}",
+                },
+                expected_websocket=websocket,
+            )
+            if not delivered:
+                await send_error(
+                    websocket,
+                    serial,
+                    "standby-delivery-failed",
+                    "standby command could not be delivered",
+                )
+                return False
+            logger.info("voice standby command delivered to device %s", serial)
+            return True
 
         async with websocket.app.state.session_factory() as session:
             quota = await quota_for_user(session, user_id, websocket.app.state.settings)
