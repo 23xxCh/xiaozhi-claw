@@ -4,9 +4,11 @@ import pytest
 
 from backend.app.config import Settings
 from backend.realtime.providers import (
+    BatchAsrSession,
     MockAsrSession,
     MockTtsSession,
     ProviderNotRegisteredError,
+    QwenRealtimeAsrSession,
     RealtimeProviderBundle,
     create_realtime_providers,
 )
@@ -88,3 +90,26 @@ def test_settings_exposes_typed_runtime_groups_without_renaming_env_fields() -> 
     assert settings.providers.realtime_llm.provider_id == "deepseek"
     assert settings.providers.realtime_llm.model == "model-x"
     assert settings.security.jwt_secret == settings.jwt_secret
+
+
+@pytest.mark.asyncio
+async def test_realtime_asr_connect_failure_falls_back_without_dropping_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_open(*args, **kwargs):
+        del args, kwargs
+        raise ConnectionResetError("upstream TLS reset")
+
+    monkeypatch.setattr(QwenRealtimeAsrSession, "open", fail_open)
+    registry = create_realtime_providers(
+        Settings(
+            provider_mode="custom",
+            asr_api_key="test-dashscope-key",
+            fallback_enabled=True,
+            fallback_api_key="test-dashscope-key",
+        )
+    )
+
+    session = await registry.open_asr_for("dashscope", "qwen3-asr-flash-realtime")
+
+    assert isinstance(session, BatchAsrSession)

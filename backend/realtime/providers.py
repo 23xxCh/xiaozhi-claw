@@ -668,8 +668,19 @@ def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:
             registry.register_llm(provider_id, mock_llm)
         return registry
 
+    fallback = create_fallback_providers(settings)
+
     async def open_qwen_asr(model: str) -> RealtimeAsrSession:
-        return await QwenRealtimeAsrSession.open(settings, model=model)
+        try:
+            return await QwenRealtimeAsrSession.open(settings, model=model)
+        except Exception as exc:
+            if fallback is None:
+                raise
+            logger.warning(
+                "realtime ASR connection failed; using bounded batch fallback (%s)",
+                type(exc).__name__,
+            )
+            return BatchAsrSession(fallback)
 
     async def open_qwen_tts(
         model: str, voice: str, speech_rate: float
@@ -685,7 +696,6 @@ def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:
     registry.register_llm("deepseek", DeepSeekStreamingLlmProvider(settings))
     registry.register_tts("dashscope", open_qwen_tts)
 
-    fallback = create_fallback_providers(settings)
     if fallback is not None:
         async def open_batch_asr(model: str) -> RealtimeAsrSession:
             del model
