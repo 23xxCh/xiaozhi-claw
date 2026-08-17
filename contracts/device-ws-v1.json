@@ -1,0 +1,15 @@
+{
+  "protocol_version": 1,
+  "message_types": [
+    "hello",
+    "listen",
+    "tts",
+    "mcp",
+    "system",
+    "alert",
+    "device_config_ack"
+  ],
+  "tts_states": ["start", "ready", "stop", "drained"],
+  "optional_correlation_fields": ["session_id", "turn_id", "reply_id"],
+  "compatibility": "Unknown optional fields are ignored. turn_id is self-hosted-only and optional for upstream XiaoZhi compatibility."
+}

@@ -135,11 +135,13 @@ class SentenceBuffer:
 class PlaybackHandshake:
     def __init__(self) -> None:
         self.reply_id: str | None = None
+        self.turn_id: str | None = None
         self.ready = asyncio.Event()
         self.drained = asyncio.Event()
 
-    def begin(self) -> str:
+    def begin(self, turn_id: str) -> str:
         self.reply_id = str(uuid.uuid4())
+        self.turn_id = turn_id
         self.ready = asyncio.Event()
         self.drained = asyncio.Event()
         return self.reply_id
@@ -176,6 +178,7 @@ class PlaybackHandshake:
     def clear(self, reply_id: str | None = None) -> None:
         if reply_id is None or reply_id == self.reply_id:
             self.reply_id = None
+            self.turn_id = None
             self.ready.set()
             self.drained.set()
 
@@ -184,10 +187,12 @@ async def _start_playback(
     websocket: WebSocket,
     serial: str,
     playback: PlaybackHandshake,
+    turn_id: str,
 ) -> str:
-    reply_id = playback.begin()
+    reply_id = playback.begin(turn_id)
     await websocket.app.state.device_connections.send_json(
-        serial, {"type": "tts", "state": "start", "reply_id": reply_id}
+        serial,
+        {"type": "tts", "state": "start", "turn_id": turn_id, "reply_id": reply_id},
     )
     if not await playback.wait_ready(reply_id):
         logger.warning(
@@ -202,11 +207,13 @@ async def _stop_playback(
     serial: str,
     playback: PlaybackHandshake,
     reply_id: str,
+    turn_id: str,
     *,
     wait_for_drain: bool,
 ) -> None:
     await websocket.app.state.device_connections.send_json(
-        serial, {"type": "tts", "state": "stop", "reply_id": reply_id}
+        serial,
+        {"type": "tts", "state": "stop", "turn_id": turn_id, "reply_id": reply_id},
     )
     if wait_for_drain and not await playback.wait_drained(reply_id):
         logger.warning("device %s did not acknowledge TTS drained", serial)
@@ -407,9 +414,11 @@ async def _speak_sentence(
     tts: RealtimeTtsSession,
     encoder: StreamingPcmToOpus | None,
     direct_pacer: OpusPacketPacer,
+    turn_id: str,
 ) -> None:
     await websocket.app.state.device_connections.send_json(
-        serial, {"type": "tts", "state": "sentence_start", "text": sentence}
+        serial,
+        {"type": "tts", "state": "sentence_start", "turn_id": turn_id, "text": sentence},
     )
     async for audio in tts.synthesize(sentence):
         if encoder is None:
@@ -434,6 +443,7 @@ async def _speak_fixed_message(
     encoder: StreamingPcmToOpus | None = None
     packet_task: asyncio.Task[None] | None = None
     reply_id: str | None = None
+    turn_id = str(uuid.uuid4())
     interrupted = False
     pacer = OpusPacketPacer(
         lambda packet: websocket.app.state.device_connections.send_bytes(serial, packet)
@@ -452,21 +462,22 @@ async def _speak_fixed_message(
             if fallback is None:
                 raise
             logger.warning("realtime TTS failed for policy prompt on %s; using fallback", serial)
-            reply_id = await _start_playback(websocket, serial, playback)
+            reply_id = await _start_playback(websocket, serial, playback, turn_id)
             await websocket.app.state.device_connections.send_json(
-                serial, {"type": "tts", "state": "sentence_start", "text": message}
+                serial,
+                {"type": "tts", "state": "sentence_start", "turn_id": turn_id, "text": message},
             )
             for packet in await fallback.speech.synthesize(message):
                 if not await pacer.send(packet):
                     break
             return False
 
-        reply_id = await _start_playback(websocket, serial, playback)
+        reply_id = await _start_playback(websocket, serial, playback, turn_id)
         if not providers.mock:
             encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
             await encoder.start()
             packet_task = asyncio.create_task(send_packets())
-        await _speak_sentence(websocket, serial, message, tts, encoder, pacer)
+        await _speak_sentence(websocket, serial, message, tts, encoder, pacer, turn_id)
         await tts.finish()
         if encoder is not None:
             await encoder.finish()
@@ -491,6 +502,7 @@ async def _speak_fixed_message(
                 serial,
                 playback,
                 reply_id,
+                turn_id,
                 wait_for_drain=not interrupted,
             )
     return False
@@ -502,6 +514,7 @@ async def _process_turn(
     device_id: str,
     user_id: str,
     conversation_id: str,
+    turn_id: str,
     snapshot: AgentSnapshot,
     asr: RealtimeAsrSession,
     audio_frames: list[bytes],
@@ -578,6 +591,7 @@ async def _process_turn(
                 "type": "stt",
                 "text": transcript,
                 "emotion": transcription.emotion,
+                "turn_id": turn_id,
             },
         )
 
@@ -590,7 +604,7 @@ async def _process_turn(
         safety = evaluate_text(transcript)
         emotion = router.route(transcription.emotion, safety.category)
         await websocket.app.state.device_connections.send_json(
-            serial, {"type": "llm", "emotion": emotion.thinking_emotion}
+            serial, {"type": "llm", "emotion": emotion.thinking_emotion, "turn_id": turn_id}
         )
 
         sentence_buffer = SentenceBuffer()
@@ -615,9 +629,10 @@ async def _process_turn(
                     fallback_operations.add("tts")
                     batch_tts = True
                 await websocket.app.state.device_connections.send_json(
-                    serial, {"type": "llm", "emotion": emotion.reply_emotion}
+                    serial,
+                    {"type": "llm", "emotion": emotion.reply_emotion, "turn_id": turn_id},
                 )
-                reply_id = await _start_playback(websocket, serial, playback)
+                reply_id = await _start_playback(websocket, serial, playback, turn_id)
                 if tts is not None and not providers.mock:
                     encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
                     await encoder.start()
@@ -630,7 +645,13 @@ async def _process_turn(
             if batch_tts:
                 assert fallback is not None
                 await websocket.app.state.device_connections.send_json(
-                    serial, {"type": "tts", "state": "sentence_start", "text": sentence}
+                    serial,
+                    {
+                        "type": "tts",
+                        "state": "sentence_start",
+                        "turn_id": turn_id,
+                        "text": sentence,
+                    },
                 )
                 for packet in await fallback.speech.synthesize(sentence):
                     if first_audio_latency_ms is None:
@@ -639,7 +660,7 @@ async def _process_turn(
                         return
             else:
                 assert tts is not None
-                await _speak_sentence(websocket, serial, sentence, tts, encoder, pacer)
+                await _speak_sentence(websocket, serial, sentence, tts, encoder, pacer, turn_id)
 
         if safety.fixed_response:
             reply_parts.append(safety.fixed_response)
@@ -740,6 +761,7 @@ async def _process_turn(
                 serial,
                 playback,
                 reply_id,
+                turn_id,
                 wait_for_drain=not interrupted,
             )
 
@@ -958,6 +980,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         audio_bytes = 0
         audio_frames = 0
         audio_buffer.clear()
+        turn_id = str(uuid.uuid4())
         active_task = asyncio.create_task(
             _process_turn(
                 websocket,
@@ -965,6 +988,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 device_id,
                 user_id,
                 conversation_id,
+                turn_id,
                 snapshot,
                 turn_asr,
                 turn_audio_frames,

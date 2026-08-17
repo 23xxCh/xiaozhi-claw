@@ -1,5 +1,6 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
+#include "device_ws_contract_generated.h"
 #if CONFIG_USE_EMOTE_MESSAGE_STYLE
 #include "hensun_emote_lab_display.h"
 #else
@@ -21,6 +22,8 @@
 #define TAG "HensunCamPilotV1Board"
 
 namespace {
+
+static_assert(hensun::device_ws::kProtocolVersion == 1);
 
 #if CONFIG_USE_EMOTE_MESSAGE_STYLE
 using HensunPilotDisplay = HensunEmoteLabDisplay;

@@ -96,20 +96,20 @@ def _receive_mock_turn(websocket) -> tuple[dict[str, object], bytes]:
     assert thinking["type"] == "llm"
     reply_emotion = websocket.receive_json()
     assert reply_emotion["type"] == "llm"
+    assert stt["turn_id"] == thinking["turn_id"] == reply_emotion["turn_id"]
     start = websocket.receive_json()
     assert start["state"] == "start"
     assert start["reply_id"]
+    assert start["turn_id"] == stt["turn_id"]
     websocket.send_json({"type": "tts", "state": "ready", "reply_id": start["reply_id"]})
     sentence = websocket.receive_json()
     assert sentence["state"] == "sentence_start"
     audio = websocket.receive_bytes()
     stop = websocket.receive_json()
-    assert stop == {
-        "session_id": stop["session_id"],
-        "type": "tts",
-        "state": "stop",
-        "reply_id": start["reply_id"],
-    }
+    assert stop["type"] == "tts"
+    assert stop["state"] == "stop"
+    assert stop["reply_id"] == start["reply_id"]
+    assert stop["turn_id"] == start["turn_id"]
     websocket.send_json({"type": "tts", "state": "drained", "reply_id": start["reply_id"]})
     return stt, audio
 
