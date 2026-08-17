@@ -5,6 +5,7 @@ import contextlib
 import io
 import re
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -638,7 +639,11 @@ class PreviewTargetTests(unittest.TestCase):
             idf_script.parent.mkdir()
             idf_script.write_text("", encoding="utf-8")
             with (
-                mock.patch.object(build.os, "name", "nt"),
+                mock.patch.object(
+                    build,
+                    "os",
+                    types.SimpleNamespace(name="nt", environ=os.environ),
+                ),
                 mock.patch.dict(os.environ, {"IDF_PATH": temp_dir}),
             ):
                 command = build._idf_command()
