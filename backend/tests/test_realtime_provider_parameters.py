@@ -159,11 +159,20 @@ def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> Non
     assert buffer.flush() == "建议您查看"
 
 
-def test_sentence_buffer_hard_limits_unpunctuated_text() -> None:
+def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sentence() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 47) == []
-    assert buffer.feed("句") == ["短" * 47 + "句"]
+    assert buffer.feed("短" * 9) == []
+    assert buffer.feed("句") == ["短" * 9 + "句"]
+    assert buffer.feed("后续内容") == []
+    assert buffer.flush() == "后续内容"
+
+
+def test_sentence_buffer_keeps_hard_limit_after_first_chunk() -> None:
+    buffer = SentenceBuffer()
+
+    assert buffer.feed("短" * 10) == ["短" * 10]
+    assert buffer.feed("句" * 48) == ["句" * 48]
 
 
 @pytest.mark.asyncio

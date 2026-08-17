@@ -85,10 +85,17 @@ class AgentSnapshot:
 
 
 class SentenceBuffer:
-    def __init__(self, max_chars: int = 48, min_clause_chars: int = 12) -> None:
+    def __init__(
+        self,
+        max_chars: int = 48,
+        min_clause_chars: int = 12,
+        first_chunk_chars: int = 10,
+    ) -> None:
         self._text = ""
         self._max_chars = max_chars
         self._min_clause_chars = min_clause_chars
+        self._first_chunk_chars = first_chunk_chars
+        self._first_chunk_sent = False
 
     def feed(self, text: str) -> list[str]:
         self._text += text
@@ -106,6 +113,8 @@ class SentenceBuffer:
                 ]
                 if clause_boundaries:
                     boundary = clause_boundaries[-1]
+                elif not self._first_chunk_sent and len(self._text) >= self._first_chunk_chars:
+                    boundary = self._first_chunk_chars
                 elif len(self._text) >= self._max_chars:
                     boundary = self._max_chars
                 else:
@@ -114,6 +123,7 @@ class SentenceBuffer:
             self._text = self._text[boundary:]
             if sentence:
                 sentences.append(sentence)
+                self._first_chunk_sent = True
         return sentences
 
     def flush(self) -> str | None:
