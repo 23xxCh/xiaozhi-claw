@@ -114,7 +114,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Hensun test dependencies
-        run: python -m pip install --no-cache-dir Pillow pytest
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends python3-pip
+          python -m pip install --no-cache-dir Pillow pytest
       - name: Verify generated artifacts and resource profile
         run: |
           python scripts/generate_device_contracts.py --check
