@@ -52,7 +52,9 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       APP_ENV: development
-      DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/hensun-e2e.db
+      # Job-level env cannot reference the runner context.  This path is
+      # isolated to the ephemeral GitHub Actions runner instead.
+      DATABASE_URL: sqlite+aiosqlite:////tmp/hensun-e2e.db
       ADMIN_API_KEY: ci-admin-key-not-for-production
       JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
       DEVICE_CREDENTIAL_PEPPER: ci-device-pepper-at-least-32-characters
