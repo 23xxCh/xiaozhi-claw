@@ -5,6 +5,10 @@ x-backend: &backend
   build:
     context: ..
     dockerfile: backend/Dockerfile
+    # Build-only network override: the hubei Docker bridge can stall while
+    # retrieving Debian media packages. Runtime containers remain on the
+    # isolated MySQL network and expose only loopback ports below.
+    network: host
     args:
       DEBIAN_MIRROR: ${HENSUN_DEBIAN_MIRROR:-http://deb.debian.org/debian}
       DEBIAN_SECURITY_MIRROR: ${HENSUN_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
