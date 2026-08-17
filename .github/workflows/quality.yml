@@ -118,7 +118,7 @@ jobs:
           apt-get update
           apt-get install --yes --no-install-recommends python3-venv
           python -m venv /tmp/hensun-firmware-ci
-          /tmp/hensun-firmware-ci/bin/python -m pip install --no-cache-dir "Pillow>=12,<13" "pytest>=8.4,<9"
+          /tmp/hensun-firmware-ci/bin/python -m pip install --no-cache-dir "Pillow==12.2.0" "pytest>=8.4,<9"
           echo "/tmp/hensun-firmware-ci/bin" >> "$GITHUB_PATH"
       - name: Verify generated artifacts and resource profile
         run: |
