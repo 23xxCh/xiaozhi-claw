@@ -55,10 +55,26 @@ set -a
 # shellcheck disable=SC1090
 source "$runtime_env"
 set +a
-: "${HENSUN_MYSQL_BACKUP_COMMAND:?set a server-only HENSUN_MYSQL_BACKUP_COMMAND}"
 [[ "${WEB_APP_URL:-}" == "https://staging.hensun-desk.top" ]] || {
   echo "WEB_APP_URL must be the staging hostname for this release" >&2
   exit 2
+}
+
+backup_mysql() {
+  if [[ -n "${HENSUN_MYSQL_BACKUP_COMMAND:-}" ]]; then
+    bash -c "$HENSUN_MYSQL_BACKUP_COMMAND"
+    return
+  fi
+
+  local mysql_container
+  mysql_container="$(docker ps --format '{{.Names}}' | awk '/^1Panel-mysql-/ {print; exit}')"
+  [[ -n "$mysql_container" ]] || {
+    echo "no MySQL backup command or 1Panel MySQL container is available" >&2
+    return 1
+  }
+  docker exec "$mysql_container" sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot --single-transaction --skip-lock-tables --databases hensun_desk' \
+    | gzip -c > "$HENSUN_MYSQL_BACKUP_FILE"
 }
 [[ "${DEVICE_WS_URL:-}" == "wss://staging.hensun-desk.top/v1/device/ws" ]] || {
   echo "DEVICE_WS_URL must be the staging WSS hostname for this release" >&2
@@ -96,7 +112,7 @@ trap rollback ERR
 
 backup_file="$data_root/backups/mysql/staging-before-${release_id}-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
 export HENSUN_MYSQL_BACKUP_FILE="$backup_file"
-bash -c "$HENSUN_MYSQL_BACKUP_COMMAND"
+backup_mysql
 test -s "$backup_file"
 
 HENSUN_RELEASE_ID="$release_id" "${compose[@]}" config -q

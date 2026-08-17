@@ -55,7 +55,10 @@ changed.
 - The server-only runtime environment remains in
   `/data/hensun-desk/runtime/server.env` and is never read or packaged.
 - Before migration, the release script creates a MySQL backup in
-  `/data/hensun-desk/backups/mysql/`.
+  `/data/hensun-desk/backups/mysql/`. It uses a server-defined backup command
+  when present; otherwise it invokes `mysqldump` inside the existing 1Panel
+  MySQL container. The MySQL credential never leaves that container or enters
+  logs.
 - The old active release is kept as the rollback target. The release fails and
   restores it if local or public health checks fail.
 
