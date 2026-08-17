@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_env: Literal["development", "test", "production"] = "development"
+    app_env: Literal["development", "test", "staging", "production"] = "development"
     database_url: str = "sqlite+aiosqlite:///./hensun-desk.db"
     admin_api_key: str = "development-admin-change-me"
     jwt_secret: str = "development-jwt-change-me"
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":
-        if self.app_env == "production":
+        if self.app_env in {"staging", "production"}:
             unsafe = {
                 "admin_api_key": self.admin_api_key,
                 "jwt_secret": self.jwt_secret,
@@ -119,7 +119,7 @@ class Settings(BaseSettings):
             if bad:
                 raise ValueError(f"Unsafe production secrets: {', '.join(bad)}")
 
-        if self.app_env != "production":
+        if self.app_env not in {"staging", "production"}:
             return self
         if self.provider_mode != "custom":
             raise ValueError("Production must use custom AI providers")

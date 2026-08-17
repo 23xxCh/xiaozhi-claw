@@ -33,9 +33,10 @@ def test_high_risk_categories_use_fixed_responses(text: str, category: str) -> N
     assert decision.fixed_response
 
 
-def test_production_rejects_development_secrets() -> None:
+@pytest.mark.parametrize("app_env", ["staging", "production"])
+def test_deployed_environment_rejects_development_secrets(app_env: str) -> None:
     with pytest.raises(ValueError, match="Unsafe production secrets"):
-        Settings(_env_file=None, app_env="production", provider_mode="custom")
+        Settings(_env_file=None, app_env=app_env, provider_mode="custom")
 
 
 def test_custom_provider_requires_all_model_endpoints() -> None:

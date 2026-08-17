@@ -162,7 +162,7 @@ async def verify_email_code(
 
     challenge.consumed_at = now
     user = await session.scalar(select(User).where(User.email == email))
-    if user is None and settings.app_env != "production":
+    if user is None and settings.app_env not in {"staging", "production"}:
         legacy_users = list(
             await session.scalars(select(User).where(User.email.is_(None)).limit(2))
         )
@@ -217,7 +217,7 @@ async def dev_login(
     session: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
     settings = request.app.state.settings
-    if settings.app_env == "production":
+    if settings.app_env in {"staging", "production"}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     if not payload.adult_confirmed:
         raise HTTPException(

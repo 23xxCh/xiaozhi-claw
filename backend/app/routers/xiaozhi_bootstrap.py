@@ -42,7 +42,7 @@ async def xiaozhi_bootstrap(
         secret = (
             authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
         )
-        if settings.app_env == "production" and not verify_secret(
+        if settings.app_env in {"staging", "production"} and not verify_secret(
             secret,
             device.credential_hash,
             settings.device_credential_pepper,
