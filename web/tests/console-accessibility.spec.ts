@@ -1,8 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+const controlApiUrl = process.env.E2E_CONTROL_API_URL ?? "http://127.0.0.1:8000";
+
 async function authenticatePilot(page: Page) {
-  const response = await page.request.post("http://192.168.5.49:8000/v1/auth/dev-login", {
+  const response = await page.request.post(`${controlApiUrl}/v1/auth/dev-login`, {
     data: { openid: process.env.E2E_DEV_OPENID ?? "lan-28:84:85:4a:3d:b8", adult_confirmed: true },
   });
   expect(response.ok()).toBeTruthy();
@@ -77,7 +79,15 @@ test("home is keyboard accessible and has no serious axe violations", async ({ p
   for (const locator of await page.locator("a, button, input, select, textarea").all()) {
     if (!(await locator.isVisible())) continue;
     const box = await locator.boundingBox();
-    if (box) expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
+    if (box) {
+      const label = await locator.evaluate((element) => {
+        const named = element.getAttribute("aria-label") || element.textContent?.trim();
+        return `${element.tagName.toLowerCase()} ${named || "(unnamed)"}`;
+      });
+      // This is injected by `next dev`, not by the customer application.
+      if (label === "button Open Next.js Dev Tools") continue;
+      expect(Math.min(box.width, box.height), label).toBeGreaterThanOrEqual(44);
+    }
   }
 });
 

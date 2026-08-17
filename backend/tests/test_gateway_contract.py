@@ -12,6 +12,8 @@ from backend.realtime.providers import TranscriptionResult
 
 from .conftest import provision_owned_device
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_openapi_contains_stable_customer_and_device_paths(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
@@ -33,7 +35,7 @@ def test_openapi_contains_stable_customer_and_device_paths(client: TestClient) -
 
 
 def test_committed_openapi_contract_matches_control_plane(client: TestClient) -> None:
-    contract = json.loads(Path("docs/openapi.json").read_text(encoding="utf-8"))
+    contract = json.loads((ROOT / "docs" / "openapi.json").read_text(encoding="utf-8"))
     assert contract == client.app.openapi()
 
 

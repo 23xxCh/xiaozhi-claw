@@ -42,7 +42,13 @@ def test_custom_provider_requires_all_model_endpoints() -> None:
     with pytest.raises(ValueError, match="Missing custom provider settings"):
         Settings(
             _env_file=None,
+            app_env="production",
             provider_mode="custom",
+            admin_api_key="a" * 32,
+            jwt_secret="j" * 32,
+            device_credential_pepper="d" * 32,
+            memory_master_key="m" * 32,
+            email_otp_secret="e" * 32,
             asr_url="https://asr.example/v1/audio/transcriptions",
         )
 

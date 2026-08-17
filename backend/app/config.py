@@ -119,27 +119,25 @@ class Settings(BaseSettings):
             if bad:
                 raise ValueError(f"Unsafe production secrets: {', '.join(bad)}")
 
-        if self.provider_mode == "custom":
-            custom = {
-                "asr_url": self.asr_url,
-                "asr_api_key": self.asr_api_key,
-                "asr_model": self.asr_model,
-                "tts_url": self.tts_url,
-                "tts_api_key": self.tts_api_key,
-                "tts_model": self.tts_model,
-                "tts_voice": self.tts_voice,
-                "llm_url": self.llm_url,
-                "llm_api_key": self.llm_api_key,
-                "llm_model": self.llm_model,
-            }
-            missing = [name for name, value in custom.items() if not value.strip()]
-            if missing:
-                raise ValueError(f"Missing custom provider settings: {', '.join(missing)}")
-
         if self.app_env != "production":
             return self
         if self.provider_mode != "custom":
             raise ValueError("Production must use custom AI providers")
+        custom = {
+            "asr_url": self.asr_url,
+            "asr_api_key": self.asr_api_key,
+            "asr_model": self.asr_model,
+            "tts_url": self.tts_url,
+            "tts_api_key": self.tts_api_key,
+            "tts_model": self.tts_model,
+            "tts_voice": self.tts_voice,
+            "llm_url": self.llm_url,
+            "llm_api_key": self.llm_api_key,
+            "llm_model": self.llm_model,
+        }
+        missing = [name for name, value in custom.items() if not value.strip()]
+        if missing:
+            raise ValueError(f"Missing custom provider settings: {', '.join(missing)}")
         if self.fallback_enabled and not (self.fallback_api_key or self.asr_api_key):
             raise ValueError("Production fallback requires a DashScope API key")
         provider_urls = [self.asr_url, self.tts_url, self.llm_url]

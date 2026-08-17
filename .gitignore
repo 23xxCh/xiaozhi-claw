@@ -25,6 +25,7 @@ miniapp/miniprogram_npm/
 web/node_modules/
 web/.next/
 web/.env.local
+web/tsconfig.tsbuildinfo
 web/playwright-report/
 web/test-results/
 backups/

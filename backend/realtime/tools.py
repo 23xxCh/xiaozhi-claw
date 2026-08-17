@@ -198,7 +198,11 @@ class DashScopeQwenSearchProvider:
                 response.raise_for_status()
                 payload = response.json()
                 choices = payload.get("choices") if isinstance(payload, dict) else None
-                message = choices[0].get("message") if isinstance(choices, list) and choices else None
+                message = (
+                    choices[0].get("message")
+                    if isinstance(choices, list) and choices
+                    else None
+                )
                 content = message.get("content") if isinstance(message, dict) else None
                 if not isinstance(content, str) or not content.strip():
                     raise ToolError("没有找到可用的搜索结果")

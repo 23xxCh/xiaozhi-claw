@@ -1,0 +1,53 @@
+name: Hensun firmware build matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, tag, or branch to build
+        required: true
+        default: main
+  schedule:
+    - cron: "18 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  build-hensun-matrix:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v6.0.2
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - hensun-cam-selfhosted-v1
+          - hensun-cam-official-v1
+          - hensun-cam-emote-lab-v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Check generated Hensun resources
+        run: |
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_display_profile.py --check
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_emote_lab_assets.py --check
+      - name: Build selected Hensun variant
+        working-directory: firmware/xiaozhi-esp32
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py hensun/hensun-cam-pilot-v1 --name "${{ matrix.variant }}"
+      - name: Produce signed-input manifest (not a signing operation)
+        working-directory: firmware/xiaozhi-esp32
+        run: |
+          mkdir -p ci-artifacts
+          cp build/xiaozhi.bin ci-artifacts/${{ matrix.variant }}.bin
+          sha256sum ci-artifacts/${{ matrix.variant }}.bin > ci-artifacts/${{ matrix.variant }}.sha256
+          printf '0x20000 %s.bin\n' "${{ matrix.variant }}" > ci-artifacts/${{ matrix.variant }}.flash-addresses.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}-${{ github.sha }}
+          path: firmware/xiaozhi-esp32/ci-artifacts
+          if-no-files-found: error

@@ -1,0 +1,51 @@
+name: Deploy reviewed staging release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact reviewed commit SHA, tag, or branch
+        required: true
+      confirmation:
+        description: Enter DEPLOY_STAGING to continue
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: inputs.confirmation == 'DEPLOY_STAGING'
+    name: Manual staging deployment
+    runs-on: ubuntu-24.04
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Create secret-free release archive
+        run: |
+          release_id="$(git rev-parse HEAD)"
+          git archive --format=tar "$release_id" \
+            -- . ':!*.db' ':!*.sqlite3' ':!.env' ':!.env.*' ':!run' ':!backups' ':!web/node_modules' \
+            | gzip -n > "hensun-desk-${release_id}.tar.gz"
+          sha256sum "hensun-desk-${release_id}.tar.gz" > "hensun-desk-${release_id}.tar.gz.sha256"
+      - name: Configure deployment SSH key
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Upload and deploy only staging
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          release_id="$(git rev-parse HEAD)"
+          archive="hensun-desk-${release_id}.tar.gz"
+          scp -o BatchMode=yes "$archive" "${STAGING_SSH_USER}@${STAGING_SSH_HOST}:/data/hensun-desk/runtime/"
+          ssh -o BatchMode=yes "${STAGING_SSH_USER}@${STAGING_SSH_HOST}" \
+            "set -euo pipefail; release_id='${release_id}'; target='/opt/hensun-desk/releases/'\"\$release_id\"; mkdir -p \"\$target\"; tar -xzf '/data/hensun-desk/runtime/${archive}' -C \"\$target\"; HENSUN_DEPLOY_TARGET=staging /bin/bash \"\$target/deploy/scripts/release-staging.sh\" \"\$release_id\""

@@ -1,0 +1,126 @@
+name: Hensun quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/**
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend lint and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+      - name: Lint backend and tooling
+        run: python -m ruff check backend scripts
+      - name: Check shared device contract
+        run: python scripts/generate_device_contracts.py --check
+      - name: Run backend tests
+        run: python -m pytest backend/tests
+
+  web:
+    name: Web lint, types, and production build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  web-e2e:
+    name: Web Playwright and Axe smoke
+    needs: [backend, web]
+    runs-on: ubuntu-24.04
+    env:
+      APP_ENV: development
+      DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/hensun-e2e.db
+      ADMIN_API_KEY: ci-admin-key-not-for-production
+      JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+      DEVICE_CREDENTIAL_PEPPER: ci-device-pepper-at-least-32-characters
+      MEMORY_MASTER_KEY: ci-memory-key-at-least-32-characters-long
+      EMAIL_OTP_SECRET: ci-email-otp-secret-at-least-32-characters-long
+      PROVIDER_MODE: mock
+      SESSION_COOKIE_SECURE: "false"
+      CORS_ORIGINS: http://127.0.0.1:3000
+      WEB_APP_URL: http://127.0.0.1:3000
+      NEXT_PUBLIC_CONTROL_API_URL: http://127.0.0.1:8000
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+      E2E_CONTROL_API_URL: http://127.0.0.1:8000
+      PLAYWRIGHT_START_WEB: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+      - name: Start control API
+        run: |
+          nohup python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 > "${RUNNER_TEMP}/control-api.log" 2>&1 &
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:8000/health/ready && exit 0
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/control-api.log"
+          exit 1
+      - name: Install browser test dependencies
+        working-directory: web
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Run Playwright and Axe checks
+        working-directory: web
+        run: npm run test:e2e
+      - name: Upload browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-diagnostics
+          path: |
+            ${{ runner.temp }}/control-api.log
+            web/test-results
+            web/playwright-report
+          if-no-files-found: ignore
+
+  firmware-contracts:
+    name: Firmware contracts and Hensun tests
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v6.0.2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hensun test dependencies
+        run: python -m pip install --no-cache-dir Pillow pytest
+      - name: Verify generated artifacts and resource profile
+        run: |
+          python scripts/generate_device_contracts.py --check
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_display_profile.py --check
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_emote_lab_assets.py --check
+      - name: Run Hensun firmware checks
+        working-directory: firmware/xiaozhi-esp32
+        run: |
+          python -m pytest scripts/tests/test_hensun_cam_pilot.py scripts/tests/test_hensun_emote_formal.py scripts/tests/test_hensun_emote_lab.py scripts/tests/test_build.py
+      - name: Run release configuration gate
+        run: python scripts/release_gate.py
