@@ -133,11 +133,12 @@ class SentenceBuffer:
 
 
 class PlaybackHandshake:
-    def __init__(self) -> None:
+    def __init__(self, *, drain_timeout_seconds: float = 1.0) -> None:
         self.reply_id: str | None = None
         self.turn_id: str | None = None
         self.ready = asyncio.Event()
         self.drained = asyncio.Event()
+        self._drain_timeout_seconds = drain_timeout_seconds
 
     def begin(self, turn_id: str) -> str:
         self.reply_id = str(uuid.uuid4())
@@ -170,7 +171,7 @@ class PlaybackHandshake:
         if reply_id != self.reply_id:
             return False
         try:
-            await asyncio.wait_for(self.drained.wait(), timeout=5.0)
+            await asyncio.wait_for(self.drained.wait(), timeout=self._drain_timeout_seconds)
             return True
         except TimeoutError:
             return False
