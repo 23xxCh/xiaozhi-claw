@@ -5,31 +5,45 @@ from collections.abc import Awaitable, Callable
 
 
 class OpusPacketPacer:
-    """Send Opus frames at playback rate without catch-up bursts."""
+    """Send Opus frames at playback rate with a bounded startup jitter buffer."""
 
     def __init__(
         self,
         send: Callable[[bytes], Awaitable[bool]],
         *,
         frame_duration_ms: int = 60,
+        startup_burst_packets: int = 1,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
+        if startup_burst_packets < 1:
+            raise ValueError("startup_burst_packets must be at least one")
         self._send = send
         self._frame_seconds = frame_duration_ms / 1000
+        self._startup_burst_packets = startup_burst_packets
         self._clock = clock
         self._sleep = sleep
-        self._next_send_at: float | None = None
+        self._first_send_at: float | None = None
+        self._sent_packets = 0
 
     async def send(self, packet: bytes) -> bool:
         now = self._clock()
-        target = self._next_send_at if self._next_send_at is not None else now
+        if self._first_send_at is None:
+            self._first_send_at = now
+        packet_index = self._sent_packets + 1
+        target = self._first_send_at + max(
+            0, packet_index - self._startup_burst_packets
+        ) * self._frame_seconds
         if now < target:
             await self._sleep(target - now)
-        elif now > target:
-            target = now
+        elif now > target and packet_index > self._startup_burst_packets:
+            # Keep the new schedule anchored at the actual send time. We never
+            # emit catch-up bursts after the startup buffer has been filled.
+            self._first_send_at = now - max(
+                0, packet_index - self._startup_burst_packets
+            ) * self._frame_seconds
         delivered = await self._send(packet)
-        self._next_send_at = target + self._frame_seconds
+        self._sent_packets = packet_index
         return delivered
 
 

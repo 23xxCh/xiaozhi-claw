@@ -446,7 +446,8 @@ async def _speak_fixed_message(
     turn_id = str(uuid.uuid4())
     interrupted = False
     pacer = OpusPacketPacer(
-        lambda packet: websocket.app.state.device_connections.send_bytes(serial, packet)
+        lambda packet: websocket.app.state.device_connections.send_bytes(serial, packet),
+        startup_burst_packets=5,
     )
 
     async def send_packets() -> None:
@@ -549,7 +550,8 @@ async def _process_turn(
     reply_id: str | None = None
     interrupted = False
     pacer = OpusPacketPacer(
-        lambda packet: websocket.app.state.device_connections.send_bytes(serial, packet)
+        lambda packet: websocket.app.state.device_connections.send_bytes(serial, packet),
+        startup_burst_packets=5,
     )
 
     async def send_packets() -> None:

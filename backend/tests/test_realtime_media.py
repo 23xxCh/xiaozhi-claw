@@ -44,6 +44,39 @@ async def test_opus_packet_pacer_keeps_60ms_spacing_without_catchup_bursts() -> 
 
 
 @pytest.mark.asyncio
+async def test_opus_packet_pacer_builds_a_startup_buffer_before_steady_pacing() -> None:
+    now = 0.0
+    sent_at: list[float] = []
+
+    def clock() -> float:
+        return now
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        now += delay
+
+    async def send(_: bytes) -> bool:
+        nonlocal now
+        sent_at.append(now)
+        now += 0.01
+        return True
+
+    pacer = OpusPacketPacer(
+        send,
+        frame_duration_ms=60,
+        startup_burst_packets=5,
+        clock=clock,
+        sleep=sleep,
+    )
+    for index in range(7):
+        assert await pacer.send(bytes([index]))
+
+    # Five 60 ms packets reach the device immediately, forming a 300 ms
+    # buffer. The sixth packet starts the steady 60 ms cadence.
+    assert sent_at == pytest.approx([0.0, 0.01, 0.02, 0.03, 0.04, 0.06, 0.12])
+
+
+@pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is not installed")
 async def test_streaming_encoder_preserves_multi_chunk_audio_duration() -> None:
     duration_seconds = 2.4
