@@ -109,17 +109,16 @@ jobs:
   firmware-contracts:
     name: Firmware contracts and Hensun tests
     runs-on: ubuntu-24.04
-    container:
-      image: espressif/idf:v6.0.2
     steps:
       - uses: actions/checkout@v4
+      # GIF bytes are verified with the repository's CPython 3.13 asset
+      # toolchain. ESP-IDF's pinned container currently bundles Python 3.12,
+      # whose encoder output has different hashes despite identical sources.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Install Hensun test dependencies
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends python3-venv
-          python -m venv /tmp/hensun-firmware-ci
-          /tmp/hensun-firmware-ci/bin/python -m pip install --no-cache-dir "Pillow==12.2.0" "pytest>=8.4,<9"
-          echo "/tmp/hensun-firmware-ci/bin" >> "$GITHUB_PATH"
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
       - name: Verify generated artifacts and resource profile
         run: |
           python scripts/generate_device_contracts.py --check
