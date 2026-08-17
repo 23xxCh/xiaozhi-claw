@@ -589,6 +589,12 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def normalized_text_sha256(path: Path) -> str:
+    """Hash text inputs as LF so the manifest is portable across Git clients."""
+    content = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def build_assets(check: bool) -> int:
     spec = json.loads(SOURCE_SPEC.read_text(encoding="utf-8"))
     if spec["canvas"] != {"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT, "fps": 20}:
@@ -660,7 +666,7 @@ def build_assets(check: bool) -> int:
     manifest = {
         "asset_set": spec["asset_set"],
         "source_spec": str(SOURCE_SPEC.relative_to(ASSET_ROOT)).replace("\\", "/"),
-        "source_spec_sha256": sha256(SOURCE_SPEC),
+        "source_spec_sha256": normalized_text_sha256(SOURCE_SPEC),
         "canvas": spec["canvas"],
         "palette": spec["palette"],
         "animations": manifest_animations,

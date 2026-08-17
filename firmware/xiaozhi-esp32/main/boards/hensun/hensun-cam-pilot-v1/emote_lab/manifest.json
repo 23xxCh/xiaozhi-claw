@@ -1,7 +1,7 @@
 {
   "asset_set": "hensun-emote-landscape-v1",
   "source_spec": "source/hensun_emote_motion_spec.json",
-  "source_spec_sha256": "dbc1039ecc9b48567f8a05d3de4a391527676ae41e6fb301e62ba9ef89c13523",
+  "source_spec_sha256": "525fb91b0fe3b61881e0bd232817e7413e621751b32d672553c6bedae983024d",
   "canvas": {
     "width": 320,
     "height": 240,
