@@ -77,7 +77,7 @@ function convertGif(gifBytes) {
   wasm.wasmconvertoptions_set_enable_heatshrink(options, false);
   wasm.wasmconvertoptions_set_enable_raw(options, false);
   wasm.wasmconvertoptions_set_jpeg_quality(options, 80);
-  wasm.wasmconvertoptions_set_resize(options, 240, 320);
+  wasm.wasmconvertoptions_set_resize(options, 320, 240);
 
   const result = wasm.convert_gif_wasm(pointer, gifBytes.length, options);
   if (result[3]) {

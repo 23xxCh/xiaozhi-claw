@@ -7,7 +7,7 @@
 ## 接口
 
 - 输入：设备状态、标准 `emotion` 事件、0–100 扬声器 PCM 音量、RGB565 摄像头帧。
-- 输出：六种语义表情、四档说话幅度、短时全屏摄像头预览。
+- 输出：十二种语义表情、四档说话幅度、短时全屏摄像头预览。
 - 官网版：继续使用原有 LVGL 表情与官网协议，不启用 GFX 资源分区。
 - 自有版和实验版：只使用 GFX 表情播放器，不同时启动 LVGL 渲染屏幕。
 
@@ -17,13 +17,14 @@
 TTS PCM -> HensunAudioCodecSimplex -> 0..100 -> 四档量化/节流
                                               -> speaking_0/1/speaking/3
 
-Camera RGB565 -> Display::SetPreviewFrame -> 旋转到 240x320
+Camera RGB565 -> Display::SetPreviewFrame -> 直接显示 320x240 QVGA 帧
                                         -> 锁定 GFX -> 同一 SPI 面板绘制
                                         -> 定时恢复当前表情
 ```
 
 ## 边界与安全回退
 
+- `tts.start` 仅保留 `thinking`；第一块实际 PCM 输出后才进入 `speaking`，`drained` 后先显示 0.8 秒情绪收尾、再回 `idle`，空闲计时结束后进入 `sleep`。
 - 音量只在说话状态驱动技术动画变体；其他状态忽略，未知情绪回退 `idle`。
 - 音量档带滞回和最短切换间隔，避免表情抖动与队列堆积。
 - 摄像头帧尺寸或像素数不合法时拒绝预览，但不影响上传和聊天。

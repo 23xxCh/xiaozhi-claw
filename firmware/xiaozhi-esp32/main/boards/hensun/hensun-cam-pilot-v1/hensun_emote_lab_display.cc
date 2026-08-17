@@ -17,14 +17,18 @@ constexpr char kPartitionLabel[] = "emote_gen";
 constexpr int kFrameRate = 20;
 constexpr int64_t kSpeechSwitchMinIntervalMs = 120;
 constexpr int kPreviewDurationMs = 1500;
-constexpr size_t kExpectedAnimationCount = 9;
+constexpr int64_t kReplySettleDurationUs = 800 * 1000;
+constexpr int64_t kIdleSleepDurationUs = 3 * 1000 * 1000;
+constexpr size_t kExpectedAnimationCount = 15;
 constexpr const char* kExpectedAnimations[kExpectedAnimationCount] = {
-    "idle", "listening", "thinking", "speaking", "speaking_0",
-    "speaking_1", "speaking_3", "happy", "caring",
+    "sleep", "wake", "idle", "listening", "thinking", "speaking", "speaking_0",
+    "speaking_1", "speaking_3", "happy", "caring", "curious", "surprised",
+    "confused", "alert",
 };
-constexpr size_t kShowcaseAnimationCount = 6;
+constexpr size_t kShowcaseAnimationCount = 12;
 constexpr const char* kShowcaseAnimations[kShowcaseAnimationCount] = {
-    "idle", "listening", "thinking", "speaking", "happy", "caring",
+    "sleep", "wake", "idle", "listening", "thinking", "speaking", "happy", "caring",
+    "curious", "surprised", "confused", "alert",
 };
 constexpr const char* kSpeakingAnimations[4] = {
     "speaking_0", "speaking_1", "speaking", "speaking_3",
@@ -119,11 +123,41 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
         switch_task_ = nullptr;
         return;
     }
+    const esp_timer_create_args_t reply_settle_timer_args = {
+        .callback = ReplySettleTimerCallback,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "hensun_reply_settle",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&reply_settle_timer_args, &reply_settle_timer_handle_) != ESP_OK) {
+        ESP_LOGE(kTag, "reply settle timer create failed");
+    }
+    const esp_timer_create_args_t idle_sleep_timer_args = {
+        .callback = IdleSleepTimerCallback,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "hensun_idle_sleep",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&idle_sleep_timer_args, &idle_sleep_timer_handle_) != ESP_OK) {
+        ESP_LOGE(kTag, "idle sleep timer create failed");
+    }
     QueueAnimation("idle", true);
 }
 
 HensunEmoteLabDisplay::~HensunEmoteLabDisplay() {
     showcase_active_.store(false);
+    if (reply_settle_timer_handle_ != nullptr) {
+        esp_timer_stop(reply_settle_timer_handle_);
+        esp_timer_delete(reply_settle_timer_handle_);
+        reply_settle_timer_handle_ = nullptr;
+    }
+    if (idle_sleep_timer_handle_ != nullptr) {
+        esp_timer_stop(idle_sleep_timer_handle_);
+        esp_timer_delete(idle_sleep_timer_handle_);
+        idle_sleep_timer_handle_ = nullptr;
+    }
     if (switch_task_ != nullptr) {
         vTaskDelete(switch_task_);
         switch_task_ = nullptr;
@@ -154,18 +188,43 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         return;
     }
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
+        InvalidatePresentationTimers();
+        presentation_state_.store(PresentationState::kListening);
         speaking_active_.store(false);
-        QueueAnimation("listening");
+        awaiting_audio_.store(false);
+        QueueAnimation("listening", false, true);
     } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
+        // A reply has already reached the generic idle state at this point,
+        // but its animation must finish before the display may sleep.
+        if (reply_settle_pending_.load()) {
+            return;
+        }
+        InvalidatePresentationTimers();
+        presentation_state_.store(PresentationState::kSleep);
         speaking_active_.store(false);
-        QueueAnimation("idle");
+        awaiting_audio_.store(false);
+        QueueAnimation("sleep");
+    } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
+        InvalidatePresentationTimers();
+        presentation_state_.store(PresentationState::kThinking);
+        speaking_active_.store(false);
+        awaiting_audio_.store(false);
+        QueueAnimation("thinking", false, true);
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
+        InvalidatePresentationTimers();
+        presentation_state_.store(PresentationState::kAwaitingAudio);
         speech_level_.store(2);
-        speaking_active_.store(true);
-        QueueAnimation("speaking");
-    } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
         speaking_active_.store(false);
-        QueueAnimation("caring", true);
+        awaiting_audio_.store(true);
+        // tts.start only means the gateway has reserved a reply. Do not claim
+        // that the device is speaking until the first PCM block reaches I2S.
+        QueueAnimation("thinking", false, true);
+    } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
+        InvalidatePresentationTimers();
+        presentation_state_.store(PresentationState::kAlert);
+        speaking_active_.store(false);
+        awaiting_audio_.store(false);
+        QueueAnimation("alert", true);
     }
 }
 
@@ -177,8 +236,48 @@ void HensunEmoteLabDisplay::ShowNotification(const char* notification, int durat
 void HensunEmoteLabDisplay::SetEmotion(const char* emotion) {
     bool urgent = false;
     const char* animation = MapEmotion(emotion, &urgent);
-    speaking_active_.store(std::strcmp(animation, "speaking") == 0);
-    QueueAnimation(animation, urgent);
+    if (std::strcmp(animation, "happy") == 0) {
+        reply_emotion_.store(ReplyEmotion::kHappy);
+    } else if (std::strcmp(animation, "caring") == 0) {
+        reply_emotion_.store(ReplyEmotion::kCaring);
+    } else {
+        reply_emotion_.store(ReplyEmotion::kNeutral);
+    }
+
+    // LLM emotions describe the reply, not its playback lifecycle. Store them
+    // for the 0.8 second reply settle instead of allowing a delayed event to
+    // overwrite listening, thinking, or real speech.
+    if (presentation_state_.load() == PresentationState::kAlert) {
+        QueueAnimation(animation, urgent, true);
+    }
+}
+
+void HensunEmoteLabDisplay::BeginReplySettle() {
+    const uint32_t generation = InvalidatePresentationTimers();
+    presentation_state_.store(PresentationState::kReplySettle);
+    speaking_active_.store(false);
+    awaiting_audio_.store(false);
+    reply_settle_pending_.store(true);
+    reply_settle_generation_.store(generation);
+
+    const char* animation = "idle";
+    switch (reply_emotion_.load()) {
+        case ReplyEmotion::kHappy:
+            animation = "happy";
+            break;
+        case ReplyEmotion::kCaring:
+            animation = "caring";
+            break;
+        case ReplyEmotion::kNeutral:
+            break;
+    }
+    QueueAnimation(animation, true, true);
+
+    if (reply_settle_timer_handle_ == nullptr ||
+        esp_timer_start_once(reply_settle_timer_handle_, kReplySettleDurationUs) != ESP_OK) {
+        ESP_LOGW(kTag, "reply settle timer unavailable; returning to idle immediately");
+        CompleteReplySettle();
+    }
 }
 
 void HensunEmoteLabDisplay::SetChatMessage(const char* role, const char* content) {
@@ -251,10 +350,25 @@ void HensunEmoteLabDisplay::UpdateStatusBar(bool update_all) {
 }
 
 void HensunEmoteLabDisplay::SetPowerSaveMode(bool on) {
-    esp_lcd_panel_disp_on_off(panel_, !on);
+    if (panel_ == nullptr) {
+        return;
+    }
+    // Soft standby must remain visibly alive so the user knows that the local
+    // wake word is still available. Do not blank the panel here.
+    esp_lcd_panel_disp_on_off(panel_, true);
+    InvalidatePresentationTimers();
+    speaking_active_.store(false);
+    awaiting_audio_.store(false);
+    presentation_state_.store(on ? PresentationState::kSleep : PresentationState::kIdle);
+    QueueAnimation(on ? "sleep" : "idle", true, true);
 }
 
 void HensunEmoteLabDisplay::SetSpeechLevel(uint8_t level) {
+    if (awaiting_audio_.exchange(false)) {
+        presentation_state_.store(PresentationState::kSpeaking);
+        speaking_active_.store(true);
+        QueueAnimation("speaking", false, true);
+    }
     if (!speaking_active_.load()) {
         return;
     }
@@ -324,6 +438,14 @@ void HensunEmoteLabDisplay::ShowcaseTaskEntry(void* context) {
     static_cast<HensunEmoteLabDisplay*>(context)->ShowcaseTask();
 }
 
+void HensunEmoteLabDisplay::ReplySettleTimerCallback(void* context) {
+    static_cast<HensunEmoteLabDisplay*>(context)->CompleteReplySettle();
+}
+
+void HensunEmoteLabDisplay::IdleSleepTimerCallback(void* context) {
+    static_cast<HensunEmoteLabDisplay*>(context)->EnterSleepAfterIdle();
+}
+
 bool HensunEmoteLabDisplay::Lock(int timeout_ms) {
     (void)timeout_ms;
     gfx_handle_t gfx = emote_gen_player_get_gfx_handle(player_);
@@ -369,6 +491,47 @@ void HensunEmoteLabDisplay::ShowcaseTask() {
     showcase_active_.store(false);
     QueueAnimation("idle");
     vTaskDelete(nullptr);
+}
+
+uint32_t HensunEmoteLabDisplay::InvalidatePresentationTimers() {
+    const uint32_t generation = presentation_generation_.fetch_add(1) + 1;
+    reply_settle_pending_.store(false);
+    idle_sleep_pending_.store(false);
+    if (reply_settle_timer_handle_ != nullptr) {
+        esp_timer_stop(reply_settle_timer_handle_);
+    }
+    if (idle_sleep_timer_handle_ != nullptr) {
+        esp_timer_stop(idle_sleep_timer_handle_);
+    }
+    return generation;
+}
+
+void HensunEmoteLabDisplay::CompleteReplySettle() {
+    const uint32_t generation = reply_settle_generation_.load();
+    if (!reply_settle_pending_.exchange(false) ||
+        generation != presentation_generation_.load()) {
+        return;
+    }
+    presentation_state_.store(PresentationState::kIdle);
+    QueueAnimation("idle", true, true);
+    idle_sleep_generation_.store(generation);
+    idle_sleep_pending_.store(true);
+    if (idle_sleep_timer_handle_ == nullptr ||
+        esp_timer_start_once(idle_sleep_timer_handle_, kIdleSleepDurationUs) != ESP_OK) {
+        ESP_LOGW(kTag, "idle sleep timer unavailable; keeping idle animation");
+        idle_sleep_pending_.store(false);
+    }
+}
+
+void HensunEmoteLabDisplay::EnterSleepAfterIdle() {
+    const uint32_t generation = idle_sleep_generation_.load();
+    if (!idle_sleep_pending_.exchange(false) ||
+        generation != presentation_generation_.load() ||
+        presentation_state_.load() != PresentationState::kIdle) {
+        return;
+    }
+    presentation_state_.store(PresentationState::kSleep);
+    QueueAnimation("sleep", false, true);
 }
 
 void HensunEmoteLabDisplay::QueueAnimation(const char* animation, bool urgent, bool immediate) {
@@ -444,18 +607,32 @@ const char* HensunEmoteLabDisplay::MapEmotion(const char* emotion, bool* urgent)
     if (IsOneOf(emotion, {"neutral", "idle", "idle_entered"})) {
         return "idle";
     }
-    if (IsOneOf(emotion, {"listening", "listening_started", "wake_word_detected"})) {
+    if (IsOneOf(emotion, {"sleep", "sleep_entered", "sleepy"})) {
+        return "sleep";
+    }
+    if (IsOneOf(emotion, {"wake", "waking", "wake_word_detected"})) {
+        return "wake";
+    }
+    if (IsOneOf(emotion, {"listening", "listening_started"})) {
         return "listening";
     }
     if (IsOneOf(emotion, {"thinking", "processing_started", "clarification",
-                          "clarification_needed"})) {
+                          "processing"})) {
         return "thinking";
+    }
+    if (IsOneOf(emotion, {"confused", "clarification_needed"})) {
+        return "confused";
+    }
+    if (IsOneOf(emotion, {"curious", "question", "questioning"})) {
+        return "curious";
     }
     if (IsOneOf(emotion, {"speaking", "query_result_ready"})) {
         return "speaking";
     }
-    if (IsOneOf(emotion, {"happy", "positive_response", "laughter", "laughing",
-                          "amused", "surprised"})) {
+    if (IsOneOf(emotion, {"surprised", "surprise"})) {
+        return "surprised";
+    }
+    if (IsOneOf(emotion, {"happy", "positive_response", "laughter", "laughing", "amused"})) {
         return "happy";
     }
     if (IsOneOf(emotion, {"caring", "comfort_mode_entered", "sad", "fearful", "fear"})) {
@@ -464,7 +641,7 @@ const char* HensunEmoteLabDisplay::MapEmotion(const char* emotion, bool* urgent)
     if (IsOneOf(emotion, {"safe_block", "content_safety_blocked", "network_unavailable",
                           "interrupted"})) {
         *urgent = true;
-        return "caring";
+        return "alert";
     }
     ESP_LOGW(kTag, "unknown emotion: %s", emotion != nullptr ? emotion : "(null)");
     return "idle";

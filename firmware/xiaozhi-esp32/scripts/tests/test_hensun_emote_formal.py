@@ -42,6 +42,17 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("speech_level_", self.header)
         self.assertIn("speaking_active_", self.header)
 
+    def test_selfhosted_pack_has_a_real_sleep_animation(self):
+        spec = json.loads(
+            (BOARD / "emote_lab/source/hensun_emote_motion_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn("sleep", spec["animations"])
+        self.assertIn('"sleep"', self.source)
+        self.assertIn("sleep_entered", self.source)
+        self.assertIn("kExpectedAnimationCount = 15", self.source)
+
     def test_camera_uses_display_independent_rgb565_preview(self):
         display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")
         camera_source = (ROOT / "main/boards/common/esp32_camera.cc").read_text(
@@ -70,7 +81,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             self.assertIn(phrase, spec)
 
     def test_selfhosted_build_keeps_custom_wake_word_configuration(self):
-        build_script_path = Path.cwd() / "scripts/build_firmware.ps1"
+        build_script_path = ROOT.parents[1] / "scripts/build_firmware.ps1"
         self.assertTrue(build_script_path.is_file(), build_script_path)
         build_script = build_script_path.read_text(encoding="utf-8")
         self.assertIn('if ($Variant -eq "official")', build_script)

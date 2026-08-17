@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "official-portrait": {
+      "selector": "official",
+      "controller": "st7789",
+      "logical_size": {"width": 240, "height": 320},
+      "swap_xy": false,
+      "mirror_x": false,
+      "mirror_y": false,
+      "resource_package": null
+    },
+    "selfhosted-landscape": {
+      "selector": "emote",
+      "controller": "st7789",
+      "logical_size": {"width": 320, "height": 240},
+      "swap_xy": true,
+      "mirror_x": true,
+      "mirror_y": false,
+      "resource_package": "hensun-emote-landscape-v1"
+    }
+  }
+}

@@ -2,21 +2,38 @@
 
 ## 60-scene upgrade design
 
-**Goal:** render the 60 scenes in the HensunAI V1.0 development pack on the
-240x320 ST7789 without storing the 1536x1024 PNG masters in firmware.
+**Goal:** retain the 60 scenes in the HensunAI V1.0 development pack as a
+stable product vocabulary while rendering them through twelve original
+black-and-white runtime states on the 320x240 landscape ST7789. The firmware
+does not store the 1536x1024 PNG masters.
 
 **Inputs:** local device states, XiaoZhi's structured `llm.emotion` /
 `alert.emotion` strings, and the future Hensun cloud's lowercase ASCII scene
 event names. **Output:** a locally rendered LVGL vector face at 20 FPS.
 
-`device/cloud event -> SetEmotion or StateFromDevice -> route table ->
-HensunFaceState -> RenderFace -> LVGL objects -> ST7789`
+`device/cloud event -> DisplayStateController -> 12-state route table ->
+GFX animation player -> ST7789`
 
 The implementation keeps camera preview ownership unchanged, accepts all 21
 XiaoZhi standard emotions, logs and safely falls back on unknown inputs, and
-uses BOOT long-press to demonstrate the 60 product scenes in manifest order.
-The face is assembled from reusable eyes, angled brows, cheeks, a curved/open
-mouth and a small status symbol. The HD PNGs remain design references only.
+uses BOOT long-press to demonstrate the twelve packed runtime states. The
+runtime face uses original eyes, brows, mouth and small status marks. The HD
+PNGs remain design references only.
+
+## Current runtime profile
+
+| Layer | Current self-hosted landscape behavior |
+|---|---|
+| Display | `selfhosted-landscape` profile, ST7789 320x240, black background and soft white face |
+| Runtime states | `sleep`, `wake`, `idle`, `listening`, `thinking`, `speaking`, `happy`, `caring`, `curious`, `surprised`, `confused`, `alert` |
+| Speech | `speaking` starts only with actual PCM output; four mouth variants follow PCM level |
+| Reply finish | `drained` -> 0.8 s neutral/happy/caring settle -> `idle` -> configured idle sleep |
+| Compatibility | the official fallback retains its independent portrait profile and accepts the same upstream XiaoZhi events |
+
+The 60-scene table below remains the product-facing semantic vocabulary. A
+single runtime state can deliberately represent multiple semantically close
+scenes; the renderer must not create extra protocol values just to increase the
+number of animations.
 
 ## Hensun 60-scene canonical inputs
 

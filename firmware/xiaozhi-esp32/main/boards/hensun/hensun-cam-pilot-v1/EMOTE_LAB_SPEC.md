@@ -2,11 +2,11 @@
 
 ## Goal
 
-Replace the engineering-style cyan icon faces with six product-grade black-and-white motion identities before expanding the 60-state semantic catalog.
+Replace the engineering-style cyan icon faces with twelve product-grade black-and-white motion identities. The 60-scene product vocabulary is a semantic layer which maps into these twelve readable runtime states.
 
 ## Visual contract
 
-- Canvas: 240 x 320 portrait at 20 FPS.
+- Canvas: 320 x 240 landscape at 20 FPS.
 - Background: `#000000`; face: `#F7F7F2`; antialiasing grays only.
 - Every clip starts and ends at the same quiet two-pill bridge pose.
 - Every clip has entrance, repeatable loop, and return stages encoded in its filename.
@@ -15,6 +15,6 @@ Replace the engineering-style cyan icon faces with six product-grade black-and-w
 
 ## Runtime contract
 
-The experimental `hensun-cam-emote-lab-v1` build mounts `hensun_emote_lab_v1.bin` from the `emote_gen` partition. Normal transitions drain the active return segment; urgent transitions cut immediately. Camera capture stays compiled, while on-screen camera preview remains disabled in this lab build.
+The experimental `hensun-cam-emote-lab-v1` build mounts `hensun_emote_lab_v1.bin` from the `emote_gen` partition. Normal transitions drain the active return segment; urgent transitions cut immediately. The packed set contains `sleep`, `wake`, `idle`, `listening`, `thinking`, `speaking` plus three PCM-driven speaking variants, `happy`, `caring`, `curious`, `surprised`, `confused`, and `alert`.
 
-The official and self-hosted production builds continue to use `HensunFaceDisplay` until the GFX camera-preview adapter and live PCM mouth overlay are separately accepted.
+The self-hosted landscape build uses the same player with its real PCM mouth overlay. Camera capture stays compiled, while on-screen camera preview remains disabled in the lab build. The official fallback continues to use its independent portrait display profile and does not mount the GFX resource partition.

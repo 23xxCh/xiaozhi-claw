@@ -1,18 +1,26 @@
 {
   "version": 1,
-  "asset_set": "hensun-emote-lab-v1",
+  "asset_set": "hensun-emote-landscape-v1",
   "canvas": {
-    "width": 240,
-    "height": 320,
+    "width": 320,
+    "height": 240,
     "fps": 20
   },
   "palette": {
     "background": "#000000",
     "face": "#F7F7F2"
   },
-  "bridge_pose": "two quiet horizontal eye pills centered at y=151",
+  "bridge_pose": "two quiet horizontal eye pills centered in the 320x240 landscape frame",
   "animation_structure": "entrance-loop-return",
   "animations": {
+    "wake": {
+      "frames": 24,
+      "loop_start_frame": 5,
+      "loop_end_frame": 19,
+      "silhouette": "eyes opening upward with a small single sparkle and a restrained smile",
+      "motion": "quick wake reveal, alert hold, soft return",
+      "export_file": "wake_[0.25s,0.95s].gif"
+    },
     "idle": {
       "frames": 48,
       "loop_start_frame": 6,
@@ -92,6 +100,46 @@
       "silhouette": "soft lowered eyes with protective inward brows and a tiny smile",
       "motion": "slow warm reveal, subtle inward breathing, steady hold, unhurried release",
       "export_file": "caring_[0.45s,1.65s].gif"
+    },
+    "curious": {
+      "frames": 34,
+      "loop_start_frame": 7,
+      "loop_end_frame": 27,
+      "silhouette": "one raised eyebrow, asymmetrical eyes and a small inquisitive mouth",
+      "motion": "gentle side glance, delayed eyebrow lift, quiet return",
+      "export_file": "curious_[0.35s,1.35s].gif"
+    },
+    "surprised": {
+      "frames": 28,
+      "loop_start_frame": 6,
+      "loop_end_frame": 22,
+      "silhouette": "two tall open eyes, raised brows and a small rounded mouth",
+      "motion": "quick open, one soft pulse, composed return",
+      "export_file": "surprised_[0.30s,1.10s].gif"
+    },
+    "confused": {
+      "frames": 36,
+      "loop_start_frame": 7,
+      "loop_end_frame": 29,
+      "silhouette": "uneven brows, opposite eye angles and a tilted mouth",
+      "motion": "asymmetric wobble, brief puzzled hold, calm return",
+      "export_file": "confused_[0.35s,1.45s].gif"
+    },
+    "alert": {
+      "frames": 26,
+      "loop_start_frame": 5,
+      "loop_end_frame": 20,
+      "silhouette": "focused lowered eyes with one compact warning mark",
+      "motion": "fast focus, restrained double pulse, clear return",
+      "export_file": "alert_[0.25s,1.00s].gif"
+    },
+    "sleep": {
+      "frames": 60,
+      "loop_start_frame": 8,
+      "loop_end_frame": 55,
+      "silhouette": "two soft closed eyes, a tiny relaxed smile and two floating geometric Z marks",
+      "motion": "slow breathing, drifting Z marks, quiet hold and soft wake return",
+      "export_file": "sleep_[0.40s,2.75s].gif"
     }
   }
 }

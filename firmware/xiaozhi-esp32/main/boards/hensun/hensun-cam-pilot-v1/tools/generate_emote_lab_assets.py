@@ -21,7 +21,28 @@ MANIFEST = ASSET_ROOT / "manifest.json"
 CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_contact_sheet.png"
 ANIMATED_CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_motion_preview.gif"
 SCALE = 4
-PRIMARY_ANIMATIONS = ("idle", "listening", "thinking", "speaking", "happy", "caring")
+BASE_WIDTH = 240
+BASE_HEIGHT = 320
+CANVAS_WIDTH = 320
+CANVAS_HEIGHT = 240
+X_SCALE = CANVAS_WIDTH / BASE_WIDTH
+Y_SCALE = CANVAS_HEIGHT / BASE_HEIGHT
+STROKE_SCALE = math.sqrt(X_SCALE * Y_SCALE)
+PRIMARY_ANIMATIONS = (
+    "sleep",
+    "wake",
+    "idle",
+    "listening",
+    "thinking",
+    "speaking",
+    "happy",
+    "caring",
+    "curious",
+    "surprised",
+    "confused",
+    "alert",
+)
+CONTACT_COLUMNS = 3
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -60,6 +81,14 @@ def color_with_alpha(rgb: tuple[int, int, int], alpha: float) -> tuple[int, int,
     return (*rgb, int(round(255 * clamp(alpha))))
 
 
+def scale_point(center: tuple[float, float]) -> tuple[float, float]:
+    return center[0] * X_SCALE, center[1] * Y_SCALE
+
+
+def scale_size(size: tuple[float, float]) -> tuple[float, float]:
+    return size[0] * X_SCALE, size[1] * Y_SCALE
+
+
 def pill(
     image: Image.Image,
     center: tuple[float, float],
@@ -68,11 +97,13 @@ def pill(
     color: tuple[int, int, int] = (247, 247, 242),
     alpha: float = 1.0,
 ) -> None:
-    width = max(2, int(round(size[0] * SCALE)))
-    height = max(2, int(round(size[1] * SCALE)))
-    shape = Image.new("RGBA", (width + 12 * SCALE, height + 12 * SCALE), (0, 0, 0, 0))
+    scaled_size = scale_size(size)
+    scaled_center = scale_point(center)
+    width = max(2, int(round(scaled_size[0] * SCALE)))
+    height = max(2, int(round(scaled_size[1] * SCALE)))
+    pad = max(2, int(round(6 * SCALE * STROKE_SCALE)))
+    shape = Image.new("RGBA", (width + 2 * pad, height + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(shape)
-    pad = 6 * SCALE
     draw.rounded_rectangle(
         (pad, pad, pad + width, pad + height),
         radius=min(width, height) // 2,
@@ -80,8 +111,8 @@ def pill(
     )
     if angle:
         shape = shape.rotate(angle, Image.Resampling.BICUBIC, expand=True)
-    x = int(round(center[0] * SCALE - shape.width / 2))
-    y = int(round(center[1] * SCALE - shape.height / 2))
+    x = int(round(scaled_center[0] * SCALE - shape.width / 2))
+    y = int(round(scaled_center[1] * SCALE - shape.height / 2))
     image.alpha_composite(shape, (x, y))
 
 
@@ -93,10 +124,12 @@ def ellipse(
     alpha: float = 1.0,
 ) -> None:
     draw = ImageDraw.Draw(image)
-    half_w = size[0] * SCALE / 2
-    half_h = size[1] * SCALE / 2
-    cx = center[0] * SCALE
-    cy = center[1] * SCALE
+    scaled_size = scale_size(size)
+    scaled_center = scale_point(center)
+    half_w = scaled_size[0] * SCALE / 2
+    half_h = scaled_size[1] * SCALE / 2
+    cx = scaled_center[0] * SCALE
+    cy = scaled_center[1] * SCALE
     draw.ellipse(
         (cx - half_w, cy - half_h, cx + half_w, cy + half_h),
         fill=color_with_alpha(color, alpha),
@@ -113,8 +146,10 @@ def superellipse(
     alpha: float = 1.0,
 ) -> None:
     """Draw a soft, organic eye silhouette instead of a generic oval."""
-    cx, cy = center[0] * SCALE, center[1] * SCALE
-    half_w, half_h = size[0] * SCALE / 2, size[1] * SCALE / 2
+    scaled_center = scale_point(center)
+    scaled_size = scale_size(size)
+    cx, cy = scaled_center[0] * SCALE, scaled_center[1] * SCALE
+    half_w, half_h = scaled_size[0] * SCALE / 2, scaled_size[1] * SCALE / 2
     rotation = math.radians(angle)
     points = []
     for index in range(96):
@@ -142,10 +177,13 @@ def arc_stroke(
     color: tuple[int, int, int] = (247, 247, 242),
     alpha: float = 1.0,
 ) -> None:
-    pad = int((width + 6) * SCALE)
+    scaled_size = scale_size(size)
+    scaled_center = scale_point(center)
+    scaled_width = width * STROKE_SCALE
+    pad = int((scaled_width + 6 * STROKE_SCALE) * SCALE)
     layer_size = (
-        max(8, int(size[0] * SCALE) + pad * 2),
-        max(8, int(size[1] * SCALE) + pad * 2),
+        max(8, int(scaled_size[0] * SCALE) + pad * 2),
+        max(8, int(scaled_size[1] * SCALE) + pad * 2),
     )
     layer = Image.new("RGBA", layer_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
@@ -154,15 +192,15 @@ def arc_stroke(
         start=start,
         end=end,
         fill=color_with_alpha(color, alpha),
-        width=max(2, int(width * SCALE)),
+        width=max(2, int(scaled_width * SCALE)),
     )
     if angle:
         layer = layer.rotate(angle, Image.Resampling.BICUBIC, expand=True)
     image.alpha_composite(
         layer,
         (
-            int(center[0] * SCALE - layer.width / 2),
-            int(center[1] * SCALE - layer.height / 2),
+            int(scaled_center[0] * SCALE - layer.width / 2),
+            int(scaled_center[1] * SCALE - layer.height / 2),
         ),
     )
 
@@ -221,14 +259,16 @@ def crescent(
 def smile_arc(image: Image.Image, center: tuple[float, float], size: tuple[float, float], alpha: float) -> None:
     outer = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(outer)
-    cx, cy = center[0] * SCALE, center[1] * SCALE
-    hw, hh = size[0] * SCALE / 2, size[1] * SCALE / 2
+    scaled_center = scale_point(center)
+    scaled_size = scale_size(size)
+    cx, cy = scaled_center[0] * SCALE, scaled_center[1] * SCALE
+    hw, hh = scaled_size[0] * SCALE / 2, scaled_size[1] * SCALE / 2
     draw.arc(
         (cx - hw, cy - hh, cx + hw, cy + hh),
         start=18,
         end=162,
         fill=color_with_alpha((247, 247, 242), alpha),
-        width=max(2, int(7 * SCALE)),
+        width=max(2, int(7 * STROKE_SCALE * SCALE)),
     )
     image.alpha_composite(outer)
 
@@ -364,6 +404,138 @@ def draw_caring(image: Image.Image, active: float, phase: float) -> None:
     arc_stroke(image, (120, 201 + breathe), (38, 19), 18, 162, 5, alpha=active * 0.92)
 
 
+def draw_wake(image: Image.Image, active: float, phase: float) -> None:
+    opening = ease_out_back(clamp(phase * 1.75 + 0.16))
+    sparkle = 0.5 - 0.5 * math.cos(phase * math.tau)
+    for side, x in ((-1, 76), (1, 164)):
+        eye_blob(
+            image,
+            (x, 147 - opening * 4),
+            (lerp(50, 70, active), lerp(10, 94, active) * opening),
+            (-side * 4, 4),
+            (18, max(8, 30 * opening)),
+            angle=side * 1.5,
+            lid=0.04,
+            alpha=min(1.0, active + 0.18),
+        )
+        arc_stroke(image, (x, 94 - opening * 4), (43, 20), 205, 335, 6, alpha=active)
+    smile_arc(image, (120, 195), (42, 22), active * 0.85)
+    ellipse(image, (198, 100 - sparkle * 5), (5 + sparkle * 2, 5 + sparkle * 2), alpha=active)
+
+
+def draw_curious(image: Image.Image, active: float, phase: float) -> None:
+    glance = math.sin(phase * math.tau) * 6
+    eye_blob(
+        image,
+        (75, 147),
+        (68, lerp(10, 88, active)),
+        (10 + glance, -9),
+        (19, 29),
+        angle=-5,
+        lid=0.11,
+        alpha=min(1.0, active + 0.18),
+    )
+    eye_blob(
+        image,
+        (165, 151),
+        (66, lerp(10, 76, active)),
+        (7 + glance * 0.45, 7),
+        (18, 25),
+        angle=4,
+        lid=0.18,
+        alpha=min(1.0, active + 0.18),
+    )
+    arc_stroke(image, (72, 92), (49, 23), 205, 335, 7, angle=10, alpha=active)
+    pill(image, (120, 200), (13, 10), alpha=active * 0.9)
+    ellipse(image, (120, 200), (6, 5), color=(0, 0, 0))
+
+
+def draw_surprised(image: Image.Image, active: float, phase: float) -> None:
+    pulse = 0.5 - 0.5 * math.cos(phase * math.tau)
+    for side, x in ((-1, 75), (1, 165)):
+        eye_blob(
+            image,
+            (x, 146 - pulse * 2),
+            (70 + pulse * 2, lerp(10, 100 + pulse * 4, active)),
+            (-side * 1, 4),
+            (18, 34),
+            angle=side * 1.0,
+            lid=0.0,
+            alpha=min(1.0, active + 0.18),
+        )
+        arc_stroke(image, (x, 88 - pulse * 2), (50, 23), 205, 335, 7, angle=side * 5, alpha=active)
+    ellipse(image, (120, 202), (23 + pulse * 2, 31 + pulse * 3), alpha=active)
+    ellipse(image, (120, 202), (12 + pulse, 18 + pulse), color=(0, 0, 0))
+
+
+def draw_confused(image: Image.Image, active: float, phase: float) -> None:
+    wobble = math.sin(phase * math.tau) * 4
+    eye_blob(
+        image,
+        (76, 148 + wobble * 0.35),
+        (69, lerp(10, 83, active)),
+        (7, 7),
+        (19, 27),
+        angle=-7,
+        lid=0.25,
+        alpha=min(1.0, active + 0.16),
+    )
+    eye_blob(
+        image,
+        (165, 147 - wobble * 0.35),
+        (68, lerp(10, 80, active)),
+        (-9, -4),
+        (18, 26),
+        angle=7,
+        lid=0.08,
+        alpha=min(1.0, active + 0.16),
+    )
+    arc_stroke(image, (73, 92), (48, 22), 205, 335, 7, angle=13, alpha=active)
+    arc_stroke(image, (168, 99), (42, 19), 205, 335, 6, angle=-14, alpha=active)
+    pill(image, (120, 200), (23, 7), -9 + wobble * 0.3, alpha=active * 0.9)
+
+
+def draw_alert(image: Image.Image, active: float, phase: float) -> None:
+    beat = 0.5 - 0.5 * math.cos(phase * math.tau * 2)
+    for side, x in ((-1, 76), (1, 164)):
+        eye_blob(
+            image,
+            (x, 151),
+            (70, lerp(9, 60 - beat * 6, active)),
+            (-side * 7, 2),
+            (18, 21),
+            angle=side * 5,
+            lid=0.4,
+            alpha=min(1.0, active + 0.17),
+        )
+    pill(image, (120, 201), (31, 7), 0, alpha=active)
+    pill(image, (204, 104 - beat * 3), (7, 27), 0, alpha=active)
+    ellipse(image, (204, 126 - beat * 3), (8, 8), alpha=active)
+
+
+def draw_sleep(image: Image.Image, active: float, phase: float) -> None:
+    breathe = math.sin(phase * math.tau) * 1.5
+    drift = (phase - 0.5) * 8
+    for side, x in ((-1, 76), (1, 164)):
+        arc_stroke(
+            image,
+            (x, 151 + breathe),
+            (68, 30),
+            198,
+            342,
+            8,
+            angle=side * 1.5,
+            alpha=active,
+        )
+    arc_stroke(image, (120, 196 + breathe), (34, 16), 18, 162, 5, alpha=active * 0.82)
+    z_alpha = active * (0.35 + 0.55 * (0.5 - 0.5 * math.cos(phase * math.tau)))
+    for index, (x, y, size) in enumerate(((204, 95, 1.0), (220, 76, 0.72))):
+        offset = drift * (index + 1) * 0.35
+        pill(image, (x + offset, y), (18 * size, 4 * size), alpha=z_alpha)
+        pill(image, (x + offset, y + 11 * size), (18 * size, 4 * size), alpha=z_alpha)
+        pill(image, (x + offset, y + 5.5 * size), (4 * size, 13 * size), 38, alpha=z_alpha)
+
+
 DRAWERS: dict[str, Callable[[Image.Image, float, float], None]] = {
     "idle": draw_idle,
     "listening": draw_listening,
@@ -371,6 +543,12 @@ DRAWERS: dict[str, Callable[[Image.Image, float, float], None]] = {
     "speaking": draw_speaking,
     "happy": draw_happy,
     "caring": draw_caring,
+    "wake": draw_wake,
+    "curious": draw_curious,
+    "surprised": draw_surprised,
+    "confused": draw_confused,
+    "alert": draw_alert,
+    "sleep": draw_sleep,
 }
 
 
@@ -379,18 +557,18 @@ def render_frame(name: str, frame: int, animation: dict) -> Image.Image:
     loop_start = animation["loop_start_frame"]
     loop_end = animation["loop_end_frame"]
     active, phase = stage(frame, total, loop_start, loop_end)
-    canvas = Image.new("RGBA", (240 * SCALE, 320 * SCALE), (0, 0, 0, 255))
+    canvas = Image.new("RGBA", (CANVAS_WIDTH * SCALE, CANVAS_HEIGHT * SCALE), (0, 0, 0, 255))
     draw_bridge(canvas, clamp(1.0 - active))
     renderer = animation.get("renderer", name)
     if renderer == "speaking":
         draw_speaking(canvas, active, phase, int(animation.get("speech_level", 2)))
     else:
         DRAWERS[renderer](canvas, active, phase)
-    output = canvas.convert("RGB").resize((240, 320), Image.Resampling.LANCZOS)
+    output = canvas.convert("RGB").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     # GIF writers are allowed to merge identical consecutive frames. The packer
     # derives segment timing from a constant-rate frame stream, so preserve each
     # 50 ms tick with one imperceptible grayscale timing pixel under the bezel.
-    output.putpixel((208 + frame % 31, 319), (247, 247, 242))
+    output.putpixel((CANVAS_WIDTH - 32 + frame % 31, CANVAS_HEIGHT - 1), (247, 247, 242))
     return output
 
 
@@ -413,6 +591,8 @@ def sha256(path: Path) -> str:
 
 def build_assets(check: bool) -> int:
     spec = json.loads(SOURCE_SPEC.read_text(encoding="utf-8"))
+    if spec["canvas"] != {"width": CANVAS_WIDTH, "height": CANVAS_HEIGHT, "fps": 20}:
+        raise SystemExit("source spec canvas must match the Hensun landscape panel")
     GIF_ROOT.mkdir(parents=True, exist_ok=True)
     manifest_animations = {}
     contact_frames = []
@@ -445,20 +625,33 @@ def build_assets(check: bool) -> int:
         }
 
     if not check:
-        sheet = Image.new("RGB", (240 * 3, 320 * 2), (0, 0, 0))
+        contact_rows = math.ceil(len(contact_frames) / CONTACT_COLUMNS)
+        sheet = Image.new(
+            "RGB", (CANVAS_WIDTH * CONTACT_COLUMNS, CANVAS_HEIGHT * contact_rows), (0, 0, 0)
+        )
         for index, frame in enumerate(contact_frames):
-            sheet.paste(frame, ((index % 3) * 240, (index // 3) * 320))
+            sheet.paste(
+                frame,
+                ((index % CONTACT_COLUMNS) * CANVAS_WIDTH, (index // CONTACT_COLUMNS) * CANVAS_HEIGHT),
+            )
         sheet.save(CONTACT_SHEET, optimize=True)
 
         preview_frames = []
         animation_names = list(PRIMARY_ANIMATIONS)
         for frame_index in range(48):
-            preview = Image.new("RGB", (240 * 3, 320 * 2), (0, 0, 0))
+            preview = Image.new(
+                "RGB",
+                (CANVAS_WIDTH * CONTACT_COLUMNS, CANVAS_HEIGHT * contact_rows),
+                (0, 0, 0),
+            )
             for index, name in enumerate(animation_names):
                 frames = animation_frames[name]
                 preview.paste(
                     frames[frame_index % len(frames)],
-                    ((index % 3) * 240, (index // 3) * 320),
+                    (
+                        (index % CONTACT_COLUMNS) * CANVAS_WIDTH,
+                        (index // CONTACT_COLUMNS) * CANVAS_HEIGHT,
+                    ),
                 )
             preview_frames.append(preview)
         save_gif(ANIMATED_CONTACT_SHEET, preview_frames)

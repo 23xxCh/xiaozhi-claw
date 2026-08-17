@@ -149,6 +149,7 @@ private:
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     bool post_playback_guard_active_ = false;  // Keep the microphone closed while speaker tail decays
+    std::string active_turn_id_;
     std::string active_tts_reply_id_;
     std::string pending_tts_stop_reply_id_;
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started

@@ -16,12 +16,18 @@ GIF_ROOT = ASSET_ROOT / "gifs"
 PARTITION = ROOT / "partitions/v2/16m_hensun_emote_lab.csv"
 
 EXPECTED = {
+    "wake": (24, 5, 19),
     "idle": (48, 6, 42),
     "listening": (28, 5, 23),
     "thinking": (36, 6, 30),
     "speaking": (20, 4, 16),
     "happy": (25, 8, 20),
     "caring": (40, 9, 33),
+    "curious": (34, 7, 27),
+    "surprised": (28, 6, 22),
+    "confused": (36, 7, 29),
+    "alert": (26, 5, 20),
+    "sleep": (60, 8, 55),
 }
 SPEAKING_VARIANTS = {
     "speaking_0": (20, 4, 16),
@@ -32,11 +38,12 @@ ALL_EXPECTED = EXPECTED | SPEAKING_VARIANTS
 
 
 class HensunEmoteLabTests(unittest.TestCase):
-    def test_source_spec_defines_six_distinct_three_stage_animations(self):
+    def test_source_spec_defines_landscape_three_stage_animations(self):
         spec = json.loads(
             (SOURCE_ROOT / "hensun_emote_motion_spec.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(spec["canvas"], {"width": 240, "height": 320, "fps": 20})
+        self.assertEqual(spec["asset_set"], "hensun-emote-landscape-v1")
+        self.assertEqual(spec["canvas"], {"width": 320, "height": 240, "fps": 20})
         self.assertEqual(spec["palette"]["background"], "#000000")
         self.assertEqual(spec["palette"]["face"], "#F7F7F2")
         self.assertEqual(set(spec["animations"]), set(ALL_EXPECTED))
@@ -59,8 +66,8 @@ class HensunEmoteLabTests(unittest.TestCase):
 
     def test_generated_gifs_match_screen_fps_duration_and_palette(self):
         manifest = json.loads((ASSET_ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["asset_set"], "hensun-emote-lab-v1")
-        self.assertEqual(manifest["canvas"], {"width": 240, "height": 320, "fps": 20})
+        self.assertEqual(manifest["asset_set"], "hensun-emote-landscape-v1")
+        self.assertEqual(manifest["canvas"], {"width": 320, "height": 240, "fps": 20})
         self.assertEqual(len(manifest["animations"]), len(ALL_EXPECTED))
 
         for name, (frames, loop_start, loop_end) in ALL_EXPECTED.items():
@@ -76,7 +83,7 @@ class HensunEmoteLabTests(unittest.TestCase):
             self.assertEqual(item["sha256"], hashlib.sha256(gif_path.read_bytes()).hexdigest())
 
             with Image.open(gif_path) as image:
-                self.assertEqual(image.size, (240, 320))
+                self.assertEqual(image.size, (320, 240))
                 self.assertEqual(image.n_frames, frames)
                 durations = []
                 for frame_index in range(image.n_frames):
@@ -94,8 +101,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertTrue(pack.is_file(), pack)
         self.assertLess(pack.stat().st_size, 5 * 1024 * 1024)
         self.assertEqual(manifest["pack"]["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
-        self.assertEqual(manifest["pack"]["animation_count"], 9)
-        self.assertEqual(manifest["pack"]["asset_count"], 10)
+        self.assertEqual(manifest["pack"]["animation_count"], 15)
+        self.assertEqual(manifest["pack"]["asset_count"], 16)
 
         pack_data = pack.read_bytes()
         asset_count, stored_checksum, payload_length = struct.unpack_from("<III", pack_data)
@@ -127,7 +134,7 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertIn("https://github.com/espressif2022/esp_emote_gen_player.git", component_manifest)
         self.assertIn("7139b46c6616d466ff153cb9d2ddf63661434f22", component_manifest)
 
-    def test_display_routes_six_states_through_a_worker_queue(self):
+    def test_display_routes_landscape_states_through_a_worker_queue(self):
         header = (BOARD / "hensun_emote_lab_display.h").read_text(encoding="utf-8")
         source = (BOARD / "hensun_emote_lab_display.cc").read_text(encoding="utf-8")
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(encoding="utf-8")

@@ -39,6 +39,10 @@ public:
     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
     virtual void SetEmotion(const char* emotion);
+    // Called only after a reply's final audio frame has actually left the
+    // playback queue. Displays that do not provide a reply animation can keep
+    // the existing idle transition by ignoring this optional lifecycle hook.
+    virtual void BeginReplySettle() {}
     virtual void SetChatMessage(const char* role, const char* content);
     virtual bool SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
                                  int width, int height, int stride_bytes);

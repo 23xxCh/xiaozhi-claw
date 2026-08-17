@@ -76,6 +76,33 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("ota_ = std::make_unique<Ota>()", body)
         self.assertLess(body.index("ota_->CheckVersion()"), body.index("OpenAudioChannel()"))
 
+    def test_first_utterance_is_buffered_while_the_audio_channel_connects(self):
+        for method_name, signature in (
+            ("manual", r"void Application::ContinueOpenAudioChannel\(ListeningMode mode\) \{(.*?)\n\}"),
+            ("wake", r"void Application::ContinueWakeWordInvoke\(const std::string& wake_word\) \{(.*?)\n\}"),
+        ):
+            method = re.search(signature, self.application_source, re.DOTALL)
+            self.assertIsNotNone(method, method_name)
+            body = method.group(1)
+            self.assertIn("audio_service_.EnableVoiceProcessing(true)", body)
+            self.assertLess(
+                body.index("audio_service_.EnableVoiceProcessing(true)"),
+                body.index("OpenAudioChannelWithConfigRefresh()"),
+            )
+
+        listening = re.search(
+            r"void Application::StartListeningAudio\(\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(listening)
+        body = listening.group(1)
+        self.assertIn("if (!audio_service_.IsAudioProcessorRunning())", body)
+        self.assertLess(
+            body.index("protocol_->SendStartListening(listening_mode_);"),
+            body.index("xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);"),
+        )
+
     def test_selfhosted_tts_uses_ready_drained_handshake_and_queue_backpressure(self):
         protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")
         protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(encoding="utf-8")
@@ -88,6 +115,57 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("PushPacketToDecodeQueue(std::move(packet), true)", self.application_source)
         self.assertIn("GetDecodeDropCount", self.application_source)
         self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
+
+    def test_hensun_speaking_face_waits_for_real_pcm_and_settles_after_drain(self):
+        display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(
+            encoding="utf-8"
+        )
+        display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")
+
+        self.assertIn("virtual void BeginReplySettle() {}", display_header)
+        self.assertIn("kAwaitingAudio", display_source)
+        self.assertIn('QueueAnimation("thinking", false, true);', display_source)
+        self.assertIn("if (awaiting_audio_.exchange(false))", display_source)
+        self.assertIn('QueueAnimation("speaking", false, true);', display_source)
+        self.assertIn("BeginReplySettle", self.application_source)
+
+        finish = re.search(
+            r"void Application::FinishTtsPlayback\(std::string reply_id\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(finish)
+        self.assertLess(
+            finish.group(1).index("BeginReplySettle()"),
+            finish.group(1).index("SetDeviceState(kDeviceStateIdle)"),
+        )
+        self.assertIn("kReplySettleDurationUs = 800 * 1000", display_source)
+        self.assertIn("kIdleSleepDurationUs = 3 * 1000 * 1000", display_source)
+        self.assertIn("reply_settle_pending_.load()", display_source)
+
+    def test_selfhosted_emote_profile_uses_a_matching_landscape_canvas(self):
+        config = (BOARD / "config.h").read_text(encoding="utf-8")
+        profile = json.loads((BOARD / "display_profiles.json").read_text(encoding="utf-8"))
+        generated = (BOARD / "display_profile_generated.h").read_text(encoding="utf-8")
+        spec = json.loads(
+            (BOARD / "emote_lab/source/hensun_emote_motion_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        packer = (BOARD / "tools/pack_emote_lab_assets.mjs").read_text(encoding="utf-8")
+
+        self.assertIn('#include "display_profile_generated.h"', config)
+        self.assertEqual(profile["schema_version"], 1)
+        self.assertEqual(
+            profile["profiles"]["selfhosted-landscape"]["logical_size"],
+            {"width": 320, "height": 240},
+        )
+        self.assertIn("#if CONFIG_USE_EMOTE_MESSAGE_STYLE", generated)
+        self.assertIn("#define DISPLAY_WIDTH 320", generated)
+        self.assertIn("#define DISPLAY_HEIGHT 240", generated)
+        self.assertIn("#define DISPLAY_SWAP_XY true", generated)
+        self.assertEqual(spec["canvas"], {"width": 320, "height": 240, "fps": 20})
+        self.assertIn("wasm.wasmconvertoptions_set_resize(options, 320, 240)", packer)
 
     def test_auto_listening_waits_for_post_playback_echo_guard(self):
         self.assertRegex(
@@ -133,10 +211,21 @@ class HensunCamPilotBoardTests(unittest.TestCase):
     def test_auto_listening_has_a_bounded_safety_timeout(self):
         self.assertRegex(
             self.application_source,
-            r"kAutoStopListeningTimeoutTicks\s*=\s*15",
+            r"kAutoStopListeningTimeoutTicks\s*=\s*6",
         )
         self.assertIn(
             "clock_ticks_ >= kAutoStopListeningTimeoutTicks",
+            self.application_source,
+        )
+
+    def test_selfhosted_emote_state_is_not_overwritten_by_neutral(self):
+        display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('QueueAnimation("sleep")', display_source)
+        self.assertIn('QueueAnimation("thinking", false, true)', display_source)
+        self.assertNotIn(
+            'display->SetStatus(Lang::Strings::LISTENING);\n            display->SetEmotion("neutral");',
             self.application_source,
         )
 

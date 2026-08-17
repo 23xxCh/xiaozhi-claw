@@ -1,10 +1,10 @@
 {
-  "asset_set": "hensun-emote-lab-v1",
+  "asset_set": "hensun-emote-landscape-v1",
   "source_spec": "source/hensun_emote_motion_spec.json",
-  "source_spec_sha256": "a3fe23956ed93337afe95693cae09ca7ef54af4c270f68d7db2bcf1032a09ed9",
+  "source_spec_sha256": "dbc1039ecc9b48567f8a05d3de4a391527676ae41e6fb301e62ba9ef89c13523",
   "canvas": {
-    "width": 240,
-    "height": 320,
+    "width": 320,
+    "height": 240,
     "fps": 20
   },
   "palette": {
@@ -12,68 +12,110 @@
     "face": "#F7F7F2"
   },
   "animations": {
+    "wake": {
+      "file": "wake_[0.25s,0.95s].gif",
+      "frames": 24,
+      "loop_start_frame": 5,
+      "loop_end_frame": 19,
+      "sha256": "8b7da2aea29d40b17547c14fe0ac15e8fa6099b138b7227b09d17029a2e28612"
+    },
     "idle": {
       "file": "idle_[0.30s,2.10s].gif",
       "frames": 48,
       "loop_start_frame": 6,
       "loop_end_frame": 42,
-      "sha256": "1989ebd37141f01d89b8ee146ac38abeeb393cd14f4efe39a636cd376a8f2cfc"
+      "sha256": "dc5012b69f6d19f382152be58f882254339af2561db90697924bfa2a740662d9"
     },
     "listening": {
       "file": "listening_[0.25s,1.15s].gif",
       "frames": 28,
       "loop_start_frame": 5,
       "loop_end_frame": 23,
-      "sha256": "50860fbb9060a520a47997d93d27f0bae2192da1eeb2201f650a46b77e9e735f"
+      "sha256": "f4eab674234024d4630fed3806d847067cb535f16c042cb7d146c4cb9311b0db"
     },
     "thinking": {
       "file": "thinking_[0.30s,1.50s].gif",
       "frames": 36,
       "loop_start_frame": 6,
       "loop_end_frame": 30,
-      "sha256": "e13f519fbbd22bd940776b3c699ee6cddbba5fde7568fd5e25bc544bcf169d98"
+      "sha256": "be348afa2ebd728ce5d989d66e250189e0d23f5ba41fadb34d1094d1f0ecb44f"
     },
     "speaking": {
       "file": "speaking_[0.20s,0.80s].gif",
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
-      "sha256": "4395107929c1a3f0b46697aa4bce49908b160541c29a2c3596fa4b84cf1a9892"
+      "sha256": "f275098dd71e4e8a43dca146c6677fce6574ad42591e4a8ca2dd2dcea9c78ae8"
     },
     "speaking_0": {
       "file": "speaking_0_[0.20s,0.80s].gif",
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
-      "sha256": "de66054b0d6ce2b211c6f77acc87dd484093d1e28849772e4c89875bbdb6c7b6"
+      "sha256": "badbd698c57a5cfcf51063a5da80f974b12d0724010e2c7bab4b83fe0eee8f9e"
     },
     "speaking_1": {
       "file": "speaking_1_[0.20s,0.80s].gif",
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
-      "sha256": "12d909654ab5c92ed6026f287e3d73d0a63abd5ecc838e4c099e21bc59676f6a"
+      "sha256": "183cdc2be095a44a02e2fb97e87668f8f58e886dfa145ea246ebd7d6b29baf26"
     },
     "speaking_3": {
       "file": "speaking_3_[0.20s,0.80s].gif",
       "frames": 20,
       "loop_start_frame": 4,
       "loop_end_frame": 16,
-      "sha256": "f6cb272e381627d3e4dbb885e62dd6bf75c9679c2bf4d7c2a7c22e2361044805"
+      "sha256": "7e38910364f20a523dad2ce7c51cb06e461f1e7c5fec900e6f43b50530788d54"
     },
     "happy": {
       "file": "happy_[0.40s,1.00s].gif",
       "frames": 25,
       "loop_start_frame": 8,
       "loop_end_frame": 20,
-      "sha256": "c569f7b51cf257657c07dc61a2579e8bf876679c2917f7f3a3ea562c6a7fe71a"
+      "sha256": "95acdfe573029241e285d9d71857666049ae6536d1f6fe64e785605703634e07"
     },
     "caring": {
       "file": "caring_[0.45s,1.65s].gif",
       "frames": 40,
       "loop_start_frame": 9,
       "loop_end_frame": 33,
-      "sha256": "c2ba4aff5b4202c9aa3ee832a8d6b7813cb6e1131a8ccf799e7efcc615875c01"
+      "sha256": "f2229c278478a1f824d48e74b6e1a499ef5d942415e3ab1a0404d0cad900b990"
+    },
+    "curious": {
+      "file": "curious_[0.35s,1.35s].gif",
+      "frames": 34,
+      "loop_start_frame": 7,
+      "loop_end_frame": 27,
+      "sha256": "85513e0003101a061aa6de58cb9111c8dd7a4cfecbc8aa4e72f7c6f95c4fa471"
+    },
+    "surprised": {
+      "file": "surprised_[0.30s,1.10s].gif",
+      "frames": 28,
+      "loop_start_frame": 6,
+      "loop_end_frame": 22,
+      "sha256": "17a0277cce8c9c439b5e65c9120f31268015315aa2a66f0b165dfc82f32fd49d"
+    },
+    "confused": {
+      "file": "confused_[0.35s,1.45s].gif",
+      "frames": 36,
+      "loop_start_frame": 7,
+      "loop_end_frame": 29,
+      "sha256": "5ecf17b4853299ab9e00cebeff45dbaa89734da4f7ac691a63a7f102b82fdb48"
+    },
+    "alert": {
+      "file": "alert_[0.25s,1.00s].gif",
+      "frames": 26,
+      "loop_start_frame": 5,
+      "loop_end_frame": 20,
+      "sha256": "0b058b6205a0a135fe10fb93be6c83339d51eb12da56cf7fddffd3378547a093"
+    },
+    "sleep": {
+      "file": "sleep_[0.40s,2.75s].gif",
+      "frames": 60,
+      "loop_start_frame": 8,
+      "loop_end_frame": 55,
+      "sha256": "276a502b228564b943a1e40adb16beafcb9fe27e86462f2ab0b850627d40c9f0"
     }
   },
   "packer": {
@@ -83,8 +125,8 @@
   },
   "pack": {
     "file": "hensun_emote_lab_v1.bin",
-    "animation_count": 9,
-    "asset_count": 10,
-    "sha256": "0065157584d9144139b082a690354f45d9f3e148b6933636c2edae5a0f79a281"
+    "animation_count": 15,
+    "asset_count": 16,
+    "sha256": "1d477da570f99c2a9137a46c7bdda9da193ea97eb6db89cf156c76b4bd6c4784"
   }
 }

@@ -20,7 +20,9 @@
 #define TAG "Application"
 
 namespace {
-constexpr int kAutoStopListeningTimeoutTicks = 15;
+// The Hensun CAM is simplex. When room noise prevents a VAD silence event,
+// finish the utterance promptly instead of appearing to listen forever.
+constexpr int kAutoStopListeningTimeoutTicks = 6;
 constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
 }
 
@@ -612,9 +614,21 @@ void Application::InitializeProtocol() {
             }
             if (strcmp(state->valuestring, "start") == 0) {
                 auto reply_id = cJSON_GetObjectItem(root, "reply_id");
+                auto turn_id = cJSON_GetObjectItem(root, "turn_id");
                 std::string playback_reply_id =
                     cJSON_IsString(reply_id) ? reply_id->valuestring : "";
-                Schedule([this, playback_reply_id]() {
+                std::string playback_turn_id =
+                    cJSON_IsString(turn_id) ? turn_id->valuestring : "";
+                Schedule([this, playback_reply_id, playback_turn_id]() {
+                    if (!playback_turn_id.empty() && !active_turn_id_.empty() &&
+                        playback_turn_id != active_turn_id_ &&
+                        GetDeviceState() == kDeviceStateSpeaking) {
+                        ESP_LOGW(TAG, "Ignoring stale TTS start for completed turn");
+                        return;
+                    }
+                    if (!playback_turn_id.empty()) {
+                        active_turn_id_ = playback_turn_id;
+                    }
                     post_playback_guard_active_ = false;
                     pending_listening_start_ = false;
                     if (post_playback_listen_timer_handle_ != nullptr) {
@@ -634,9 +648,17 @@ void Application::InitializeProtocol() {
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 auto reply_id = cJSON_GetObjectItem(root, "reply_id");
+                auto turn_id = cJSON_GetObjectItem(root, "turn_id");
                 if (cJSON_IsString(reply_id)) {
                     std::string playback_reply_id = reply_id->valuestring;
-                    Schedule([this, playback_reply_id]() {
+                    std::string playback_turn_id =
+                        cJSON_IsString(turn_id) ? turn_id->valuestring : "";
+                    Schedule([this, playback_reply_id, playback_turn_id]() {
+                        if (!playback_turn_id.empty() && !active_turn_id_.empty() &&
+                            playback_turn_id != active_turn_id_) {
+                            ESP_LOGW(TAG, "Ignoring stale TTS stop for completed turn");
+                            return;
+                        }
                         if (playback_reply_id != active_tts_reply_id_) {
                             ESP_LOGW(TAG, "Ignoring stale TTS stop acknowledgement request");
                             return;
@@ -677,6 +699,7 @@ void Application::InitializeProtocol() {
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
+            auto turn_id = cJSON_GetObjectItem(root, "turn_id");
             if (cJSON_IsString(text)) {
                 std::vector<TextGlyph> glyphs;
                 uint8_t bpp = 0;
@@ -684,16 +707,27 @@ void Application::InitializeProtocol() {
                     glyphs.clear();
                 }
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring),
+                Schedule([this, display, message = std::string(text->valuestring),
+                          turn_id = cJSON_IsString(turn_id) ? std::string(turn_id->valuestring) : "",
                           glyphs = std::move(glyphs), bpp]() {
+                    if (!turn_id.empty()) {
+                        active_turn_id_ = turn_id;
+                    }
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
+            auto turn_id = cJSON_GetObjectItem(root, "turn_id");
             if (cJSON_IsString(emotion)) {
-                Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
+                Schedule([this, display, emotion_str = std::string(emotion->valuestring),
+                          turn_id = cJSON_IsString(turn_id) ? std::string(turn_id->valuestring) : ""]() {
+                    if (!turn_id.empty() && !active_turn_id_.empty() &&
+                        turn_id != active_turn_id_) {
+                        ESP_LOGW(TAG, "Ignoring stale LLM emotion for completed turn");
+                        return;
+                    }
                     display->SetEmotion(emotion_str.c_str());
                 });
             }
@@ -865,7 +899,9 @@ void Application::DismissAlert() {
     if (GetDeviceState() == kDeviceStateIdle) {
         auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
+#if !CONFIG_USE_EMOTE_MESSAGE_STYLE
         display->SetEmotion("neutral");
+#endif
         display->SetChatMessage("system", "");
     }
 }
@@ -925,6 +961,11 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
 
     bool opened_channel = false;
     if (!protocol_->IsAudioChannelOpened()) {
+        // Public/self-hosted bootstrap and the WSS handshake can take a few
+        // seconds. Start the local encoder first so a user who speaks right
+        // after pressing BOOT is buffered instead of losing the first phrase.
+        // Packets are sent only after SetListeningMode() emits listen.start.
+        audio_service_.EnableVoiceProcessing(true);
         if (!OpenAudioChannelWithConfigRefresh()) {
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error)
@@ -1057,6 +1098,10 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     if (!protocol_->IsAudioChannelOpened()) {
+        // Capture while the short-lived bootstrap token and WSS connection are
+        // being refreshed. The main loop is blocked during the handshake, so
+        // packets stay queued until the listening state is entered below.
+        audio_service_.EnableVoiceProcessing(true);
         if (!OpenAudioChannelWithConfigRefresh()) {
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error), and
@@ -1100,18 +1145,24 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
+#if !CONFIG_USE_EMOTE_MESSAGE_STYLE
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
+#endif
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
+#if !CONFIG_USE_EMOTE_MESSAGE_STYLE
             display->SetEmotion("neutral");
+#endif
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
+#if !CONFIG_USE_EMOTE_MESSAGE_STYLE
             display->SetEmotion("neutral");
+#endif
 
             if (post_playback_guard_active_) {
                 // This simplex board has no playback reference for AEC. Keep
@@ -1168,9 +1219,14 @@ void Application::StartListeningAudio() {
         return;
     }
 
-    // Send the start listening command
+    // Register the new turn before releasing the pre-connect audio buffer.
     protocol_->SendStartListening(listening_mode_);
-    audio_service_.EnableVoiceProcessing(true);
+    if (!audio_service_.IsAudioProcessorRunning()) {
+        audio_service_.EnableVoiceProcessing(true);
+    }
+    // A first utterance may already be queued while Bootstrap/WSS connected.
+    // Re-arm the main loop so those packets are drained after listen.start.
+    xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
 
     ConfigureWakeWordForListening();
 
@@ -1203,6 +1259,11 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     ESP_LOGI(TAG, "TTS playback drained (decode drops=%lu)",
              (unsigned long)audio_service_.GetDecodeDropCount());
     if (GetDeviceState() == kDeviceStateSpeaking) {
+        // The device has proved that all queued audio reached the speaker. Let
+        // Hensun's display run its bounded reply settle before the generic
+        // state machine returns the board to idle/standby.
+        Board::GetInstance().GetDisplay()->BeginReplySettle();
+        active_turn_id_.clear();
 #if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
         SetDeviceState(kDeviceStateIdle);
 #else
