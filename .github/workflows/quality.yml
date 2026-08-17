@@ -116,8 +116,7 @@ jobs:
       - name: Install Hensun test dependencies
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends python3-pip
-          python -m pip install --no-cache-dir Pillow pytest
+          apt-get install --yes --no-install-recommends python3-pil python3-pytest
       - name: Verify generated artifacts and resource profile
         run: |
           python scripts/generate_device_contracts.py --check
