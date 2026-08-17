@@ -11,14 +11,22 @@ data_root=/data/hensun-desk
 runtime_env="$data_root/runtime/server.env"
 candidate="$release_root/$release_id"
 lock_file="$data_root/runtime/staging-release.lock"
+staging_vhost_source="$candidate/deploy/openresty/staging.hensun-desk.top.conf"
+staging_vhost_target=/data/1panel/www/conf.d/hensun-desk-staging.conf
+openresty_backup=""
+openresty_container=""
 
 [[ "$release_id" =~ ^[A-Za-z0-9._-]{7,96}$ ]] || {
   echo "invalid release id" >&2
   exit 2
 }
 [[ -f "$candidate/deploy/docker-compose.server.yml" ]] || {
-  echo "candidate release is incomplete: $candidate" >&2
-  exit 2
+    echo "candidate release is incomplete: $candidate" >&2
+    exit 2
+}
+[[ -f "$staging_vhost_source" ]] || {
+    echo "candidate staging OpenResty vhost is missing" >&2
+    exit 2
 }
 [[ -f "$runtime_env" ]] || {
   echo "missing server-only runtime environment: $runtime_env" >&2
@@ -70,6 +78,11 @@ compose=(docker compose --project-name hensun-desk --env-file "$runtime_env" -f 
 rollback() {
   local status=$?
   echo "staging release failed; restoring prior application target" >&2
+  if [[ -n "$openresty_backup" && -f "$openresty_backup" && -n "$openresty_container" ]]; then
+    cp -p "$openresty_backup" "$staging_vhost_target" || true
+    docker exec "$openresty_container" openresty -t >/dev/null 2>&1 && \
+      docker exec "$openresty_container" openresty -s reload >/dev/null 2>&1 || true
+  fi
   if [[ -n "$previous" && -f "$previous/deploy/docker-compose.server.yml" ]]; then
     local previous_id
     previous_id="$(basename "$previous")"
@@ -90,6 +103,18 @@ HENSUN_RELEASE_ID="$release_id" "${compose[@]}" config -q
 HENSUN_RELEASE_ID="$release_id" "${compose[@]}" build
 HENSUN_RELEASE_ID="$release_id" "${compose[@]}" run --rm migrate
 HENSUN_RELEASE_ID="$release_id" "${compose[@]}" up -d --no-build --remove-orphans
+
+openresty_container="$(docker ps --format '{{.Names}}' | awk '/^1Panel-openresty-/ {print; exit}')"
+[[ -n "$openresty_container" ]] || {
+  echo "existing OpenResty container was not found" >&2
+  exit 1
+}
+openresty_backup="$data_root/backups/openresty/staging-before-${release_id}-$(date -u +%Y%m%dT%H%M%SZ).conf"
+mkdir -p "$(dirname "$openresty_backup")"
+cp -p "$staging_vhost_target" "$openresty_backup"
+install -m 0644 "$staging_vhost_source" "$staging_vhost_target"
+docker exec "$openresty_container" openresty -t
+docker exec "$openresty_container" openresty -s reload
 
 for endpoint in \
   http://127.0.0.1:13000/ \
