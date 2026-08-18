@@ -104,6 +104,15 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             r'--language zh-CN\s+`\s+--wake-word nihaoxiaozhi',
         )
 
+    def test_build_script_keeps_generated_config_out_of_board_scans(self):
+        build_script = (ROOT.parents[1] / "scripts/build_firmware.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('$temporaryConfigName = "hensun-build-$PID.json"', build_script)
+        self.assertNotIn("config.hensun-build-", build_script)
+        self.assertIn('Name = "application"', build_script)
+        self.assertIn("0x3F0000", build_script)
+
     def test_device_secret_uses_dedicated_nvs_partition(self):
         ota = (ROOT / "main/ota.cc").read_text(encoding="utf-8")
         self.assertIn('nvs_flash_init_partition("hensun_keys")', ota)

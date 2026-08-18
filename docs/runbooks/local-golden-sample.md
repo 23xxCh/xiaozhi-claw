@@ -86,7 +86,7 @@ Set-Location 'E:\HENSUN_STABILITY_WT'
 - 应用放得进最小 OTA 分区。
 - `srmodels.bin` 不超过语音模型分区。
 - `emote_gen.bin` 不超过 5MB。
-- 临时 `config.hensun-build-*.json` 在结束后被删除。
+- 临时 `hensun-build-*.json` 写在板目录内，名称不会被 `config*.json` 扫描命中，并在结束后删除。
 - 输出 ZIP 位于 `firmware/xiaozhi-esp32/releases/`，但构建产物和 ZIP 不应提交。
 
 构建后先记录哈希：

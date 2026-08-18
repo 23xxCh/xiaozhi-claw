@@ -18,6 +18,18 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(build)
 
 
+def _is_generated_board_config(path: Path) -> bool:
+    return "hensun-build-" in path.name
+
+
+def _iter_board_config_paths(boards_dir: Path | None = None):
+    root = Path(boards_dir) if boards_dir is not None else (ROOT / "main/boards")
+    for path in sorted(root.rglob("config*.json")):
+        if _is_generated_board_config(path):
+            continue
+        yield path
+
+
 class VersionTests(unittest.TestCase):
     def test_parse_and_match(self):
         self.assertEqual(build._parse_version("ESP-IDF v6.0.1"), (6, 0, 1))
@@ -131,14 +143,22 @@ class VersionTests(unittest.TestCase):
             self.assertIn("manufacturer", source, source_name)
             self.assertIn("BOARD_MANUFACTURER", source, source_name)
 
+    def test_generated_hensun_build_configs_are_ignored(self):
+        with tempfile.TemporaryDirectory() as raw_dir:
+            boards_dir = Path(raw_dir)
+            official = boards_dir / "hensun" / "hensun-cam-pilot-v1" / "config.json"
+            leftover = official.with_name("config.hensun-build-123.json")
+            official.parent.mkdir(parents=True)
+            official.write_text("{\"type\": \"hensun-cam-pilot-v1\"}", encoding="utf-8")
+            leftover.write_text("{\"type\": \"hensun-cam-pilot-v1\"}", encoding="utf-8")
+            self.assertEqual(list(_iter_board_config_paths(boards_dir)), [official])
+
     def test_reported_types_and_names_are_valid_and_unique(self):
         type_owners = {}
         name_owners = {}
         pair_owners = {}
 
-        for config_path in sorted(
-            (ROOT / "main/boards").rglob("config*.json")
-        ):
+        for config_path in _iter_board_config_paths():
             config = json.loads(config_path.read_text(encoding="utf-8"))
             board = config_path.parent.relative_to(
                 ROOT / "main/boards"
@@ -171,9 +191,7 @@ class VersionTests(unittest.TestCase):
                 pair_owners[pair] = config_path
 
     def test_language_and_wake_word_are_not_board_config_options(self):
-        for config_path in sorted(
-            (ROOT / "main/boards").rglob("config*.json")
-        ):
+        for config_path in _iter_board_config_paths():
             config = json.loads(config_path.read_text(encoding="utf-8"))
             for build_config in config.get("builds", []):
                 for option in build_config.get("sdkconfig_append", []):
@@ -196,9 +214,7 @@ class VersionTests(unittest.TestCase):
             return values
 
         base_defaults = read_defaults(ROOT / "sdkconfig.defaults")
-        for config_path in sorted(
-            (ROOT / "main/boards").rglob("config*.json")
-        ):
+        for config_path in _iter_board_config_paths():
             config = json.loads(config_path.read_text(encoding="utf-8"))
             defaults = dict(base_defaults)
             defaults.update(

@@ -13,7 +13,7 @@ $firmwareRoot = Join-Path $projectRoot "firmware\xiaozhi-esp32"
 $boardRelativePath = "main\boards\hensun\hensun-cam-pilot-v1"
 $boardRoot = Join-Path $firmwareRoot $boardRelativePath
 $baseConfigPath = Join-Path $boardRoot "config.json"
-$temporaryConfigName = "config.hensun-build-$PID.json"
+$temporaryConfigName = "hensun-build-$PID.json"
 $temporaryConfigPath = Join-Path $boardRoot $temporaryConfigName
 
 if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
@@ -89,21 +89,23 @@ try {
         throw "Firmware build failed for $Variant."
     }
 
+    $appPath = Join-Path $firmwareRoot "build\xiaozhi.bin"
+    $resourceLimits = @(
+        @{ Name = "application"; Path = $appPath; Limit = 0x3F0000 }
+    )
     if ($usesCustomBootstrap) {
-        $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
-        $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"
-        $resourceLimits = @(
-            @{ Name = "speech model assets"; Path = $modelAssetsPath; Limit = 0x2FC000 },
-            @{ Name = "emote assets"; Path = $emoteAssetsPath; Limit = 5MB }
+        $resourceLimits += @(
+            @{ Name = "speech model assets"; Path = (Join-Path $firmwareRoot "build\srmodels\srmodels.bin"); Limit = 0x2FC000 },
+            @{ Name = "emote assets"; Path = (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"); Limit = 5MB }
         )
-        foreach ($resource in $resourceLimits) {
-            if (-not (Test-Path -LiteralPath $resource.Path)) {
-                throw "Missing $($resource.Name): $($resource.Path)"
-            }
-            $resourceSize = (Get-Item -LiteralPath $resource.Path).Length
-            if ($resourceSize -gt $resource.Limit) {
-                throw "$($resource.Name) exceeds its partition: $resourceSize > $($resource.Limit) bytes"
-            }
+    }
+    foreach ($resource in $resourceLimits) {
+        if (-not (Test-Path -LiteralPath $resource.Path)) {
+            throw "Missing $($resource.Name): $($resource.Path)"
+        }
+        $resourceSize = (Get-Item -LiteralPath $resource.Path).Length
+        if ($resourceSize -gt $resource.Limit) {
+            throw "$($resource.Name) exceeds its partition: $resourceSize > $($resource.Limit) bytes"
         }
     }
 }
@@ -125,6 +127,7 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
+    AppBytes = (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\xiaozhi.bin")).Length
     ModelAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
     EmoteAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
 }
