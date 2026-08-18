@@ -49,6 +49,11 @@ def test_high_risk_categories_use_fixed_responses(text: str, category: str) -> N
     assert decision.fixed_response
 
 
+def test_default_device_ws_url_points_at_gateway() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.device_ws_url == "ws://127.0.0.1:8001/v1/device/ws"
+
+
 @pytest.mark.parametrize("app_env", ["staging", "production"])
 def test_deployed_environment_rejects_development_secrets(app_env: str) -> None:
     with pytest.raises(ValueError, match="Unsafe production secrets"):

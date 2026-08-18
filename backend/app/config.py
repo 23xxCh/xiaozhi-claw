@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     ota_signing_public_key: str = ""
     ota_base_url: str = "https://api.hensun.invalid/v1/ota/"
-    device_ws_url: str = "ws://127.0.0.1:8000/v1/device/ws"
+    device_ws_url: str = "ws://127.0.0.1:8001/v1/device/ws"
     claim_ttl_seconds: int = 600
     trial_days: int = 30
     trial_monthly_turns: int = 600
