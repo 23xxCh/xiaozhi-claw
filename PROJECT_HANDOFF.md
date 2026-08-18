@@ -149,6 +149,10 @@ ESP32-S3 CAM 设备
   4. `ff36dcd build(firmware): harden local landscape build and safe flashing`
   5. `ca69cc3 ci: cover local golden sample`
 - 本交接文档及相关金样机入口文档是第六个独立提交。
+- 评审债收口后又补了本地提交：
+  1. `959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby`
+  2. `99522cd fix(config): point default device WS to gateway 8001`
+  3. 本文档刷新提交（以 `git log -1 --oneline` 为准）
 - `migrations/versions/20260815_06_device_config_contract.py` 与 `design/` 明确排除，仍不得混入、删除或擅自提交。
 - 禁止 reset、checkout 覆盖、清理未跟踪目录或整批 `git add -A`。
 
@@ -232,12 +236,17 @@ ESP32-S3 CAM 设备
 
 ### 必须完成后才能标记本地金样机稳定
 
-- 五个实现提交和交接文档提交已经完成；剩余未跟踪内容仅限明确排除的 `design/` 与设备配置迁移。
-- 尚未在当前最终代码上运行完整后端测试；现有 34 项只是本轮相关测试证据。
+- 五个实现提交、交接文档和评审债收口已经完成。剩余未跟踪内容仅限明确排除的 `design/` 与设备配置迁移。
+- 后端测试当前为 106 项，约 105 过、1 skip（`test_qwen_realtime_integration.py` 实网集成）。
+- 用户已确认当前金样机可以对话；说「小灿闭嘴」或「闭嘴」会进入软待机。
+- 默认 `DEVICE_WS_URL` 已改为 `ws://127.0.0.1:8001/v1/device/ws`。不要读取或改写本机 `.env`。金样机只用 `scripts/start_local_pilot.ps1`，不要用只起控制面的 `scripts/start_lan_backend.ps1`。
+- 产品决定：退出词保持现状，含单独「闭嘴」「退出」的子串匹配。已知可能误伤普通句子，暂不收紧。
+- 实时 ASR 仍可能失败并走同一轮内存音频的 batch fallback；这次未查、未修。
 - 尚未完成 30 轮固定真机回归。
 - 尚未完成 2 小时连续对话运行。
 - 尚未完成 8 小时待机与 TFT 冻结检查。
 - 尚未形成最终验收报告，包括唤醒、STT、首段音频、drained、丢包、重连、内存和看门狗证据。
+- 真机仍运行 10:56 金样机应用，不是当前本地构建。
 - 本地 GitHub Actions 已覆盖 landscape 金样机变体和 `test_hensun_dialogue_faces.py`；远端 CI 要等用户明确要求推送后才会运行。
 
 ### 已规划但当前不要做
@@ -254,9 +263,11 @@ ESP32-S3 CAM 设备
 
 ## 7. 下一步最应该做什么
 
-### 第一优先级：刷入当前代码固件并做真机验收
+未得到用户明确口头授权前：不要刷 Flash、不要开始 30 轮口测、不要恢复 Staging 或正式域。下面只是授权后的清单，不是现在就要做。
 
-自动门禁和当前工作树的本地固件构建已经完成。不要自动刷机。刷机前重新确认 COM 口，只写应用 `0x20000` 和表情 `0xB00000`。
+### 授权后第一件事：刷入当前代码固件并做真机验收
+
+当前工作树已有本地固件构建，但仍不要自动刷机。授权后先重新确认 COM 口，只写应用 `0x20000` 和表情 `0xB00000`。
 
 当前未刷入构建：
 
@@ -265,7 +276,7 @@ ESP32-S3 CAM 设备
 - `emote_gen.bin` 仍为金样机哈希 `4A0E2C6B1A42B620BF615FD99ED2F86EB6C0BB3146482E07C4844126A7D5AF85`，2837200 / 5242880 字节
 - 真机仍运行 10:56 金样机 `45A4F6FFB20BCE4304E547D280D3B92C7CEF4A94E33713D48DCCE75A73FC6192`
 
-### 第二优先级：完成真机验收
+### 授权后第二件事：完成真机验收
 
 按固定矩阵完成：
 
@@ -336,6 +347,8 @@ Set-Location 'E:\HENSUN_STABILITY_WT'
 ```powershell
 .\scripts\start_local_pilot.ps1 -NoBrowser
 ```
+
+金样机只用上面的三进程启动脚本，不要用 `scripts/start_lan_backend.ps1`。后者只起控制面，设备 WS 地址也不对。
 
 健康检查：
 

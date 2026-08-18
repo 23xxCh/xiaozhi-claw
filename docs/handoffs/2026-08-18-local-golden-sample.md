@@ -10,7 +10,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 一句话状态
 
-当前 ESP32-S3 CAM 已恢复本地多轮语音，横屏说话脸和细线嘴型得到用户确认；自动测试和完整构建通过，但工作树仍包含多组未提交改动，30 轮真机回归和长稳验收尚未完成。
+当前 ESP32-S3 CAM 已恢复本地多轮语音；横屏说话脸、细线嘴型和「小灿闭嘴 / 闭嘴」软待机已得到用户确认。评审债已收口：默认设备 WS 指向网关 8001，后端测试 106 项约 105 过 1 skip。工作树只剩明确排除的 `design/` 与设备配置迁移。30 轮真机回归、2 小时连续对话和 8 小时待机尚未做；未授权前不要刷机。
 
 ## 接手前必读
 
@@ -41,6 +41,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 - 当前公开边界是 18+ 成人桌面 AI 助理与轻陪伴。
 - 家庭模式、支付、微信小程序、声纹和云端视觉不进入当前本地稳定主线。
 - 摄像头代码与远程拍照保留，不为简化语音而删除。
+- 退出词保持现状，含单独「闭嘴」「退出」的子串匹配。已知可能误伤普通句子，暂不收紧。
 
 ### 开发环境
 
@@ -52,6 +53,8 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 ### 运行架构
 
 - 前端 `3000`、控制面 `8000`、实时网关 `8001`，保持三个进程。
+- 默认 `DEVICE_WS_URL` 是 `ws://127.0.0.1:8001/v1/device/ws`。不要读取或改写本机 `.env`。
+- 金样机只用 `scripts/start_local_pilot.ps1`，不要用只起控制面的 `scripts/start_lan_backend.ps1`。
 - 本地数据库是根目录 `hensun-lan.db`；脚本启动前会备份并迁移。
 - 当前模型链路保持 Qwen 实时 ASR → DeepSeek 流式 LLM → Qwen 实时 TTS。
 - 实时 ASR 失败时才使用同一轮内存音频执行批量 Qwen ASR 降级。
@@ -92,45 +95,21 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 当前 Git 状态
 
-当前 HEAD：
+当前 HEAD 以 `git log -1 --oneline` 为准。评审债收口后的相关提交：
 
 ```text
-41439ee fix(gateway): shorten missing playback acknowledgement grace
+959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby
+99522cd fix(config): point default device WS to gateway 8001
 ```
 
-分支没有已记录的 upstream。工作树故意保持未提交状态，改动大致分为：
+以及随后的文档刷新提交。分支没有已记录的 upstream，不要推送。
 
-1. **实时语音与播放握手**
-   - `backend/app/config.py`
-   - `backend/realtime/providers.py`
-   - `backend/realtime/session.py`
-   - 相应 gateway/playback/provider 测试
-   - 固件 `application.*`、`audio_service.*`、`protocol.*`
+工作树现在只应剩下明确排除、不得混入的内容：
 
-2. **对话表情控制**
-   - 新增 `backend/realtime/face_control.py`
-   - 新增 `backend/tests/test_face_control.py`
-   - LLM 流式 `[[face:...]]` 解析和事件下发
+- `migrations/versions/20260815_06_device_config_contract.py`
+- `design/`
 
-3. **横屏表情与 PCM 口型**
-   - `hensun_emote_lab_display.*`
-   - 新增 `hensun_speech_mouth_renderer.*`
-   - 表情源规格、运行时 GIF、预览、打包器和测试
-   - `hensun_emote_lab_v1.bin` 与 manifest
-
-4. **板级交互和本地构建**
-   - `hensun_cam_pilot_v1_board.cc`
-   - `custom_wake_word.cc`
-   - `config.json`
-   - `scripts/build_firmware.ps1`
-   - `scripts/flash_firmware.ps1`
-   - `scripts/release_gate.py`
-
-5. **不要误混入当前稳定提交的独立内容**
-   - `migrations/versions/20260815_06_device_config_contract.py`
-   - `design/`
-
-提交前逐文件审查。禁止 `git add -A`，禁止 reset 或删除未跟踪目录。
+禁止 `git add -A`，禁止 reset 或删除未跟踪目录。
 
 ## 本轮刚完成的修复
 
@@ -144,7 +123,8 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 验证证据
 
-- 后端相关测试：34 项通过。
+- 后端测试：106 项，约 105 过、1 skip（`test_qwen_realtime_integration.py` 实网集成）。
+- 用户已确认当前金样机可以对话；「小灿闭嘴」和「闭嘴」可进软待机。
 - 全部 Hensun 固件主机测试：47 项通过。
 - `scripts/release_gate.py`：PASS（仅源码/配置门禁）。
 - ESP-IDF 6.0.2 完整构建通过；应用仍有约 35% OTA 分区空间。
@@ -172,12 +152,14 @@ E:\HENSUN_STABILITY_WT\run\backups\golden-local-face-20260818
 
 ## 下一步，按优先级
 
-1. 五个实现提交已经完成：`cc317bf`、`3cd38b8`、`4f86228`、`ff36dcd`、`ca69cc3`。交接文档单独提交，不要把 `design/` 和 `20260815_06_device_config_contract.py` 混入。
-2. **运行完整自动门禁**：完整后端测试、Ruff、契约、前端、47 项固件主机测试、发布门禁和 ESP-IDF 三版本完整构建。测试结果必须对应当前最终工作树。
-3. **30 轮真机固定矩阵**：唤醒、停顿后提问、连续对话、中性/开心/关怀、长句、数字、英文、时间、天气、BOOT 打断、“小灿闭嘴”、自动睡眠。
-4. **2 小时连续运行与 8 小时待机**：记录 TFT、队列、内存、重连、播放丢包和看门狗。
-5. 通过后标记本地金样机版本，再把其余七类对话情绪逐步制作成独立真机资产。
-6. 本地门槛通过前，不恢复 Staging 部署、搜索、声纹、支付、小程序或新硬件主线。
+评审债已经收口。未得到用户明确口头授权前：不要刷 Flash、不要开始 30 轮口测、不要恢复 Staging 或正式域。
+
+1. 不要把 `design/` 和 `20260815_06_device_config_contract.py` 混入任何提交。
+2. 实时 ASR 仍可能 batch fallback，这是下一轮功能债，不是这次范围。
+3. 用户明确授权后，才确认 COM 口并只刷应用 `0x20000` 和表情 `0xB00000`。
+4. 授权后的真机矩阵：唤醒、停顿后提问、连续对话、中性/开心/关怀、长句、数字、英文、时间、天气、BOOT 打断、“小灿闭嘴”、自动睡眠；累计 30 轮。
+5. 授权后再做 2 小时连续运行与 8 小时待机，记录 TFT、队列、内存、重连、播放丢包和看门狗。
+6. 通过后才允许标记本地金样机版本、推送远端 CI、恢复 Staging，或扩展其余对话表情。
 
 ## 不要重复尝试的错误路线
 
