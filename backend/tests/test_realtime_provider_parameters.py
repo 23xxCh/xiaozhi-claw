@@ -14,7 +14,7 @@ from backend.realtime.providers import (
     QwenRealtimeTtsSession,
     RealtimeProviderError,
 )
-from backend.realtime.session import SentenceBuffer
+from backend.realtime.session import SentenceBuffer, sanitize_spoken_text
 
 
 @pytest.mark.asyncio
@@ -162,8 +162,8 @@ def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> Non
 def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sentence() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 9) == []
-    assert buffer.feed("句") == ["短" * 9 + "句"]
+    assert buffer.feed("短" * 15) == []
+    assert buffer.feed("句") == ["短" * 15 + "句"]
     assert buffer.feed("后续内容") == []
     assert buffer.flush() == "后续内容"
 
@@ -171,8 +171,17 @@ def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sent
 def test_sentence_buffer_keeps_hard_limit_after_first_chunk() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 10) == ["短" * 10]
-    assert buffer.feed("句" * 48) == ["句" * 48]
+    assert buffer.feed("短" * 16) == ["短" * 16]
+    assert buffer.feed("句" * 32) == ["句" * 32]
+
+
+def test_sanitize_spoken_text_removes_non_speech_markup() -> None:
+    assert (
+        sanitize_spoken_text(
+            "[[face:happy]]**好的**，[mood:happy]（轻轻点头）请看 https://example.com/path"
+        )
+        == "好的，请看"
+    )
 
 
 @pytest.mark.asyncio

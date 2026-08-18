@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ from backend.app.security import (
 )
 
 from .emotion import EmotionRouter
+from .face_control import SUPPORTED_FACE_EMOTIONS, FaceControlEvent, FaceControlParser
 from .mcp import DeviceMcpClient, DeviceMcpError
 from .media import OpusPacketPacer, StreamingPcmToOpus
 from .providers import (
@@ -57,6 +59,29 @@ from .tools import ToolRegistry, create_search_provider
 
 logger = logging.getLogger(__name__)
 MAX_UTTERANCE_BYTES = 1024 * 1024
+MAX_SPOKEN_SEGMENTS = 2
+MAX_SPOKEN_CHARS = 60
+
+
+_SPOKEN_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_SPOKEN_INTERNAL_TAG_RE = re.compile(
+    r"\[(?:mood|emotion|state|tool|system)\s*:[^\]]*\]", re.IGNORECASE
+)
+_SPOKEN_FACE_CONTROL_RE = re.compile(r"\[\[face:[^\]\r\n]*(?:\]\]|\])?", re.IGNORECASE)
+_SPOKEN_STAGE_DIRECTION_RE = re.compile(
+    r"[（(][^）)]{0,24}(?:点头|微笑|叹气|沉默|转身|看着|轻轻|笑)[^）)]{0,24}[）)]"
+)
+
+
+def sanitize_spoken_text(text: str) -> str:
+    """Return text suitable for TTS without leaking visual or internal markup."""
+    text = _SPOKEN_URL_RE.sub("", text)
+    text = _SPOKEN_FACE_CONTROL_RE.sub("", text)
+    text = _SPOKEN_INTERNAL_TAG_RE.sub("", text)
+    text = _SPOKEN_STAGE_DIRECTION_RE.sub("", text)
+    text = re.sub(r"[*_#>`~]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text.strip(" ，,：:")
 
 
 @dataclass(frozen=True)
@@ -87,9 +112,9 @@ class AgentSnapshot:
 class SentenceBuffer:
     def __init__(
         self,
-        max_chars: int = 48,
-        min_clause_chars: int = 12,
-        first_chunk_chars: int = 10,
+        max_chars: int = 32,
+        min_clause_chars: int = 16,
+        first_chunk_chars: int = 16,
     ) -> None:
         self._text = ""
         self._max_chars = max_chars
@@ -543,6 +568,7 @@ async def _process_turn(
         if mcp_client is not None and mcp_client.can_call(name):
             return await mcp_client.call(name, arguments)
         return await tool_registry.execute(name, arguments)
+
     tts: RealtimeTtsSession | None = None
     encoder: StreamingPcmToOpus | None = None
     packet_task: asyncio.Task[None] | None = None
@@ -634,30 +660,52 @@ async def _process_turn(
         )
 
         sentence_buffer = SentenceBuffer()
+        face_parser = FaceControlParser()
         reply_parts: list[str] = []
         spoken_parts: list[str] = []
+        spoken_chars = 0
+        spoken_segments = 0
         llm_started = time.perf_counter()
         first_sentence_at: float | None = None
         tts_started_at: float | None = None
+        pending_reply_emotion = emotion.reply_emotion
+        sent_reply_emotion: str | None = None
+
+        def apply_face_event(event: FaceControlEvent) -> None:
+            nonlocal pending_reply_emotion
+            if event.kind == "emotion" and event.value in SUPPORTED_FACE_EMOTIONS:
+                pending_reply_emotion = event.value
 
         async def speak(sentence: str) -> None:
             nonlocal encoder, first_sentence_at, packet_task, tts, tts_started
             nonlocal batch_tts, first_audio_latency_ms, tts_started_at, reply_id
+            nonlocal spoken_chars, spoken_segments
+            nonlocal sent_reply_emotion
+            sentence = sanitize_spoken_text(sentence)
+            if not sentence or spoken_segments >= MAX_SPOKEN_SEGMENTS:
+                return
+            sentence = sentence[: MAX_SPOKEN_CHARS - spoken_chars].strip()
+            if not sentence:
+                return
+            if pending_reply_emotion != sent_reply_emotion:
+                await websocket.app.state.device_connections.send_json(
+                    serial,
+                    {
+                        "type": "llm",
+                        "emotion": pending_reply_emotion,
+                        "turn_id": turn_id,
+                    },
+                )
+                sent_reply_emotion = pending_reply_emotion
             if tts is None and not batch_tts:
                 try:
-                    tts = await providers.open_tts(
-                        snapshot.voice, snapshot.tts_speech_rate
-                    )
+                    tts = await providers.open_tts(snapshot.voice, snapshot.tts_speech_rate)
                 except Exception:
                     if fallback is None:
                         raise
                     logger.warning("realtime TTS failed for %s; using batch fallback", serial)
                     fallback_operations.add("tts")
                     batch_tts = True
-                await websocket.app.state.device_connections.send_json(
-                    serial,
-                    {"type": "llm", "emotion": emotion.reply_emotion, "turn_id": turn_id},
-                )
                 reply_id = await _start_playback(websocket, serial, playback, turn_id)
                 if tts is not None and not providers.mock:
                     encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
@@ -668,6 +716,8 @@ async def _process_turn(
             if first_sentence_at is None:
                 first_sentence_at = time.perf_counter()
             spoken_parts.append(sentence)
+            spoken_chars += len(sentence)
+            spoken_segments += 1
             if batch_tts:
                 assert fallback is not None
                 await websocket.app.state.device_connections.send_json(
@@ -700,13 +750,38 @@ async def _process_turn(
                     transcript,
                     history,
                     snapshot.memories,
-                    system_prompt=snapshot.system_prompt,
+                    system_prompt=(
+                        snapshot.system_prompt.rstrip()
+                        + "\n\n语音回复要求：使用自然口语，只回答一到两句，总长度不超过60个汉字；"
+                        "不要输出 Markdown、网址或舞台动作。回复正文前必须先输出且只输出一个"
+                        "表情控制标记，格式为 [[face:emotion]]，emotion 只能是 "
+                        + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))
+                        + "。如果第二句情绪明显变化，可以在第一句完整结束后再输出一个标记；"
+                        "整次回复最多两个标记，标记之外不要输出其他内部标签。"
+                    ),
                     model=snapshot.llm_model,
                     temperature=snapshot.llm_temperature,
                     **llm_kwargs,
                 ):
-                    reply_parts.append(token)
-                    for sentence in sentence_buffer.feed(token):
+                    for face_event in face_parser.feed(token):
+                        apply_face_event(face_event)
+                        if face_event.kind != "text":
+                            continue
+                        reply_parts.append(face_event.value)
+                        for sentence in sentence_buffer.feed(face_event.value):
+                            output_safety = evaluate_text(sentence)
+                            if (
+                                output_safety.fixed_response
+                                and output_safety.category != "user-exit"
+                            ):
+                                sentence = output_safety.fixed_response
+                            await speak(sentence)
+                for face_event in face_parser.flush():
+                    apply_face_event(face_event)
+                    if face_event.kind != "text":
+                        continue
+                    reply_parts.append(face_event.value)
+                    for sentence in sentence_buffer.feed(face_event.value):
                         output_safety = evaluate_text(sentence)
                         if output_safety.fixed_response and output_safety.category != "user-exit":
                             sentence = output_safety.fixed_response
@@ -1107,9 +1182,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     },
                 )
                 if not websocket.app.state.realtime_providers.mock:
-                    mcp_client = DeviceMcpClient(
-                        serial, websocket.app.state.device_connections
-                    )
+                    mcp_client = DeviceMcpClient(serial, websocket.app.state.device_connections)
                     mcp_initialize_task = asyncio.create_task(mcp_client.initialize())
                 continue
             if message_type == "abort":
