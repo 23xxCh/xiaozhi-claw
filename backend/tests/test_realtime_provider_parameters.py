@@ -185,14 +185,12 @@ def test_sanitize_spoken_text_removes_non_speech_markup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
+async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_manual_turn_detection(
     monkeypatch,
 ) -> None:
     socket = _FakeRealtimeSocket(
         [
             {"type": "session.updated"},
-            {"type": "input_audio_buffer.speech_started"},
-            {"type": "input_audio_buffer.speech_stopped"},
             {
                 "type": "conversation.item.input_audio_transcription.completed",
                 "transcript": "你好，小智",
@@ -211,31 +209,24 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
         provider_mode="custom",
         qwen_realtime_asr_url="wss://asr.example/realtime",
         qwen_realtime_asr_model="qwen3-asr-flash-realtime",
-        qwen_realtime_vad_silence_ms=700,
         asr_api_key="secret",
     )
 
     session = await QwenRealtimeAsrSession.open(settings)
     await session.send_audio(b"raw-opus-one")
     await session.send_audio(b"raw-opus-two")
-    for _ in range(10):
-        if session.endpoint_detected():
-            break
-        await asyncio.sleep(0)
     result = await session.finish()
 
     messages = [json.loads(payload) for payload in socket.sent]
-    assert messages[0]["session"]["turn_detection"] == {
-        "type": "server_vad",
-        "threshold": 0.5,
-        "silence_duration_ms": 700,
-    }
+    assert messages[0]["session"]["turn_detection"] is None
     append_messages = [item for item in messages if item["type"] == "input_audio_buffer.append"]
     wrapped = b"".join(base64.b64decode(item["audio"]) for item in append_messages)
     assert ogg_opus_packets(wrapped) == [b"raw-opus-one", b"raw-opus-two"]
-    assert session.endpoint_detected() is True
-    assert messages[-1]["type"] == "session.finish"
-    assert not any(item["type"] == "input_audio_buffer.commit" for item in messages)
+    assert session.endpoint_detected() is False
+    assert [item["type"] for item in messages[-2:]] == [
+        "input_audio_buffer.commit",
+        "session.finish",
+    ]
     assert result.text == "你好，小智"
     assert result.emotion == "happy"
 
@@ -271,7 +262,7 @@ async def test_qwen_realtime_error_uses_stable_code_without_transcript(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_qwen_local_stop_commits_before_finishing_server_vad() -> None:
+async def test_qwen_local_stop_commits_before_finishing_manual_session() -> None:
     socket = _FakeRealtimeSocket(
         [
             {

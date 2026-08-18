@@ -157,11 +157,7 @@ class QwenRealtimeAsrSession:
                         "input_audio_format": "opus",
                         "sample_rate": 16000,
                         "input_audio_transcription": {"language": "zh"},
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "silence_duration_ms": settings.qwen_realtime_vad_silence_ms,
-                        },
+                        "turn_detection": None,
                     },
                 }
             )
@@ -211,10 +207,9 @@ class QwenRealtimeAsrSession:
 
     async def finish(self) -> TranscriptionResult:
         if not self._endpoint.is_set():
-            # A healthy device may report local silence before Qwen's server-VAD
-            # server-VAD tail. Explicit commit closes that same server-VAD
-            # utterance immediately; stuck local VAD is handled by the endpoint
-            # event and never reaches this path.
+            # Manual mode requires an explicit commit. The device local VAD
+            # usually sends listen.stop first; commit then session.finish is
+            # the official non-VAD close sequence.
             await self.websocket.send(
                 json.dumps(
                     {
