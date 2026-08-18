@@ -48,6 +48,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             {
                 "hensun-cam-official-v1",
                 "hensun-cam-selfhosted-v1",
+                "hensun-cam-selfhosted-landscape-local-v1",
                 "hensun-cam-emote-lab-v1",
             },
         )
@@ -307,6 +308,22 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         body = finish.group(1)
         self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION", body)
         self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
+
+    def test_local_landscape_variant_keeps_a_ten_second_followup_window(self):
+        local = "\n".join(
+            self.builds["hensun-cam-selfhosted-landscape-local-v1"]["sdkconfig_append"]
+        )
+        self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=n", local)
+        self.assertIn("CONFIG_USE_EMOTE_MESSAGE_STYLE=y", local)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"', local)
+        self.assertRegex(
+            self.application_source,
+            r"kWaitForSpeechTimeoutTicks\s*=\s*10",
+        )
+        self.assertRegex(
+            self.application_source,
+            r"kMaximumSpeechDurationTicks\s*=\s*20",
+        )
 
     def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
         self.assertIn(

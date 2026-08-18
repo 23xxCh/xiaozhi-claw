@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("official", "selfhosted")]
+    [ValidateSet("official", "selfhosted", "local")]
     [string]$Variant,
 
     [string]$BootstrapUrl = ""
@@ -34,15 +34,15 @@ if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
     . (Join-Path $idfRoot "export.ps1")
 }
 
-$buildName = if ($Variant -eq "official") {
-    "hensun-cam-official-v1"
+$buildName = switch ($Variant) {
+    "official" { "hensun-cam-official-v1" }
+    "selfhosted" { "hensun-cam-selfhosted-v1" }
+    "local" { "hensun-cam-selfhosted-landscape-local-v1" }
 }
-else {
-    "hensun-cam-selfhosted-v1"
-}
+$usesCustomBootstrap = $Variant -ne "official"
 
 $configName = "config.json"
-if ($Variant -eq "selfhosted") {
+if ($usesCustomBootstrap) {
     $parsedUrl = $null
     if (
         -not [Uri]::TryCreate($BootstrapUrl, [UriKind]::Absolute, [ref]$parsedUrl) -or
@@ -89,7 +89,7 @@ try {
         throw "Firmware build failed for $Variant."
     }
 
-    if ($Variant -eq "selfhosted") {
+    if ($usesCustomBootstrap) {
         $modelAssetsPath = Join-Path $firmwareRoot "build\srmodels\srmodels.bin"
         $emoteAssetsPath = Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"
         $resourceLimits = @(
@@ -125,6 +125,6 @@ if (-not (Test-Path -LiteralPath $artifact)) {
     Variant = $Variant
     FirmwareName = $buildName
     Artifact = $artifact
-    ModelAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
-    EmoteAssetsBytes = if ($Variant -eq "selfhosted") { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
+    ModelAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
+    EmoteAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
 }
