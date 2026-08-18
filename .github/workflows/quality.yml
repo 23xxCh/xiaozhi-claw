@@ -27,6 +27,8 @@ jobs:
         run: python scripts/generate_device_contracts.py --check
       - name: Run backend tests
         run: python -m pytest backend/tests
+      - name: Run repository tooling safety tests
+        run: python -m pytest scripts/tests
 
   web:
     name: Web lint, types, and production build
@@ -123,10 +125,11 @@ jobs:
         run: |
           python scripts/generate_device_contracts.py --check
           python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_display_profile.py --check
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_dialogue_face_previews.py --check
           python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_emote_lab_assets.py --check
       - name: Run Hensun firmware checks
         working-directory: firmware/xiaozhi-esp32
         run: |
-          python -m pytest scripts/tests/test_hensun_cam_pilot.py scripts/tests/test_hensun_emote_formal.py scripts/tests/test_hensun_emote_lab.py scripts/tests/test_build.py
+          python -m pytest scripts/tests/test_hensun_cam_pilot.py scripts/tests/test_hensun_dialogue_faces.py scripts/tests/test_hensun_emote_formal.py scripts/tests/test_hensun_emote_lab.py scripts/tests/test_build.py
       - name: Run release configuration gate
         run: python scripts/release_gate.py

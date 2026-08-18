@@ -24,6 +24,7 @@ jobs:
       matrix:
         variant:
           - hensun-cam-selfhosted-v1
+          - hensun-cam-selfhosted-landscape-local-v1
           - hensun-cam-official-v1
           - hensun-cam-emote-lab-v1
     steps:
@@ -33,7 +34,13 @@ jobs:
       - name: Check generated Hensun resources
         run: |
           python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_display_profile.py --check
+          python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_dialogue_face_previews.py --check
           python firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/tools/generate_emote_lab_assets.py --check
+      - name: Verify local build uses a non-routable CI endpoint
+        if: matrix.variant == 'hensun-cam-selfhosted-landscape-local-v1'
+        run: |
+          grep -F 'CONFIG_OTA_URL="https://api.hensun.invalid/v1/device/xiaozhi-bootstrap"' \
+            firmware/xiaozhi-esp32/main/boards/hensun/hensun-cam-pilot-v1/config.json
       - name: Build selected Hensun variant
         working-directory: firmware/xiaozhi-esp32
         run: |
@@ -46,8 +53,13 @@ jobs:
           cp build/xiaozhi.bin ci-artifacts/${{ matrix.variant }}.bin
           sha256sum ci-artifacts/${{ matrix.variant }}.bin > ci-artifacts/${{ matrix.variant }}.sha256
           printf '0x20000 %s.bin\n' "${{ matrix.variant }}" > ci-artifacts/${{ matrix.variant }}.flash-addresses.txt
+          printf '%s\n' \
+            'CI compile proof only.' \
+            'Not signed, not configured for a real endpoint, and not approved for field flashing.' \
+            > ci-artifacts/CI_ONLY_DO_NOT_FLASH.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.variant }}-${{ github.sha }}
+          name: ci-only-${{ matrix.variant }}-${{ github.sha }}
           path: firmware/xiaozhi-esp32/ci-artifacts
           if-no-files-found: error
+          retention-days: 7
