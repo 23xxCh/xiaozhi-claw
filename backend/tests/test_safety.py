@@ -10,6 +10,22 @@ def test_exit_request_is_honored() -> None:
     assert decision.end_session is True
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "小灿闭嘴",
+        "小灿，闭嘴",
+        "小灿 闭嘴",
+        "你闭嘴",
+    ],
+)
+def test_xiaocan_shut_up_phrases_end_session(text: str) -> None:
+    decision = evaluate_text(text)
+    assert decision.category == "user-exit"
+    assert decision.end_session is True
+    assert decision.fixed_response == "好的，我现在停止互动。需要时你可以再唤醒我。"
+
+
 def test_self_harm_phrase_uses_fixed_safety_response() -> None:
     decision = evaluate_text("我不想活了")
     assert decision.category == "self-harm"

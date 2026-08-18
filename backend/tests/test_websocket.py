@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from backend.realtime.providers import TranscriptionResult
 
@@ -308,3 +310,26 @@ def test_xiaozhi_bootstrap_returns_six_digit_claim_code_for_unclaimed_device(
     assert bootstrap.json()["activation"]["code"].isdigit()
     assert len(bootstrap.json()["activation"]["code"]) == 6
     assert bootstrap.json()["activation"]["timeout_ms"] == 600_000
+
+
+def test_xiaocan_shut_up_closes_websocket_after_goodbye(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-XIAOCAN-EXIT")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes("小灿闭嘴".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+
+        stt, audio = _receive_mock_turn(websocket)
+        assert stt["text"] == "小灿闭嘴"
+        assert audio.decode() == "好的，我现在停止互动。需要时你可以再唤醒我。"
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.receive_json()
+        assert excinfo.value.code == 1000
+
