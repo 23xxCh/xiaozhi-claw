@@ -2,6 +2,8 @@
 
 ## 边界
 
+当前部署工作暂停在本地金样机门禁之后。只有 [本地金样机验收](pilot-acceptance.md) 中的 30 轮、2 小时运行和 8 小时待机通过，才恢复 Staging 发布；不得把本地未验收改动直接部署到正式域名。
+
 首版部署两个应用容器，共用一个 MySQL 8 数据库：
 
 - `control-api`：HTTP 控制面、Bootstrap、OTA 与后台 API。
@@ -13,10 +15,11 @@ OSS 仅存固件和静态资源；数据库、日志和 OSS 均不得保存原�
 
 1. 从 `.env.example` 创建服务器 Secret，不要提交 `.env`。
 2. 使用不少于 24 字符的 `JWT_SECRET`、`DEVICE_CREDENTIAL_PEPPER` 和 `MEMORY_MASTER_KEY`。
-3. 设置真实 HTTPS/WSS 域名、微信网页应用回调和 CORS 白名单。
-4. 设置 Qwen、DeepSeek 与批量降级链路密钥；在后台填写当前服务商费率。
-5. 配置 Ed25519 OTA 公钥。私钥只在离线发布环境中使用。
-6. 先执行 `alembic upgrade head`，再启动两个应用容器。
+3. 设置真实 HTTPS/WSS 域名、CORS 白名单、Secure Cookie 和邮箱验证码回跳地址。
+4. 配置真实 SMTP 投递；SMTP 授权码只进入服务器 Secret，不进入 Git、镜像层、日志或前端构建物。
+5. 设置 Qwen、DeepSeek 与批量降级链路密钥；在后台填写当前服务商费率。
+6. 配置 Ed25519 OTA 公钥。私钥只在离线发布环境中使用。
+7. 先执行 `alembic upgrade head`，再启动两个应用容器。
 
 ## 验证
 

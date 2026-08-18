@@ -6,6 +6,30 @@ camera for development. It intentionally excludes a motor, battery, charging
 dock, child mode, virtual-romance positioning, and medical or psychological
 treatment claims.
 
+## Start here
+
+This README is the portable repository overview. For the current Hensun
+golden-sample state, development boundary, verified evidence and the exact
+next actions, read the Chinese handoff documents first:
+
+1. [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) — the single-file account and
+   agent handoff: current state, locked decisions, known failures, commands and
+   next actions.
+2. [`docs/START_HERE.md`](docs/START_HERE.md) — product boundary, architecture,
+   code map and current truth.
+3. [`docs/handoffs/2026-08-18-local-golden-sample.md`](docs/handoffs/2026-08-18-local-golden-sample.md)
+   — decisions preserved from the development conversation and the dirty
+   worktree inventory.
+4. [`docs/handoffs/CHAT_CONTEXT.md`](docs/handoffs/CHAT_CONTEXT.md) — the
+   condensed decision timeline and superseded approaches from the long-running
+   development conversation.
+5. [`docs/runbooks/local-golden-sample.md`](docs/runbooks/local-golden-sample.md)
+   — local startup, build, safe flashing, rollback and physical acceptance.
+
+The current continuation worktree is `E:\HENSUN_STABILITY_WT` on
+`feature/hensun-stability-quality`. Do not assume that the repository's other
+worktrees contain the same uncommitted changes.
+
 ## Repository status
 
 This branch implements the first executable batch of the commercialization
@@ -37,7 +61,7 @@ Build or flash the firmware that uses XiaoZhi's official bootstrap:
 
 ```powershell
 .\scripts\build_firmware.ps1 -Variant official
-.\scripts\flash_firmware.ps1 -Variant official -Port COM6
+.\scripts\flash_firmware.ps1 -Variant official
 ```
 
 After flashing, connect a phone to the device's `Xiaozhi-XXXX` hotspot and enter
@@ -63,12 +87,19 @@ only after its decoder and speaker queues are empty. Messages without
 For the current LAN pilot:
 
 ```powershell
-.\scripts\start_lan_backend.ps1
-.\scripts\build_firmware.ps1 -Variant selfhosted `
+.\scripts\start_local_pilot.ps1 -HostAddress '192.168.5.49'
+.\scripts\build_firmware.ps1 -Variant local `
   -BootstrapUrl "http://192.168.5.49:8000/v1/device/xiaozhi-bootstrap"
-.\scripts\flash_firmware.ps1 -Variant selfhosted -Port COM6 `
+.\scripts\flash_firmware.ps1 -Variant local `
   -BootstrapUrl "http://192.168.5.49:8000/v1/device/xiaozhi-bootstrap"
 ```
+
+`local` produces `hensun-cam-selfhosted-landscape-local-v1`, the 320x240
+landscape golden-sample firmware. The generic `selfhosted` variant remains a
+separate Hensun-cloud build and must not be substituted silently.
+The flash script re-detects the online CH340/CH341 port immediately before
+writing and only permits the application and, when present, `emote_gen`
+segments. It never runs the full-project flash target.
 
 Factory provisioning writes each device's one-time credential into NVS after
 the firmware flash. Read the secret from the single-use factory response and
@@ -90,7 +121,7 @@ web pages or the mini program.
 ## Quick start
 
 ```powershell
-cd "E:\AI TOY\xiaozhi-claw"
+Set-Location '<your xiaozhi-claw worktree>'
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
@@ -131,6 +162,11 @@ processes with:
 The launcher migrates the configured database, creates a production web build, records
 only exact child PIDs under the ignored `run/` directory, and opens the LAN console after
 all readiness probes pass.
+
+The current local display uses a 320x240 landscape profile. The backend can
+parse ten controlled `[[face:...]]` labels, but the current physical runtime
+has three independently integrated talking faces (`neutral`, `happy`, and
+`caring`). Do not describe the remaining labels as completed device assets.
 
 Run the database migration before either backend process in production:
 
