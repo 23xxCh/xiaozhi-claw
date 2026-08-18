@@ -202,6 +202,7 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
         provider_mode="custom",
         qwen_realtime_asr_url="wss://asr.example/realtime",
         qwen_realtime_asr_model="qwen3-asr-flash-realtime",
+        qwen_realtime_vad_silence_ms=700,
         asr_api_key="secret",
     )
 
@@ -218,7 +219,7 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_server_vad(
     assert messages[0]["session"]["turn_detection"] == {
         "type": "server_vad",
         "threshold": 0.5,
-        "silence_duration_ms": 1200,
+        "silence_duration_ms": 700,
     }
     append_messages = [item for item in messages if item["type"] == "input_audio_buffer.append"]
     wrapped = b"".join(base64.b64decode(item["audio"]) for item in append_messages)

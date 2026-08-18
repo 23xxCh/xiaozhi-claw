@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <string>
+#include <atomic>
 #include <mutex>
 #include <deque>
 #include <memory>
@@ -34,6 +35,7 @@
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 #define MAIN_EVENT_POST_PLAYBACK_GUARD  (1 << 14)
+#define MAIN_EVENT_PLAYBACK_STARTED     (1 << 15)
 
 
 enum AecMode {
@@ -152,6 +154,8 @@ private:
     std::string active_turn_id_;
     std::string active_tts_reply_id_;
     std::string pending_tts_stop_reply_id_;
+    std::atomic<bool> tts_playback_prepared_{false};
+    bool tts_audio_started_ = false;
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;

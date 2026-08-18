@@ -65,7 +65,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("api.hensun.invalid", selfhosted)
         self.assertNotIn("api.tenclass.net", selfhosted)
 
-    def test_audio_channel_refreshes_short_lived_token_before_connecting(self):
+    def test_audio_channel_reuses_a_valid_token_before_refreshing_bootstrap(self):
         method = re.search(
             r"bool Application::OpenAudioChannelWithConfigRefresh\(\) \{(.*?)\n\}",
             self.application_source,
@@ -73,8 +73,13 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIsNotNone(method)
         body = method.group(1)
+        self.assertIn("if (protocol_ && protocol_->OpenAudioChannel())", body)
         self.assertIn("ota_ = std::make_unique<Ota>()", body)
-        self.assertLess(body.index("ota_->CheckVersion()"), body.index("OpenAudioChannel()"))
+        self.assertLess(
+            body.index("if (protocol_ && protocol_->OpenAudioChannel())"),
+            body.index("ota_->CheckVersion()"),
+        )
+        self.assertIn("Bootstrap is only needed", body)
 
     def test_first_utterance_is_buffered_while_the_audio_channel_connects(self):
         for method_name, signature in (
@@ -102,6 +107,53 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             body.index("protocol_->SendStartListening(listening_mode_);"),
             body.index("xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);"),
         )
+
+    def test_device_serial_logs_do_not_emit_conversation_transcripts(self):
+        self.assertNotIn('ESP_LOGI(TAG, "<< %s", text->valuestring);', self.application_source)
+        self.assertNotIn('ESP_LOGI(TAG, ">> %s", text->valuestring);', self.application_source)
+        self.assertIn("assistant text received (%u bytes)", self.application_source)
+        self.assertIn("user text received (%u bytes)", self.application_source)
+
+    def test_wake_word_starts_capture_before_the_connecting_transition(self):
+        """Keep the question following a wake word in the local audio buffer."""
+        method = re.search(
+            r"void Application::BeginWakeWordInvoke\(const std::string& wake_word\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(method)
+        body = method.group(1)
+        self.assertIn("if (!protocol_->IsAudioChannelOpened())", body)
+        self.assertIn("audio_service_.EnableVoiceProcessing(true)", body)
+        self.assertLess(
+            body.index("audio_service_.EnableVoiceProcessing(true)"),
+            body.index("SetDeviceState(kDeviceStateConnecting)"),
+        )
+
+        continue_method = re.search(
+            r"void Application::ContinueWakeWordInvoke\(const std::string& wake_word\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(continue_method)
+        self.assertIn(
+            "if (!audio_service_.IsAudioProcessorRunning())",
+            continue_method.group(1),
+        )
+
+    def test_custom_wake_resets_multinet_between_idle_turns(self):
+        source = (
+            ROOT / "main/audio/wake_words/custom_wake_word.cc"
+        ).read_text(encoding="utf-8")
+        for method_name in ("Start", "Stop"):
+            method = re.search(
+                rf"void CustomWakeWord::{method_name}\(\) \{{(.*?)\n\}}",
+                source,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(method)
+            self.assertIn("input_buffer_.clear();", method.group(1))
+            self.assertIn("multinet_->clean(multinet_model_data_);", method.group(1))
 
     def test_selfhosted_tts_uses_ready_drained_handshake_and_queue_backpressure(self):
         protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")
@@ -211,12 +263,17 @@ class HensunCamPilotBoardTests(unittest.TestCase):
     def test_auto_listening_has_a_bounded_safety_timeout(self):
         self.assertRegex(
             self.application_source,
-            r"kAutoStopListeningTimeoutTicks\s*=\s*6",
+            r"kWaitForSpeechTimeoutTicks\s*=\s*10",
+        )
+        self.assertRegex(
+            self.application_source,
+            r"kMaximumSpeechDurationTicks\s*=\s*20",
         )
         self.assertIn(
-            "clock_ticks_ >= kAutoStopListeningTimeoutTicks",
+            "clock_ticks_ >= kWaitForSpeechTimeoutTicks",
             self.application_source,
         )
+        self.assertIn("AbortSpeaking(kAbortReasonNone)", self.application_source)
 
     def test_selfhosted_emote_state_is_not_overwritten_by_neutral(self):
         display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(

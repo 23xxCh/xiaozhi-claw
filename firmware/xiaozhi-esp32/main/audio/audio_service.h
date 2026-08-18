@@ -82,6 +82,8 @@ struct AudioServiceCallbacks {
     std::function<void(void)> on_audio_testing_queue_full;
     // Fired when the decode/playback queues and their in-flight work are drained.
     std::function<void(void)> on_playback_drained;
+    // Fired immediately before decoded PCM is handed to the audio codec.
+    std::function<void(void)> on_playback_started;
 };
 
 

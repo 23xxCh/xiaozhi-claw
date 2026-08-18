@@ -333,6 +333,9 @@ void AudioService::AudioOutputTask() {
             codec_->EnableOutput(true);
         }
 
+        if (callbacks_.on_playback_started) {
+            callbacks_.on_playback_started();
+        }
         codec_->OutputData(task->pcm);
 
         /* Update the last output time */

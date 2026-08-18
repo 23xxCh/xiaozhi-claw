@@ -147,14 +147,21 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
 }
 
 void CustomWakeWord::Start() {
+    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    input_buffer_.clear();
+    if (multinet_model_data_ != nullptr) {
+        multinet_->clean(multinet_model_data_);
+    }
     running_ = true;
 }
 
 void CustomWakeWord::Stop() {
-    running_ = false;
-
     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    running_ = false;
     input_buffer_.clear();
+    if (multinet_model_data_ != nullptr) {
+        multinet_->clean(multinet_model_data_);
+    }
 }
 
 void CustomWakeWord::Feed(const std::vector<int16_t>& data) {

@@ -89,6 +89,11 @@ class FailingAsr(ImmediateAsr):
         raise TimeoutError("realtime ASR unavailable")
 
 
+class EmptyAsr(ImmediateAsr):
+    async def finish(self) -> TranscriptionResult:
+        return TranscriptionResult("", "neutral")
+
+
 class SlowLlm:
     async def reply_stream(
         self,
@@ -143,6 +148,20 @@ class FallbackExerciseProviders:
     async def open_tts(self, voice: str, speech_rate: float = 1.0) -> Tts:
         del voice, speech_rate
         return self.Tts()
+
+
+class EmptyTranscriptProviders(FallbackExerciseProviders):
+    async def open_asr(self) -> EmptyAsr:
+        return EmptyAsr()
+
+
+class FailingFallbackProviders:
+    class Speech:
+        async def transcribe(self, audio_frames: list[bytes]) -> str:
+            del audio_frames
+            raise TimeoutError("batch ASR unavailable")
+
+    speech = Speech()
 
 
 def test_abort_cancels_an_inflight_llm_turn(
@@ -202,6 +221,68 @@ def test_realtime_asr_failure_uses_bounded_batch_fallback(
     usage = asyncio.run(load_asr_usage())
     assert usage is not None
     assert usage.error_code == "fallback-batch"
+
+
+def test_empty_transcript_is_reported_as_no_speech(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = EmptyTranscriptProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-NO-SPEECH")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"silence")
+        websocket.send_json({"type": "listen", "state": "stop"})
+        error = websocket.receive_json()
+
+    assert error["type"] == "error"
+    assert error["code"] == "asr-no-speech"
+
+
+def test_realtime_and_batch_asr_failure_returns_stable_error(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = FallbackExerciseProviders()
+    client.app.state.fallback_providers = FailingFallbackProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-ASR-FAILED")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"audio")
+        websocket.send_json({"type": "listen", "state": "stop"})
+        error = websocket.receive_json()
+
+    assert error["type"] == "error"
+    assert error["code"] == "asr-fallback-failed"
+
+
+def test_realtime_asr_failure_without_fallback_returns_stable_error(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = FallbackExerciseProviders()
+    client.app.state.fallback_providers = None
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-ASR-REALTIME-FAILED")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"audio")
+        websocket.send_json({"type": "listen", "state": "stop"})
+        error = websocket.receive_json()
+
+    assert error["type"] == "error"
+    assert error["code"] == "asr-realtime-invalid"
 
 
 def test_first_audio_frame_can_implicitly_start_listening(

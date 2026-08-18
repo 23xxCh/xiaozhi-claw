@@ -147,8 +147,10 @@ class PlaybackHandshake:
         self.drained = asyncio.Event()
         return self.reply_id
 
-    def acknowledge(self, state: str, reply_id: str) -> bool:
+    def acknowledge(self, state: str, reply_id: str, turn_id: str = "") -> bool:
         if not reply_id or reply_id != self.reply_id:
+            return False
+        if turn_id and self.turn_id and turn_id != self.turn_id:
             return False
         if state == "ready":
             self.ready.set()
@@ -572,7 +574,13 @@ async def _process_turn(
             with contextlib.suppress(Exception):
                 await asr.cancel()
             if fallback is None:
-                raise
+                await _send_error(
+                    websocket,
+                    serial,
+                    "asr-realtime-invalid",
+                    "realtime speech recognition is unavailable",
+                )
+                return False
             error_code = getattr(exc, "code", "unknown")
             logger.warning(
                 "realtime ASR failed for %s with %s; using batch fallback",
@@ -580,13 +588,28 @@ async def _process_turn(
                 error_code,
             )
             fallback_operations.add("asr")
-            transcript = await fallback.speech.transcribe(audio_frames)
+            try:
+                transcript = await fallback.speech.transcribe(audio_frames)
+            except Exception as fallback_exc:
+                fallback_error_code = getattr(fallback_exc, "code", "unknown")
+                logger.warning(
+                    "batch ASR fallback failed for %s with %s",
+                    serial,
+                    fallback_error_code,
+                )
+                await _send_error(
+                    websocket,
+                    serial,
+                    "asr-fallback-failed",
+                    "speech recognition is temporarily unavailable",
+                )
+                return False
             detected_emotion = getattr(fallback.speech, "last_emotion", None) or "neutral"
             transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
         asr_latency_ms = int((time.perf_counter() - asr_started) * 1000)
         transcript = transcription.text.strip()
         if not transcript:
-            await _send_error(websocket, serial, "empty-transcript", "speech was not recognized")
+            await _send_error(websocket, serial, "asr-no-speech", "no speech was recognized")
             return False
         await websocket.app.state.device_connections.send_json(
             serial,
@@ -1111,7 +1134,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             if message_type == "tts":
                 state = str(message.get("state") or "")
                 reply_id = str(message.get("reply_id") or "")
-                if not playback.acknowledge(state, reply_id):
+                turn_id = str(message.get("turn_id") or "")
+                if not playback.acknowledge(state, reply_id, turn_id):
                     logger.info("ignored stale TTS %s acknowledgement from %s", state, serial)
                 continue
             if message_type == "mcp":

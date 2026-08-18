@@ -160,7 +160,7 @@ class QwenRealtimeAsrSession:
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.5,
-                            "silence_duration_ms": 1200,
+                            "silence_duration_ms": settings.qwen_realtime_vad_silence_ms,
                         },
                     },
                 }
@@ -211,7 +211,7 @@ class QwenRealtimeAsrSession:
 
     async def finish(self) -> TranscriptionResult:
         if not self._endpoint.is_set():
-            # A healthy device may report local silence before Qwen's 1200 ms
+            # A healthy device may report local silence before Qwen's server-VAD
             # server-VAD tail. Explicit commit closes that same server-VAD
             # utterance immediately; stuck local VAD is handled by the endpoint
             # event and never reaches this path.
