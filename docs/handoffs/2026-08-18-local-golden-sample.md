@@ -1,7 +1,7 @@
 ---
 status: in-progress
 branch: feature/hensun-stability-quality
-timestamp: 2026-08-18T11:30:00+08:00
+timestamp: 2026-08-19T12:00:00+08:00
 worktree: E:\HENSUN_STABILITY_WT
 base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 ---
@@ -10,7 +10,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 一句话状态
 
-当前 ESP32-S3 CAM 已恢复本地多轮语音；横屏说话脸、细线嘴型和「小灿闭嘴 / 闭嘴」软待机已得到用户确认。评审债已收口：默认设备 WS 指向网关 8001，后端测试 106 项约 105 过 1 skip。工作树只剩明确排除的 `design/` 与设备配置迁移。30 轮真机回归、2 小时连续对话和 8 小时待机尚未做；未授权前不要刷机。
+当前 ESP32-S3 CAM 已恢复本地多轮语音；横屏说话脸、细线嘴型和「小灿闭嘴 / 闭嘴」软待机已得到用户确认。实时 ASR 根因已确认为 VAD + commit 触发 `invalid_request_error`，代码已改为 Manual。后端测试 106 项约 105 过 1 skip。工作树只剩明确排除的 `design/` 与设备配置迁移。30 轮真机回归、2 小时连续对话和 8 小时待机尚未做；未授权前不要刷机。
 
 ## 接手前必读
 
@@ -100,6 +100,8 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 ```text
 959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby
 99522cd fix(config): point default device WS to gateway 8001
+4a23fc6 docs: refresh golden-sample status after review
+d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD
 ```
 
 以及随后的文档刷新提交。分支没有已记录的 upstream，不要推送。
@@ -124,6 +126,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 ## 验证证据
 
 - 后端测试：106 项，约 105 过、1 skip（`test_qwen_realtime_integration.py` 实网集成）。
+- 实时 ASR 已从 `server_vad` + commit 改为 Manual；相关单测与 `backend/tests` 均绿。网关已按新代码重启，`8000/8001/3000` 健康检查 200。未做真机口测，不能标记金样机已稳定。
 - 用户已确认当前金样机可以对话；「小灿闭嘴」和「闭嘴」可进软待机。
 - 全部 Hensun 固件主机测试：47 项通过。
 - `scripts/release_gate.py`：PASS（仅源码/配置门禁）。
@@ -155,7 +158,7 @@ E:\HENSUN_STABILITY_WT\run\backups\golden-local-face-20260818
 评审债已经收口。未得到用户明确口头授权前：不要刷 Flash、不要开始 30 轮口测、不要恢复 Staging 或正式域。
 
 1. 不要把 `design/` 和 `20260815_06_device_config_contract.py` 混入任何提交。
-2. 实时 ASR 仍可能 batch fallback，这是下一轮功能债，不是这次范围。
+2. 实时 ASR 已改为 Manual；Ogg-Opus 未改。真机是否不再走 batch fallback，要等用户授权后的口测确认。
 3. 用户明确授权后，才确认 COM 口并只刷应用 `0x20000` 和表情 `0xB00000`。
 4. 授权后的真机矩阵：唤醒、停顿后提问、连续对话、中性/开心/关怀、长句、数字、英文、时间、天气、BOOT 打断、“小灿闭嘴”、自动睡眠；累计 30 轮。
 5. 授权后再做 2 小时连续运行与 8 小时待机，记录 TFT、队列、内存、重连、播放丢包和看门狗。

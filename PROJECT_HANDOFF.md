@@ -1,10 +1,10 @@
 # Hensun Desk 项目交接说明
 
-> 状态核对时间：2026-08-18（Asia/Hong_Kong）  
+> 状态核对时间：2026-08-19（Asia/Hong_Kong）  
 > 当前阶段：单台本地金样机稳定性收口  
 > 当前工作目录：`E:\HENSUN_STABILITY_WT`  
 > 当前分支：`feature/hensun-stability-quality`  
-> 当前实现基线：请用 `git log -1 --oneline` 复核。本轮已完成本地固件构建；真机仍运行 10:56 金样机，尚未刷入今晚产物
+> 当前实现基线：请用 `git log -1 --oneline` 复核。实时 ASR 已改为 Manual 模式；真机仍运行 10:56 金样机，尚未刷入当前本地构建
 
 本文是换账号、换 Agent 后继续开发时的单文件入口。它只保留有效背景、当前事实、不可擅改的决定和下一步，不包含闲聊、密钥或已被后续决定推翻的方案。
 
@@ -152,7 +152,9 @@ ESP32-S3 CAM 设备
 - 评审债收口后又补了本地提交：
   1. `959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby`
   2. `99522cd fix(config): point default device WS to gateway 8001`
-  3. 本文档刷新提交（以 `git log -1 --oneline` 为准）
+  3. `4a23fc6 docs: refresh golden-sample status after review`
+  4. `d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD`
+  5. 本文档更新（以 `git log -1 --oneline` 为准）
 - `migrations/versions/20260815_06_device_config_contract.py` 与 `design/` 明确排除，仍不得混入、删除或擅自提交。
 - 禁止 reset、checkout 覆盖、清理未跟踪目录或整批 `git add -A`。
 
@@ -241,7 +243,7 @@ ESP32-S3 CAM 设备
 - 用户已确认当前金样机可以对话；说「小灿闭嘴」或「闭嘴」会进入软待机。
 - 默认 `DEVICE_WS_URL` 已改为 `ws://127.0.0.1:8001/v1/device/ws`。不要读取或改写本机 `.env`。金样机只用 `scripts/start_local_pilot.ps1`，不要用只起控制面的 `scripts/start_lan_backend.ps1`。
 - 产品决定：退出词保持现状，含单独「闭嘴」「退出」的子串匹配。已知可能误伤普通句子，暂不收紧。
-- 实时 ASR 仍可能失败并走同一轮内存音频的 batch fallback；这次未查、未修。
+- 实时 ASR 根因已确认：`server_vad` 下发送 `input_audio_buffer.commit` 会触发 `invalid_request_error`。已改为 Manual（`turn_detection: null`），本地停说时再 commit。Ogg-Opus 封装未改。batch fallback 仍保留作降级；真机是否不再 fallback 要等授权后口测确认。
 - 尚未完成 30 轮固定真机回归。
 - 尚未完成 2 小时连续对话运行。
 - 尚未完成 8 小时待机与 TFT 冻结检查。
