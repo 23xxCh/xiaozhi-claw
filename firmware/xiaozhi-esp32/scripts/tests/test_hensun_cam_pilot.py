@@ -168,7 +168,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("GetDecodeDropCount", self.application_source)
         self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
 
-    def test_hensun_speaking_face_waits_for_real_pcm_and_settles_after_drain(self):
+    def test_hensun_speaking_face_waits_for_real_pcm_and_keeps_a_reply_window(self):
         display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(
             encoding="utf-8"
         )
@@ -178,7 +178,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("kAwaitingAudio", display_source)
         self.assertIn('QueueAnimation("thinking", false, true);', display_source)
         self.assertIn("if (awaiting_audio_.exchange(false))", display_source)
-        self.assertIn('QueueAnimation("speaking", false, true);', display_source)
+        self.assertIn(
+            "QueueAnimation(ConversationAnimation(), false, true);", display_source
+        )
         self.assertIn("BeginReplySettle", self.application_source)
 
         finish = re.search(
@@ -192,7 +194,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             finish.group(1).index("SetDeviceState(kDeviceStateIdle)"),
         )
         self.assertIn("kReplySettleDurationUs = 800 * 1000", display_source)
-        self.assertIn("kIdleSleepDurationUs = 3 * 1000 * 1000", display_source)
+        self.assertIn("kIdleSleepDurationUs = 10 * 1000 * 1000", display_source)
         self.assertIn("reply_settle_pending_.load()", display_source)
 
     def test_selfhosted_emote_profile_uses_a_matching_landscape_canvas(self):
@@ -363,6 +365,12 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("PowerSaveTimer", self.source)
         self.assertNotIn("LAMP_GPIO", self.pins)
         self.assertEqual(len(re.findall(r"\bDECLARE_BOARD\(", self.source)), 1)
+
+    def test_camera_is_deferred_until_an_explicit_capture(self):
+        self.assertIn("class HensunLazyCamera final : public Camera", self.source)
+        self.assertIn("Starting camera for an explicit capture request", self.source)
+        self.assertIn("return EnsureCamera() && camera_->Capture();", self.source)
+        self.assertIn("camera_ = new HensunLazyCamera(camera_config);", self.source)
 
     def test_hensun_i2s_microphone_uses_the_upper_16_bits_without_clipping(self):
         codec = re.search(

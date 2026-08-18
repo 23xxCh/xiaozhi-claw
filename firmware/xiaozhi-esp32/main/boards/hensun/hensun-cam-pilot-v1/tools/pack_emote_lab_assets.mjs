@@ -10,6 +10,13 @@ const TOOL_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BOARD_ROOT = path.resolve(TOOL_ROOT, "..");
 const ASSET_ROOT = path.join(BOARD_ROOT, "emote_lab");
 const SPEC_PATH = path.join(ASSET_ROOT, "source", "hensun_emote_motion_spec.json");
+const DIALOGUE_RUNTIME_ROOT = path.join(ASSET_ROOT, "dialogue_runtime");
+const DIALOGUE_RUNTIME_MANIFEST = path.join(DIALOGUE_RUNTIME_ROOT, "manifest.json");
+const RUNTIME_ANIMATION_NAMES = {
+  neutral: "talk_base",
+  happy: "talk_happy",
+  caring: "talk_caring",
+};
 const WASM_PATH = path.join(TOOL_ROOT, "vendor", "eaf_converter_bg-gkbc_Rvp.wasm");
 const OUTPUT_PATH = path.join(ASSET_ROOT, "hensun_emote_lab_v1.bin");
 const EXPECTED_WASM_SHA256 = "c3e1d8af3651df97188356ef7f1a42ab871928d9ca06341626cdbccb4437205d";
@@ -161,6 +168,26 @@ for (const [name, animation] of Object.entries(spec.animations)) {
     y: 0,
     loop: [animation.loop_start_frame, animation.loop_end_frame],
     fps: spec.canvas.fps,
+  });
+  files.push({ fileName, data: eaf });
+}
+
+const dialogueRuntime = JSON.parse(fs.readFileSync(DIALOGUE_RUNTIME_MANIFEST, "utf8"));
+for (const [emotion, animation] of Object.entries(dialogueRuntime.expressions)) {
+  const name = RUNTIME_ANIMATION_NAMES[emotion];
+  if (!name) {
+    throw new Error(`missing runtime animation name for emotion: ${emotion}`);
+  }
+  const gifPath = path.join(DIALOGUE_RUNTIME_ROOT, animation.file);
+  const eaf = convertGif(fs.readFileSync(gifPath));
+  const fileName = `${name}.eaf`;
+  index.push({
+    name,
+    file: fileName,
+    x: 0,
+    y: 0,
+    loop: [animation.loop_start_frame, animation.loop_end_frame],
+    fps: dialogueRuntime.canvas.fps,
   });
   files.push({ fileName, data: eaf });
 }

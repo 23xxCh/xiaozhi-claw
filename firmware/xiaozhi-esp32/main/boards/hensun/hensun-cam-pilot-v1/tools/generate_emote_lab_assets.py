@@ -18,6 +18,7 @@ ASSET_ROOT = BOARD / "emote_lab"
 SOURCE_SPEC = ASSET_ROOT / "source/hensun_emote_motion_spec.json"
 GIF_ROOT = ASSET_ROOT / "gifs"
 MANIFEST = ASSET_ROOT / "manifest.json"
+DIALOGUE_RUNTIME_MANIFEST = ASSET_ROOT / "dialogue_runtime/manifest.json"
 CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_contact_sheet.png"
 ANIMATED_CONTACT_SHEET = ASSET_ROOT / "hensun_emote_lab_v1_motion_preview.gif"
 SCALE = 4
@@ -663,6 +664,12 @@ def build_assets(check: bool) -> int:
         save_gif(ANIMATED_CONTACT_SHEET, preview_frames)
 
     existing_pack = ASSET_ROOT / "hensun_emote_lab_v1.bin"
+    dialogue_runtime_count = 0
+    if DIALOGUE_RUNTIME_MANIFEST.is_file():
+        dialogue_runtime = json.loads(DIALOGUE_RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+        dialogue_runtime_count = len(dialogue_runtime["expressions"])
+    packed_animation_count = len(spec["animations"]) + dialogue_runtime_count
+
     manifest = {
         "asset_set": spec["asset_set"],
         "source_spec": str(SOURCE_SPEC.relative_to(ASSET_ROOT)).replace("\\", "/"),
@@ -677,8 +684,8 @@ def build_assets(check: bool) -> int:
         },
         "pack": {
             "file": existing_pack.name,
-            "animation_count": len(spec["animations"]),
-            "asset_count": len(spec["animations"]) + 1,
+            "animation_count": packed_animation_count,
+            "asset_count": packed_animation_count + 1,
             "sha256": sha256(existing_pack) if existing_pack.is_file() else "PENDING_PACKER_EXPORT"
         },
     }

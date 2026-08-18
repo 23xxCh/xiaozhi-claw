@@ -1,0 +1,38 @@
+{
+  "asset_set": "hensun-dialogue-runtime-v1",
+  "source_spec": "source/hensun_dialogue_face_spec.json",
+  "source_spec_sha256": "bb5167325d97437714f31314cd82fce58f0fd66df0080787a5c638ffa21c0a50",
+  "canvas": {
+    "width": 320,
+    "height": 240,
+    "fps": 20
+  },
+  "palette": {
+    "background": "#000000",
+    "face": "#F7F7F2"
+  },
+  "mouth_layer": "firmware PCM overlay",
+  "expressions": {
+    "neutral": {
+      "file": "gifs/talk_neutral.gif",
+      "frames": 32,
+      "loop_start_frame": 0,
+      "loop_end_frame": 32,
+      "sha256": "9dc6dd6154cf3d3327409c0dc6af37ec3981d9159f0d78c325bdeee9294e9a07"
+    },
+    "happy": {
+      "file": "gifs/talk_happy.gif",
+      "frames": 32,
+      "loop_start_frame": 0,
+      "loop_end_frame": 32,
+      "sha256": "d13e448893fa1389dfa06de595e143628c82dcf450b6efa26a54ed2921b4e628"
+    },
+    "caring": {
+      "file": "gifs/talk_caring.gif",
+      "frames": 32,
+      "loop_start_frame": 0,
+      "loop_end_frame": 32,
+      "sha256": "54e45de921fe12116c0274db0b63d5363203658331a4de0ae4decb14e622ea09"
+    }
+  }
+}

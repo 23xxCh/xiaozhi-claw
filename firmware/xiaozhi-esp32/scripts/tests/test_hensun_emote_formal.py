@@ -34,11 +34,24 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
             self.assertIn(option, selfhosted)
             self.assertNotIn(option, official)
 
-    def test_speaking_uses_four_rate_limited_audio_levels(self):
-        for name in ("speaking_0", "speaking_1", "speaking", "speaking_3"):
-            self.assertIn(f'"{name}"', self.source)
+    def test_speaking_uses_a_separate_five_pose_mouth_renderer(self):
+        renderer_header = (BOARD / "hensun_speech_mouth_renderer.h").read_text(
+            encoding="utf-8"
+        )
+        renderer_source = (BOARD / "hensun_speech_mouth_renderer.cc").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("class HensunSpeechMouthRenderer", renderer_header)
+        self.assertIn("kPoseCount = 5", renderer_header)
+        self.assertIn("kMouthCenterX = 160", renderer_header)
+        self.assertIn("kMouthCenterY = 170", renderer_header)
+        self.assertIn("ComposeStripe", renderer_header)
+        self.assertIn("MALLOC_CAP_DMA", renderer_source)
+        self.assertIn("mouth_renderer_.ComposeStripe", self.source)
+        self.assertIn("mouth_renderer_.SetLevel", self.source)
+        self.assertNotIn("kSpeakingAnimations", self.source)
         self.assertIn("QuantizeSpeechLevel", self.source)
-        self.assertIn("kSpeechSwitchMinIntervalMs", self.source)
         self.assertIn("speech_level_", self.header)
         self.assertIn("speaking_active_", self.header)
 
@@ -51,7 +64,7 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("sleep", spec["animations"])
         self.assertIn('"sleep"', self.source)
         self.assertIn("sleep_entered", self.source)
-        self.assertIn("kExpectedAnimationCount = 15", self.source)
+        self.assertIn("kExpectedAnimationCount = 18", self.source)
 
     def test_camera_uses_display_independent_rgb565_preview(self):
         display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")

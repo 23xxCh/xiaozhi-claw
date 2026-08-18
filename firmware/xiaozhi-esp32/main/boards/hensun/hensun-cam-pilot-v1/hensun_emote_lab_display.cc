@@ -15,25 +15,24 @@ namespace {
 constexpr char kTag[] = "HensunEmoteLab";
 constexpr char kPartitionLabel[] = "emote_gen";
 constexpr int kFrameRate = 20;
-constexpr int64_t kSpeechSwitchMinIntervalMs = 120;
+constexpr int kRenderStripeHeight = 16;
 constexpr int kPreviewDurationMs = 1500;
 constexpr int64_t kReplySettleDurationUs = 800 * 1000;
-constexpr int64_t kIdleSleepDurationUs = 3 * 1000 * 1000;
-constexpr size_t kExpectedAnimationCount = 15;
+// Give a person a natural chance to begin the next wake-word utterance after
+// a reply.  Three seconds only covered the end-of-reply animation, so the
+// screen often entered sleep before the user could react.
+constexpr int64_t kIdleSleepDurationUs = 10 * 1000 * 1000;
+constexpr size_t kExpectedAnimationCount = 18;
 constexpr const char* kExpectedAnimations[kExpectedAnimationCount] = {
     "sleep", "wake", "idle", "listening", "thinking", "speaking", "speaking_0",
     "speaking_1", "speaking_3", "happy", "caring", "curious", "surprised",
-    "confused", "alert",
+    "confused", "alert", "talk_base", "talk_happy", "talk_caring",
 };
 constexpr size_t kShowcaseAnimationCount = 12;
 constexpr const char* kShowcaseAnimations[kShowcaseAnimationCount] = {
     "sleep", "wake", "idle", "listening", "thinking", "speaking", "happy", "caring",
     "curious", "surprised", "confused", "alert",
 };
-constexpr const char* kSpeakingAnimations[4] = {
-    "speaking_0", "speaking_1", "speaking", "speaking_3",
-};
-
 bool IsOneOf(const char* value, std::initializer_list<const char*> choices) {
     if (value == nullptr) {
         return false;
@@ -57,6 +56,9 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
     width_ = width;
     height_ = height;
     active_display_ = this;
+    if (!mouth_renderer_.Initialize(width, kRenderStripeHeight)) {
+        ESP_LOGE(kTag, "speech mouth renderer init failed");
+    }
 
     const emote_gen_player_config_t config = {
         .flags = {
@@ -108,7 +110,10 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
     }
     emote_gen_player_set_tip_text(player_, "");
 
-    switch_queue_ = xQueueCreate(6, sizeof(SwitchRequest));
+    // The display only needs the newest requested state. A one-item mailbox
+    // prevents an old wake/listen/sleep request from running after speech has
+    // already started.
+    switch_queue_ = xQueueCreate(1, sizeof(SwitchRequest));
     if (switch_queue_ == nullptr) {
         ESP_LOGE(kTag, "xQueueCreate failed");
         return;
@@ -192,6 +197,7 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         presentation_state_.store(PresentationState::kListening);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
+        mouth_renderer_.SetActive(false);
         QueueAnimation("listening", false, true);
     } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
         // A reply has already reached the generic idle state at this point,
@@ -203,19 +209,22 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         presentation_state_.store(PresentationState::kSleep);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
+        mouth_renderer_.SetActive(false);
         QueueAnimation("sleep");
     } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
         InvalidatePresentationTimers();
         presentation_state_.store(PresentationState::kThinking);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
+        mouth_renderer_.SetActive(false);
         QueueAnimation("thinking", false, true);
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
         InvalidatePresentationTimers();
         presentation_state_.store(PresentationState::kAwaitingAudio);
-        speech_level_.store(2);
+        speech_level_.store(0);
         speaking_active_.store(false);
         awaiting_audio_.store(true);
+        mouth_renderer_.SetActive(false);
         // tts.start only means the gateway has reserved a reply. Do not claim
         // that the device is speaking until the first PCM block reaches I2S.
         QueueAnimation("thinking", false, true);
@@ -224,6 +233,7 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         presentation_state_.store(PresentationState::kAlert);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
+        mouth_renderer_.SetActive(false);
         QueueAnimation("alert", true);
     }
 }
@@ -257,6 +267,7 @@ void HensunEmoteLabDisplay::BeginReplySettle() {
     presentation_state_.store(PresentationState::kReplySettle);
     speaking_active_.store(false);
     awaiting_audio_.store(false);
+    mouth_renderer_.SetActive(false);
     reply_settle_pending_.store(true);
     reply_settle_generation_.store(generation);
 
@@ -359,31 +370,31 @@ void HensunEmoteLabDisplay::SetPowerSaveMode(bool on) {
     InvalidatePresentationTimers();
     speaking_active_.store(false);
     awaiting_audio_.store(false);
+    mouth_renderer_.SetActive(false);
     presentation_state_.store(on ? PresentationState::kSleep : PresentationState::kIdle);
     QueueAnimation(on ? "sleep" : "idle", true, true);
 }
 
 void HensunEmoteLabDisplay::SetSpeechLevel(uint8_t level) {
+    if (awaiting_audio_.load() && level == 0) {
+        return;
+    }
     if (awaiting_audio_.exchange(false)) {
         presentation_state_.store(PresentationState::kSpeaking);
         speaking_active_.store(true);
-        QueueAnimation("speaking", false, true);
+        mouth_renderer_.SetActive(true);
+        QueueAnimation(ConversationAnimation(), false, true);
     }
     if (!speaking_active_.load()) {
         return;
     }
     const uint8_t current_level = speech_level_.load();
     const uint8_t next_level = QuantizeSpeechLevel(level, current_level);
+    mouth_renderer_.SetLevel(next_level);
     if (next_level == current_level) {
         return;
     }
-    const int64_t now_ms = esp_timer_get_time() / 1000;
-    if (now_ms - last_speech_switch_ms_.load() < kSpeechSwitchMinIntervalMs) {
-        return;
-    }
     speech_level_.store(next_level);
-    last_speech_switch_ms_.store(now_ms);
-    QueueAnimation(kSpeakingAnimations[next_level], false, true);
 }
 
 void HensunEmoteLabDisplay::StartShowcase() {
@@ -400,8 +411,10 @@ void HensunEmoteLabDisplay::FlushCallback(int x_start, int y_start, int x_end, i
                                           const void* data, emote_gen_player_handle_t manager) {
     if (active_display_ != nullptr && active_display_->panel_ != nullptr) {
         active_display_->animation_flushes_pending_.fetch_add(1);
+        const void* frame = active_display_->mouth_renderer_.ComposeStripe(
+            data, x_start, y_start, x_end, y_end);
         const esp_err_t result = esp_lcd_panel_draw_bitmap(
-            active_display_->panel_, x_start, y_start, x_end, y_end, data);
+            active_display_->panel_, x_start, y_start, x_end, y_end, frame);
         if (result != ESP_OK) {
             active_display_->animation_flushes_pending_.fetch_sub(1);
             emote_gen_player_notify_flush_finished(manager);
@@ -462,6 +475,9 @@ void HensunEmoteLabDisplay::Unlock() {
 void HensunEmoteLabDisplay::SwitchTask() {
     SwitchRequest request = {};
     while (xQueueReceive(switch_queue_, &request, portMAX_DELAY) == pdTRUE) {
+        if (request.generation != animation_generation_.load()) {
+            continue;
+        }
         if (std::strcmp(current_animation_, request.animation) == 0) {
             continue;
         }
@@ -542,12 +558,8 @@ void HensunEmoteLabDisplay::QueueAnimation(const char* animation, bool urgent, b
     std::strncpy(request.animation, animation, sizeof(request.animation) - 1);
     request.urgent = urgent;
     request.immediate = immediate;
-    if (urgent) {
-        xQueueReset(switch_queue_);
-    }
-    const BaseType_t queued = immediate
-        ? xQueueSendToFront(switch_queue_, &request, 0)
-        : xQueueSend(switch_queue_, &request, 0);
+    request.generation = animation_generation_.fetch_add(1) + 1;
+    const BaseType_t queued = xQueueOverwrite(switch_queue_, &request);
     if (queued != pdTRUE) {
         ESP_LOGW(kTag, "animation queue full: %s", animation);
     }
@@ -556,15 +568,30 @@ void HensunEmoteLabDisplay::QueueAnimation(const char* animation, bool urgent, b
 uint8_t HensunEmoteLabDisplay::QuantizeSpeechLevel(uint8_t level, uint8_t current_level) {
     switch (current_level) {
         case 0:
-            return level >= 14 ? 1 : 0;
+            return level >= 8 ? 1 : 0;
         case 1:
-            if (level <= 6) return 0;
-            return level >= 38 ? 2 : 1;
+            if (level <= 3) return 0;
+            return level >= 24 ? 2 : 1;
         case 2:
-            if (level <= 25) return 1;
-            return level >= 72 ? 3 : 2;
+            if (level <= 14) return 1;
+            return level >= 45 ? 3 : 2;
+        case 3:
+            if (level <= 34) return 2;
+            return level >= 75 ? 4 : 3;
         default:
-            return level <= 58 ? 2 : 3;
+            return level <= 62 ? 3 : 4;
+    }
+}
+
+const char* HensunEmoteLabDisplay::ConversationAnimation() const {
+    switch (reply_emotion_.load()) {
+        case ReplyEmotion::kHappy:
+            return "talk_happy";
+        case ReplyEmotion::kCaring:
+            return "talk_caring";
+        case ReplyEmotion::kNeutral:
+        default:
+            return "talk_base";
     }
 }
 

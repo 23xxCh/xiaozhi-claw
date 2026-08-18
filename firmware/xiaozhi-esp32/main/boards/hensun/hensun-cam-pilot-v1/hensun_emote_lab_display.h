@@ -2,6 +2,7 @@
 
 #include "display/display.h"
 #include "emote_gen_player.h"
+#include "hensun_speech_mouth_renderer.h"
 
 #include <atomic>
 #include <cstdint>
@@ -55,6 +56,7 @@ private:
         char animation[16];
         bool urgent;
         bool immediate;
+        uint32_t generation;
     };
 
     static void FlushCallback(int x_start, int y_start, int x_end, int y_end,
@@ -76,6 +78,7 @@ private:
     void QueueAnimation(const char* animation, bool urgent = false, bool immediate = false);
     bool ValidatePack() const;
     const char* MapEmotion(const char* emotion, bool* urgent) const;
+    const char* ConversationAnimation() const;
     static uint8_t QuantizeSpeechLevel(uint8_t level, uint8_t current_level);
     static void RotateRgb565Clockwise(const uint16_t* source, int source_width,
                                       int source_height, int source_stride_pixels,
@@ -99,12 +102,13 @@ private:
     std::atomic<bool> preview_active_{false};
     std::atomic<bool> preview_flush_pending_{false};
     std::atomic<uint32_t> animation_flushes_pending_{0};
-    std::atomic<uint8_t> speech_level_{2};
-    std::atomic<int64_t> last_speech_switch_ms_{0};
+    std::atomic<uint32_t> animation_generation_{0};
+    std::atomic<uint8_t> speech_level_{0};
     std::atomic<PresentationState> presentation_state_{PresentationState::kSleep};
     std::atomic<ReplyEmotion> reply_emotion_{ReplyEmotion::kNeutral};
     std::atomic<uint32_t> presentation_generation_{0};
     std::atomic<uint32_t> reply_settle_generation_{0};
     std::atomic<uint32_t> idle_sleep_generation_{0};
+    HensunSpeechMouthRenderer mouth_renderer_;
     char current_animation_[16] = {};
 };

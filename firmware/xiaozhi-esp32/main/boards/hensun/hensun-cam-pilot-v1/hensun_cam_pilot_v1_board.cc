@@ -16,6 +16,9 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <memory>
+#include <stdexcept>
+#include <string>
 
 #include <algorithm>
 
@@ -94,13 +97,79 @@ private:
     HensunPilotDisplay* display_ = nullptr;
 };
 
+// The ESP32 camera driver starts continuous DMA capture in its constructor.
+// Keeping it active while the product is only listening produces VSYNC buffer
+// overruns and competes with the realtime audio path. Preserve camera support,
+// but defer that work until a photo is explicitly requested.
+class HensunLazyCamera final : public Camera {
+public:
+    explicit HensunLazyCamera(const camera_config_t& config) : config_(config) {}
+
+    void SetExplainUrl(const std::string& url, const std::string& token) override {
+        explain_url_ = url;
+        explain_token_ = token;
+        if (camera_ != nullptr) {
+            camera_->SetExplainUrl(url, token);
+        }
+    }
+
+    bool Capture() override {
+        return EnsureCamera() && camera_->Capture();
+    }
+
+    bool SetHMirror(bool enabled) override {
+        hmirror_ = enabled;
+        return camera_ == nullptr || camera_->SetHMirror(enabled);
+    }
+
+    bool SetVFlip(bool enabled) override {
+        vflip_ = enabled;
+        return camera_ == nullptr || camera_->SetVFlip(enabled);
+    }
+
+    bool SetSwapBytes(bool enabled) override {
+        swap_bytes_ = enabled;
+        return camera_ == nullptr || camera_->SetSwapBytes(enabled);
+    }
+
+    std::string Explain(const std::string& question) override {
+        if (camera_ == nullptr) {
+            throw std::runtime_error("No camera frame captured");
+        }
+        return camera_->Explain(question);
+    }
+
+private:
+    bool EnsureCamera() {
+        if (camera_ != nullptr) {
+            return true;
+        }
+
+        ESP_LOGI("HensunCamera", "Starting camera for an explicit capture request");
+        camera_ = std::make_unique<Esp32Camera>(config_);
+        camera_->SetHMirror(hmirror_);
+        camera_->SetVFlip(vflip_);
+        camera_->SetSwapBytes(swap_bytes_);
+        camera_->SetExplainUrl(explain_url_, explain_token_);
+        return true;
+    }
+
+    camera_config_t config_;
+    std::unique_ptr<Esp32Camera> camera_;
+    std::string explain_url_;
+    std::string explain_token_;
+    bool hmirror_ = false;
+    bool vflip_ = false;
+    bool swap_bytes_ = true;
+};
+
 }  // namespace
 
 class HensunCamPilotV1Board : public WifiBoard {
 private:
     Button boot_button_;
     HensunPilotDisplay* display_ = nullptr;
-    Esp32Camera* camera_ = nullptr;
+    Camera* camera_ = nullptr;
 
     void InitializeSpi() {
         spi_bus_config_t bus_config = {};
@@ -201,7 +270,7 @@ private:
         camera_config.fb_location = CAMERA_FB_IN_PSRAM;
         camera_config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
-        camera_ = new Esp32Camera(camera_config);
+        camera_ = new HensunLazyCamera(camera_config);
         camera_->SetHMirror(false);
         camera_->SetVFlip(true);
     }

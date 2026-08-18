@@ -125,8 +125,8 @@
   },
   "pack": {
     "file": "hensun_emote_lab_v1.bin",
-    "animation_count": 15,
-    "asset_count": 16,
-    "sha256": "1d477da570f99c2a9137a46c7bdda9da193ea97eb6db89cf156c76b4bd6c4784"
+    "animation_count": 18,
+    "asset_count": 19,
+    "sha256": "4a0e2c6b1a42b620bf615fd99ed2f86eb6c0bb3146482e07c4844126a7d5af85"
   }
 }

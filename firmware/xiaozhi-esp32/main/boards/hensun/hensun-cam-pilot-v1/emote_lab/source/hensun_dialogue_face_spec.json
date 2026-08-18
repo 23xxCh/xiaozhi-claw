@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "asset_set": "hensun-dialogue-faces-v1",
+  "canvas": {
+    "width": 320,
+    "height": 240,
+    "fps": 20
+  },
+  "palette": {
+    "background": "#000000",
+    "face": "#F7F7F2"
+  },
+  "animation_structure": "entrance-loop-return",
+  "mouth": {
+    "center": [160, 170],
+    "poses": ["closed", "light", "narrow", "round", "wide"],
+    "rule": "eye-led expression with a single-stroke or filled micro-mouth; never paired equal-length outlines",
+    "max_rendered_width": 48,
+    "max_rendered_height": 18
+  },
+  "expressions": {
+    "neutral": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "relaxed symmetric eyes and a steady centered gaze",
+      "export_file": "talk_neutral_preview.gif"
+    },
+    "happy": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "soft crescent eyes, lifted outer brows and light cheek marks",
+      "export_file": "talk_happy_preview.gif"
+    },
+    "laughing": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "high crescent eyes with a two-beat buoyant laugh",
+      "export_file": "talk_laughing_preview.gif"
+    },
+    "caring": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "soft lowered eyes with protective inward brows",
+      "export_file": "talk_caring_preview.gif"
+    },
+    "affectionate": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "large gentle eyes, close gaze and restrained cheek marks",
+      "export_file": "talk_affectionate_preview.gif"
+    },
+    "curious": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "asymmetric eyes, a raised brow and a side glance",
+      "export_file": "talk_curious_preview.gif"
+    },
+    "surprised": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "tall open eyes and clearly lifted brows",
+      "export_file": "talk_surprised_preview.gif"
+    },
+    "confused": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "opposed brow angles and uneven eye heights",
+      "export_file": "talk_confused_preview.gif"
+    },
+    "concerned": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "raised inner brows, attentive open eyes and a lowered gaze",
+      "export_file": "talk_concerned_preview.gif"
+    },
+    "apologetic": {
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "visual_anchor": "lowered brows, downcast eyes and a restrained posture",
+      "export_file": "talk_apologetic_preview.gif"
+    }
+  }
+}

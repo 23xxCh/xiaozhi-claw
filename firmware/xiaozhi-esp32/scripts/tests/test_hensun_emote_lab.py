@@ -101,8 +101,8 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertTrue(pack.is_file(), pack)
         self.assertLess(pack.stat().st_size, 5 * 1024 * 1024)
         self.assertEqual(manifest["pack"]["sha256"], hashlib.sha256(pack.read_bytes()).hexdigest())
-        self.assertEqual(manifest["pack"]["animation_count"], 15)
-        self.assertEqual(manifest["pack"]["asset_count"], 16)
+        self.assertEqual(manifest["pack"]["animation_count"], 18)
+        self.assertEqual(manifest["pack"]["asset_count"], 19)
 
         pack_data = pack.read_bytes()
         asset_count, stored_checksum, payload_length = struct.unpack_from("<III", pack_data)
@@ -110,6 +110,15 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertEqual(asset_count, manifest["pack"]["asset_count"])
         self.assertEqual(payload_length, len(payload))
         self.assertEqual(stored_checksum, sum(payload) & 0xFFFF)
+
+        entry_size = 16 + 12
+        names = []
+        for index in range(asset_count):
+            raw_name = pack_data[12 + index * entry_size : 12 + index * entry_size + 16]
+            self.assertIn(0, raw_name, "mmap asset names require a terminating NUL byte")
+            names.append(raw_name.split(b"\0", 1)[0].decode("ascii"))
+        self.assertIn("talk_base.eaf", names)
+        self.assertNotIn("talk_neutral.eaf", names)
 
     def test_lab_variant_uses_isolated_partition_and_player_dependency(self):
         config = json.loads((BOARD / "config.json").read_text(encoding="utf-8"))
@@ -166,11 +175,13 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertIn("BOARD_TYPE_HENSUN_CAM_PILOT_V1", kconfig)
         self.assertIn("config USE_EMOTE_MESSAGE_STYLE", kconfig)
 
-    def test_camera_remains_initialized_and_lab_assets_flash_with_build(self):
+    def test_camera_is_available_on_demand_and_lab_assets_flash_with_build(self):
         board = (BOARD / "hensun_cam_pilot_v1_board.cc").read_text(encoding="utf-8")
         cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn("InitializeCamera();", board)
-        self.assertIn("new Esp32Camera", board)
+        self.assertIn("class HensunLazyCamera final : public Camera", board)
+        self.assertIn("std::make_unique<Esp32Camera>(config_)", board)
+        self.assertIn("return EnsureCamera() && camera_->Capture();", board)
         self.assertIn("spiffs_create_partition_assets", cmake)
         self.assertIn("hensun_emote_lab_v1.bin", cmake)
         self.assertIn("FLASH_IN_PROJECT", cmake)

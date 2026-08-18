@@ -1,0 +1,118 @@
+{
+  "asset_set": "hensun-dialogue-faces-v1",
+  "source_spec": "source/hensun_dialogue_face_spec.json",
+  "source_spec_sha256": "bb5167325d97437714f31314cd82fce58f0fd66df0080787a5c638ffa21c0a50",
+  "canvas": {
+    "width": 320,
+    "height": 240,
+    "fps": 20
+  },
+  "palette": {
+    "background": "#000000",
+    "face": "#F7F7F2"
+  },
+  "mouth": {
+    "center": [
+      160,
+      170
+    ],
+    "poses": [
+      "closed",
+      "light",
+      "narrow",
+      "round",
+      "wide"
+    ],
+    "rule": "eye-led expression with a single-stroke or filled micro-mouth; never paired equal-length outlines",
+    "max_rendered_width": 48,
+    "max_rendered_height": 18
+  },
+  "expressions": {
+    "neutral": {
+      "file": "gifs/talk_neutral_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "1fb00c2464aebc71fdc51886cba9a5c1f267c802e6dc35bb564448bf7607462c"
+    },
+    "happy": {
+      "file": "gifs/talk_happy_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "5291430090f702c113a7c3dcd6575f3305ed395a127921eef0b1ad828e9dbcf8"
+    },
+    "laughing": {
+      "file": "gifs/talk_laughing_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "e1bc067a7a6ebd1e71ebecc01f2f651c5a3c5127a3bfefc1b2e3f4d152f38056"
+    },
+    "caring": {
+      "file": "gifs/talk_caring_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "b034efa76a35386dbb5e215d3a6c5f53ecceb13e64b8da29d276d48c516db935"
+    },
+    "affectionate": {
+      "file": "gifs/talk_affectionate_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "0e8acbffc03074b2b85e3788581f4aaa42b3e508af4c3ffa73691949770b746c"
+    },
+    "curious": {
+      "file": "gifs/talk_curious_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "0dc14cf7235c266b1ea620840cca2b0bbccf4d2831ccea37e7c2d3af716f4ee5"
+    },
+    "surprised": {
+      "file": "gifs/talk_surprised_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "947580e1965c1a0de97329b060a03ec264da8df1d5a502557058d18027d01690"
+    },
+    "confused": {
+      "file": "gifs/talk_confused_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "717cabb8c466d4943ec25c9d46aa7bfe5e8b3c3ea3a9377e2a0b7ffd59de5728"
+    },
+    "concerned": {
+      "file": "gifs/talk_concerned_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "425722a1f14d04d31bf47fe9fa964ee7a2a076a005bf9b10421f47095ebcb972"
+    },
+    "apologetic": {
+      "file": "gifs/talk_apologetic_preview.gif",
+      "frames": 32,
+      "loop_start_frame": 6,
+      "loop_end_frame": 26,
+      "sha256": "7ab422dc4bc40d13299f517fed3dc3df84272dce79826e1ba2a92e28e9ef69d7"
+    }
+  },
+  "contact_sheet": {
+    "file": "hensun_dialogue_faces_contact_sheet.png",
+    "sha256": "499637d0f54fef882d374459a69eef5766e25fddc488c588e60faa4148ae6761"
+  },
+  "motion_preview": {
+    "file": "hensun_dialogue_faces_motion_preview.gif",
+    "sha256": "ebc1d1edefc0d3591caaf16a23a07edf18fa454ecc2870dbad872b3505dcc75c"
+  },
+  "speaking_preview": {
+    "file": "hensun_speaking_runtime_preview.gif",
+    "sha256": "fdef92bab6c2145032a6ce66b301bca0abb34795dbb00fa28ca5d833c215482d"
+  },
+  "mouth_sheet": {
+    "file": "hensun_natural_mouth_5pose.png",
+    "sha256": "b9399fe81fdbff3fd4e4c717f9fc8d74453c57a7ad737adb6f72199af7f7bfca"
+  }
+}
