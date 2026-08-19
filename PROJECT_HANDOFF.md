@@ -4,7 +4,7 @@
 > 当前阶段：单台本地金样机稳定性收口  
 > 当前工作目录：`E:\HENSUN_STABILITY_WT`  
 > 当前分支：`feature/hensun-stability-quality`  
-> 当前实现基线：请用 `git log -1 --oneline` 复核。实时 ASR 已改为 Manual 模式；真机仍运行 10:56 金样机，尚未刷入当前本地构建
+> 当前实现基线：请用 `git log -1 --oneline` 复核。实时 ASR 已改为 Manual 模式；用户授权后已把当前本地应用和表情刷入真机，串口冒烟通过，30 轮口测尚未做
 
 本文是换账号、换 Agent 后继续开发时的单文件入口。它只保留有效背景、当前事实、不可擅改的决定和下一步，不包含闲聊、密钥或已被后续决定推翻的方案。
 
@@ -248,7 +248,7 @@ ESP32-S3 CAM 设备
 - 尚未完成 2 小时连续对话运行。
 - 尚未完成 8 小时待机与 TFT 冻结检查。
 - 尚未形成最终验收报告，包括唤醒、STT、首段音频、drained、丢包、重连、内存和看门狗证据。
-- 真机仍运行 10:56 金样机应用，不是当前本地构建。
+- 用户已口头授权。2026-08-19 已把当前本地应用 `0x20000` 和表情 `0xB00000` 刷入这台 ESP32-S3；`verify-flash` 两个分区 digest matched。串口确认 SKU `hensun-cam-selfhosted-landscape-local-v1`、`emote_gen` 挂载、Wi-Fi 有 IP、Bootstrap 指向本机 `192.168.5.49:8000`、`ni hao xiao can` / MultiNet 已加载。未做用户在场口测，不能标记金样机已稳定。
 - 本地 GitHub Actions 已覆盖 landscape 金样机变体和 `test_hensun_dialogue_faces.py`；远端 CI 要等用户明确要求推送后才会运行。
 
 ### 已规划但当前不要做
@@ -265,20 +265,20 @@ ESP32-S3 CAM 设备
 
 ## 7. 下一步最应该做什么
 
-未得到用户明确口头授权前：不要刷 Flash、不要开始 30 轮口测、不要恢复 Staging 或正式域。下面只是授权后的清单，不是现在就要做。
+刷机授权已执行。下一步必须用户在场：先说两次「你好小灿」冒烟，再按矩阵做 30 轮口测；不要恢复 Staging 或正式域。不要把串口冒烟写成金样机已稳定。
 
-### 授权后第一件事：刷入当前代码固件并做真机验收
+### 已完成：刷入当前本地应用和表情
 
-当前工作树已有本地固件构建，但仍不要自动刷机。授权后先重新确认 COM 口，只写应用 `0x20000` 和表情 `0xB00000`。
-
-当前未刷入构建：
+2026-08-19 用户说「可以刷」后，只写了应用 `0x20000` 和表情 `0xB00000`，未擦 NVS / Wi-Fi / 身份 / 分区表 / 语音模型。
 
 - 固件名：`hensun-cam-selfhosted-landscape-local-v1`
-- `xiaozhi.bin` SHA256 `C53A6A51ACEF8CBDDFA3EA0F3ADA8EA3D98B8F372270BB7FAEF4157A14E115B6`，2699312 / 4128768 字节
-- `emote_gen.bin` 仍为金样机哈希 `4A0E2C6B1A42B620BF615FD99ED2F86EB6C0BB3146482E07C4844126A7D5AF85`，2837200 / 5242880 字节
-- 真机仍运行 10:56 金样机 `45A4F6FFB20BCE4304E547D280D3B92C7CEF4A94E33713D48DCCE75A73FC6192`
+- 已写入 `xiaozhi.bin` SHA256 `C53A6A51ACEF8CBDDFA3EA0F3ADA8EA3D98B8F372270BB7FAEF4157A14E115B6`，2699312 字节
+- 已写入 `emote_gen.bin` SHA256 `4A0E2C6B1A42B620BF615FD99ED2F86EB6C0BB3146482E07C4844126A7D5AF85`，2837200 字节
+- `verify-flash`：两个分区都是 Verification successful (digest matched)
+- 10:56 金样机备份 `45A4F6FF...` 仍留在 `run/backups/golden-local-face-20260818`，需要时只恢复这两个分区
+- 刷机后发现本机三进程已退出，且 `127.0.0.1:8000` 被无关项目占用；按命令行确认后结束该进程，并重新拉起 hensun 控制面/网关/前端。`8000/8001/3000` 健康检查 200
 
-### 授权后第二件事：完成真机验收
+### 下一步：用户在场完成真机验收
 
 按固定矩阵完成：
 
