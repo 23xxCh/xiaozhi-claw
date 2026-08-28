@@ -14,11 +14,16 @@ from backend.realtime.providers import (
     QwenRealtimeTtsSession,
     RealtimeProviderError,
 )
-from backend.realtime.session import SentenceBuffer, sanitize_spoken_text
+from backend.realtime.session import (
+    SentenceBuffer,
+    is_non_speech_filler,
+    is_too_short_for_followup,
+    sanitize_spoken_text,
+)
 
 
 @pytest.mark.asyncio
-async def test_deepseek_streaming_request_includes_selected_temperature(monkeypatch) -> None:
+async def test_deepseek_streaming_request_uses_fast_non_thinking_mode(monkeypatch) -> None:
     captured: dict[str, object] = {}
     original_client = httpx.AsyncClient
 
@@ -56,6 +61,7 @@ async def test_deepseek_streaming_request_includes_selected_temperature(monkeypa
 
     assert chunks == ["好"]
     assert captured["temperature"] == 0.35
+    assert captured["thinking"] == {"type": "disabled"}
 
 
 class _FakeRealtimeSocket:
@@ -98,9 +104,11 @@ class _PlaybackSensitiveRealtimeSocket(_FakeRealtimeSocket):
 @pytest.mark.asyncio
 async def test_qwen_realtime_tts_session_includes_selected_speech_rate(monkeypatch) -> None:
     socket = _FakeRealtimeSocket()
+    connect_kwargs: dict[str, object] = {}
 
     async def fake_connect(*args, **kwargs):
-        del args, kwargs
+        del args
+        connect_kwargs.update(kwargs)
         return socket
 
     monkeypatch.setattr(realtime_providers, "connect", fake_connect)
@@ -117,6 +125,7 @@ async def test_qwen_realtime_tts_session_includes_selected_speech_rate(monkeypat
     assert update["type"] == "session.update"
     assert update["session"]["voice"] == "Cherry"
     assert update["session"]["speech_rate"] == 1.2
+    assert connect_kwargs["proxy"] is None
 
 
 @pytest.mark.asyncio
@@ -184,6 +193,22 @@ def test_sanitize_spoken_text_removes_non_speech_markup() -> None:
     )
 
 
+@pytest.mark.parametrize("text", ["嗯", "嗯。", " 嗯嗯 ", "呃……", "哦！", "嗯啊呃"])
+def test_short_asr_fillers_are_treated_as_non_speech(text: str) -> None:
+    assert is_non_speech_filler(text) is True
+
+
+@pytest.mark.parametrize("text", ["嗯好的", "啊为什么", "哦我知道了", "几点"])
+def test_meaningful_short_transcripts_are_not_treated_as_non_speech(text: str) -> None:
+    assert is_non_speech_filler(text) is False
+
+
+def test_followup_duration_rejects_observed_noise_pulses() -> None:
+    assert is_too_short_for_followup(780) is True
+    assert is_too_short_for_followup(899) is True
+    assert is_too_short_for_followup(900) is False
+
+
 @pytest.mark.asyncio
 async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_manual_turn_detection(
     monkeypatch,
@@ -199,9 +224,11 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_manual_turn_detection(
             {"type": "session.finished"},
         ]
     )
+    connect_kwargs: dict[str, object] = {}
 
     async def fake_connect(*args, **kwargs):
-        del args, kwargs
+        del args
+        connect_kwargs.update(kwargs)
         return socket
 
     monkeypatch.setattr(realtime_providers, "connect", fake_connect)
@@ -229,6 +256,7 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_manual_turn_detection(
     ]
     assert result.text == "你好，小智"
     assert result.emotion == "happy"
+    assert connect_kwargs["proxy"] is None
 
 
 @pytest.mark.asyncio

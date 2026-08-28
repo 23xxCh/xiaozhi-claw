@@ -8,6 +8,7 @@ from backend.app.config import get_settings
 from backend.app.db import Base, create_engine, create_session_factory
 from backend.app.device_connections import DeviceConnectionManager
 from backend.app.pricing import backfill_unpriced_provider_usage
+from backend.app.provider_network import install_provider_host_overrides
 from backend.app.providers import create_fallback_providers
 from backend.app.routers import device_ws, health
 from backend.app.runtime_state import RuntimeStateReaper, reconcile_stale_runtime_state
@@ -16,6 +17,7 @@ from .commands import DeviceCommandDispatcher
 from .providers import create_realtime_providers
 
 settings = get_settings()
+install_provider_host_overrides(settings.provider_host_overrides)
 
 
 @asynccontextmanager

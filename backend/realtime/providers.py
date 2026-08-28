@@ -140,6 +140,7 @@ class QwenRealtimeAsrSession:
         )
         websocket = await connect(
             url,
+            proxy=None,
             additional_headers={
                 "Authorization": f"Bearer {settings.asr_api_key}",
                 "OpenAI-Beta": "realtime=v1",
@@ -289,6 +290,10 @@ class DeepSeekStreamingLlmProvider:
                 "messages": messages,
                 "temperature": temperature,
                 "stream": True,
+                # Voice turns are short and latency-sensitive. DeepSeek V4
+                # enables thinking by default, which can add several seconds
+                # before the first audible sentence for simple questions.
+                "thinking": {"type": "disabled"},
             }
             if tools:
                 request["tools"] = tools
@@ -395,6 +400,7 @@ class QwenRealtimeTtsSession:
         )
         websocket = await connect(
             url,
+            proxy=None,
             additional_headers={
                 "Authorization": f"Bearer {settings.tts_api_key}",
                 "OpenAI-Beta": "realtime=v1",

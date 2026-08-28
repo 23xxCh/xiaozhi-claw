@@ -1,3 +1,4 @@
+import time
 from collections.abc import AsyncIterator
 
 import pytest
@@ -60,6 +61,42 @@ class MultiFrameRealtimeProviders:
     ) -> MultiFrameTtsSession:
         del voice, speech_rate
         return MultiFrameTtsSession()
+
+
+class HistoryCapturingLlm(FixedStreamingLlm):
+    def __init__(self) -> None:
+        self.histories: list[list[dict[str, str]]] = []
+
+    async def reply_stream(
+        self,
+        transcript: str,
+        history: list[dict[str, str]],
+        memories: list[str],
+        *,
+        system_prompt: str,
+        model: str,
+        temperature: float,
+    ) -> AsyncIterator[str]:
+        del transcript, memories, system_prompt, model, temperature
+        self.histories.append([dict(message) for message in history])
+        yield "多轮回复。"
+
+
+class MultiTurnProviders(MultiFrameRealtimeProviders):
+    def __init__(self) -> None:
+        self.llm = HistoryCapturingLlm()
+
+    async def open_tts(
+        self, voice: str, speech_rate: float = 1.0
+    ) -> MultiFrameTtsSession:
+        del voice, speech_rate
+
+        class SingleFrameTtsSession(MultiFrameTtsSession):
+            async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+                del text
+                yield b"opus-frame"
+
+        return SingleFrameTtsSession()
 
 
 class ServerEndpointAsrSession(FixedAsrSession):
@@ -216,6 +253,33 @@ def test_device_receives_each_streamed_audio_frame(
         )
 
 
+def test_same_websocket_accepts_a_followup_turn_with_history(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    providers = MultiTurnProviders()
+    client.app.state.realtime_providers = providers
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-MULTI-TURN")
+
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+
+        for payload in (b"first-turn", b"second-turn"):
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.send_bytes(payload)
+            websocket.send_json({"type": "listen", "state": "stop"})
+            _receive_mock_turn(websocket)
+            # A real Hensun waits for its post-playback guard before opening
+            # the microphone; allow the acknowledged turn task to settle too.
+            time.sleep(0.05)
+
+    assert providers.llm.histories[0] == []
+    assert providers.llm.histories[1] == [
+        {"role": "user", "content": "测试多帧语音"},
+        {"role": "assistant", "content": "多轮回复。"},
+    ]
+
+
 def test_server_vad_finishes_turn_without_device_listen_stop(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
@@ -332,4 +396,3 @@ def test_xiaocan_shut_up_closes_websocket_after_goodbye(
             websocket.send_json({"type": "listen", "state": "start"})
             websocket.receive_json()
         assert excinfo.value.code == 1000
-

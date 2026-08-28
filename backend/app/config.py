@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     memory_master_key: str = "development-memory-key-change-me"
     provider_mode: Literal["mock", "custom"] = "mock"
     provider_timeout_seconds: float = 30
+    provider_host_overrides: str = ""
     ffmpeg_path: str = "ffmpeg"
 
     asr_protocol: Literal["openai-transcriptions", "qwen-chat-completions"] = (

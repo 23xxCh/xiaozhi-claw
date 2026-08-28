@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 MAX_UTTERANCE_BYTES = 1024 * 1024
 MAX_SPOKEN_SEGMENTS = 2
 MAX_SPOKEN_CHARS = 60
+MIN_FOLLOWUP_UTTERANCE_MS = 900
 
 
 _SPOKEN_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
@@ -71,6 +72,9 @@ _SPOKEN_FACE_CONTROL_RE = re.compile(r"\[\[face:[^\]\r\n]*(?:\]\]|\])?", re.IGNO
 _SPOKEN_STAGE_DIRECTION_RE = re.compile(
     r"[（(][^）)]{0,24}(?:点头|微笑|叹气|沉默|转身|看着|轻轻|笑)[^）)]{0,24}[）)]"
 )
+_LEADING_WAKE_NAME_RE = re.compile(r"^(?:你好小灿|小灿)[，,\s]*")
+_NON_SPEECH_FILLER_STRIP_RE = re.compile(r"[\s，。！？!?、…,.~～]+")
+_NON_SPEECH_FILLER_CHARS = frozenset("嗯啊呃额唔哼哦")
 
 
 def sanitize_spoken_text(text: str) -> str:
@@ -82,6 +86,19 @@ def sanitize_spoken_text(text: str) -> str:
     text = re.sub(r"[*_#>`~]", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text.strip(" ，,：:")
+
+
+def is_non_speech_filler(text: str) -> bool:
+    """Identify short ASR filler hallucinations that must not start an AI turn."""
+    normalized = _NON_SPEECH_FILLER_STRIP_RE.sub("", text)
+    return bool(normalized) and len(normalized) <= 6 and all(
+        character in _NON_SPEECH_FILLER_CHARS for character in normalized
+    )
+
+
+def is_too_short_for_followup(audio_duration_ms: int) -> bool:
+    """Reject the sub-second VAD pulses observed from the open pilot enclosure."""
+    return audio_duration_ms < MIN_FOLLOWUP_UTTERANCE_MS
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,25 @@ class AgentSnapshot:
     llm_input_cost_micros_per_million_tokens: int
     llm_output_cost_micros_per_million_tokens: int
     tts_cost_micros_per_10k_chars: int
+
+
+class _UnavailableRealtimeAsrSession:
+    """Keep the device turn alive until bounded batch ASR can use its buffered audio."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def send_audio(self, frame: bytes) -> None:
+        del frame
+
+    def endpoint_detected(self) -> bool:
+        return False
+
+    async def finish(self) -> TranscriptionResult:
+        raise self._error
+
+    async def cancel(self) -> None:
+        return None
 
 
 class SentenceBuffer:
@@ -315,6 +351,27 @@ async def _send_error(websocket: WebSocket, serial: str, code: str, message: str
     )
     if not delivered:
         logger.info("device %s disconnected before error %s was delivered", serial, code)
+
+
+async def _send_turn_error_and_reset(
+    websocket: WebSocket,
+    serial: str,
+    playback: PlaybackHandshake,
+    turn_id: str,
+    code: str,
+    message: str,
+) -> None:
+    """End a failed turn through the same handshake as a zero-audio reply."""
+    await _send_error(websocket, serial, code, message)
+    reply_id = await _start_playback(websocket, serial, playback, turn_id)
+    await _stop_playback(
+        websocket,
+        serial,
+        playback,
+        reply_id,
+        turn_id,
+        wait_for_drain=True,
+    )
 
 
 async def _heartbeat(
@@ -552,6 +609,7 @@ async def _process_turn(
     turn_started: float,
     playback: PlaybackHandshake,
     mcp_client: DeviceMcpClient | None = None,
+    strip_wake_name: bool = False,
 ) -> bool:
     providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
     fallback: ProviderBundle | None = websocket.app.state.fallback_providers
@@ -600,9 +658,11 @@ async def _process_turn(
             with contextlib.suppress(Exception):
                 await asr.cancel()
             if fallback is None:
-                await _send_error(
+                await _send_turn_error_and_reset(
                     websocket,
                     serial,
+                    playback,
+                    turn_id,
                     "asr-realtime-invalid",
                     "realtime speech recognition is unavailable",
                 )
@@ -623,9 +683,11 @@ async def _process_turn(
                     serial,
                     fallback_error_code,
                 )
-                await _send_error(
+                await _send_turn_error_and_reset(
                     websocket,
                     serial,
+                    playback,
+                    turn_id,
                     "asr-fallback-failed",
                     "speech recognition is temporarily unavailable",
                 )
@@ -634,8 +696,38 @@ async def _process_turn(
             transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
         asr_latency_ms = int((time.perf_counter() - asr_started) * 1000)
         transcript = transcription.text.strip()
+        if strip_wake_name:
+            transcript = _LEADING_WAKE_NAME_RE.sub("", transcript, count=1).strip()
         if not transcript:
-            await _send_error(websocket, serial, "asr-no-speech", "no speech was recognized")
+            await _send_turn_error_and_reset(
+                websocket,
+                serial,
+                playback,
+                turn_id,
+                "asr-no-speech",
+                "no speech was recognized",
+            )
+            return False
+        is_short_followup = (
+            bool(history)
+            and not providers.mock
+            and is_too_short_for_followup(audio_duration_ms)
+        )
+        if is_non_speech_filler(transcript) or is_short_followup:
+            # Realtime ASR can hallucinate a one-character filler from room
+            # noise during the follow-up window. Complete an empty playback
+            # handshake so the device returns to listening without invoking
+            # the LLM/TTS or displaying an error face.
+            logger.info("discarded ASR non-speech filler serial=%s code=asr-no-speech", serial)
+            silent_reply_id = await _start_playback(websocket, serial, playback, turn_id)
+            await _stop_playback(
+                websocket,
+                serial,
+                playback,
+                silent_reply_id,
+                turn_id,
+                wait_for_drain=True,
+            )
             return False
         await websocket.app.state.device_connections.send_json(
             serial,
@@ -650,7 +742,14 @@ async def _process_turn(
         async with websocket.app.state.session_factory() as session:
             quota = await quota_for_user(session, user_id, websocket.app.state.settings)
         if quota.remaining <= 0:
-            await _send_error(websocket, serial, "quota-exhausted", "monthly voice quota exhausted")
+            await _send_turn_error_and_reset(
+                websocket,
+                serial,
+                playback,
+                turn_id,
+                "quota-exhausted",
+                "monthly voice quota exhausted",
+            )
             return False
 
         safety = evaluate_text(transcript)
@@ -802,7 +901,14 @@ async def _process_turn(
                 await speak(trailing)
 
         if not tts_started or not reply_parts:
-            await _send_error(websocket, serial, "empty-reply", "AI returned an empty response")
+            await _send_turn_error_and_reset(
+                websocket,
+                serial,
+                playback,
+                turn_id,
+                "empty-reply",
+                "AI returned an empty response",
+            )
             return False
 
         if tts is not None:
@@ -853,7 +959,17 @@ async def _process_turn(
         raise
     except Exception:
         logger.exception("voice turn failed for device %s", serial)
-        await _send_error(websocket, serial, "ai-unavailable", "AI response unavailable")
+        if tts_started:
+            await _send_error(websocket, serial, "ai-unavailable", "AI response unavailable")
+        else:
+            await _send_turn_error_and_reset(
+                websocket,
+                serial,
+                playback,
+                turn_id,
+                "ai-unavailable",
+                "AI response unavailable",
+            )
         return False
     finally:
         if tts_started and reply_id is not None:
@@ -1009,6 +1125,13 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     authorization = websocket.headers.get("authorization", "")
     secret = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     session_factory: async_sessionmaker[AsyncSession] = websocket.app.state.session_factory
+    client = getattr(websocket, "client", None)
+    logger.info(
+        "device websocket connect attempt serial=%s client=%s has_auth=%s",
+        serial,
+        client,
+        bool(secret),
+    )
 
     async with session_factory() as session:
         device = await session.scalar(select(Device).where(Device.serial_number == serial))
@@ -1017,9 +1140,23 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         )
         valid_token = verify_device_session_token(secret, serial, settings)
         if device is None or not (valid_secret or valid_token):
+            logger.warning(
+                "device websocket rejected serial=%s device_found=%s "
+                "valid_secret=%s valid_token=%s",
+                serial,
+                device is not None,
+                valid_secret,
+                valid_token,
+            )
             await websocket.close(code=4401, reason="invalid device credential")
             return
         if device.lifecycle != DeviceLifecycle.OWNED.value or not device.owner_user_id:
+            logger.warning(
+                "device websocket rejected inactive serial=%s lifecycle=%s owner=%s",
+                serial,
+                device.lifecycle,
+                bool(device.owner_user_id),
+            )
             await websocket.close(code=4403, reason="device is not active and owned")
             return
         snapshot = await _load_snapshot(session, device, settings)
@@ -1047,6 +1184,12 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         device_session_id = device_session.id
 
     await websocket.accept()
+    logger.info(
+        "device websocket accepted serial=%s connection_id=%s auth=%s",
+        serial,
+        connection_id,
+        "token" if valid_token else "secret",
+    )
     await websocket.app.state.device_connections.connect(serial, websocket, connection_id)
     heartbeat_stop = asyncio.Event()
     heartbeat_task = asyncio.create_task(
@@ -1065,13 +1208,28 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     playback = PlaybackHandshake()
     mcp_client: DeviceMcpClient | None = None
     mcp_initialize_task: asyncio.Task[None] | None = None
+    # A warm device WebSocket can span multiple sleep/wake sessions. Only a
+    # real local wake arms prefix removal for the immediately following turn.
+    first_turn_pending = False
 
     def asr_endpoint_detected(asr: RealtimeAsrSession) -> bool:
         detector = getattr(asr, "endpoint_detected", None)
         return bool(detector and detector())
 
+    async def open_asr_for_turn() -> RealtimeAsrSession:
+        try:
+            return await websocket.app.state.realtime_providers.open_asr()
+        except Exception as exc:
+            logger.warning(
+                "realtime ASR open failed for %s with %s; buffering for batch fallback",
+                serial,
+                type(exc).__name__,
+            )
+            return _UnavailableRealtimeAsrSession(exc)
+
     def start_active_turn() -> bool:
         nonlocal active_asr, active_task, audio_bytes, audio_frames, audio_buffer
+        nonlocal first_turn_pending
         if active_asr is None or audio_bytes == 0:
             return False
         turn_asr = active_asr
@@ -1082,6 +1240,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         audio_frames = 0
         audio_buffer.clear()
         turn_id = str(uuid.uuid4())
+        strip_wake_name = first_turn_pending
+        first_turn_pending = False
         active_task = asyncio.create_task(
             _process_turn(
                 websocket,
@@ -1098,6 +1258,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 time.perf_counter(),
                 playback,
                 mcp_client,
+                strip_wake_name=strip_wake_name,
             )
         )
         return True
@@ -1106,9 +1267,18 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         while True:
             incoming = await websocket.receive()
             if incoming.get("type") == "websocket.disconnect":
+                logger.info(
+                    "device websocket disconnect frame serial=%s payload=%s", serial, incoming
+                )
                 break
             chunk = incoming.get("bytes")
             if chunk is not None:
+                if audio_frames == 0:
+                    logger.info(
+                        "device websocket first audio frame serial=%s bytes=%d",
+                        serial,
+                        len(chunk),
+                    )
                 # A server-VAD endpoint may arrive while the ESP32's local VAD
                 # is still stuck in speech. Ignore its trailing frames once the
                 # turn has moved to ASR/LLM/TTS processing.
@@ -1118,7 +1288,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     logger.warning(
                         "audio arrived before listen.start for %s; opening ASR implicitly", serial
                     )
-                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    active_asr = await open_asr_for_turn()
                     audio_bytes = 0
                     audio_frames = 0
                     audio_buffer.clear()
@@ -1145,7 +1315,18 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         "utterance exceeds the configured frame limit",
                     )
                     continue
-                await active_asr.send_audio(chunk)
+                try:
+                    await active_asr.send_audio(chunk)
+                except Exception as exc:
+                    with contextlib.suppress(Exception):
+                        await active_asr.cancel()
+                    logger.warning(
+                        "realtime ASR audio send failed for %s with %s; "
+                        "buffering for batch fallback",
+                        serial,
+                        type(exc).__name__,
+                    )
+                    active_asr = _UnavailableRealtimeAsrSession(exc)
                 audio_bytes += len(chunk)
                 audio_frames += 1
                 audio_buffer.append(bytes(chunk))
@@ -1162,6 +1343,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 await _send_error(websocket, serial, "invalid-json", "control message must be JSON")
                 continue
             message_type = message.get("type")
+            logger.info("device websocket text serial=%s type=%s", serial, message_type)
             if message_type == "hello":
                 await websocket.app.state.device_connections.send_json(
                     serial,
@@ -1185,7 +1367,22 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     mcp_client = DeviceMcpClient(serial, websocket.app.state.device_connections)
                     mcp_initialize_task = asyncio.create_task(mcp_client.initialize())
                 continue
+            if message_type == "ping":
+                sequence = message.get("sequence")
+                if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+                    await _send_error(
+                        websocket,
+                        serial,
+                        "invalid-heartbeat",
+                        "heartbeat sequence must be a non-negative integer",
+                    )
+                    continue
+                await websocket.app.state.device_connections.send_json(
+                    serial, {"type": "pong", "sequence": sequence}
+                )
+                continue
             if message_type == "abort":
+                first_turn_pending = False
                 if active_asr is not None:
                     await active_asr.cancel()
                     active_asr = None
@@ -1200,9 +1397,10 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 await websocket.app.state.device_connections.send_json(
                     serial, {"type": "system", "state": "aborted"}
                 )
-                await websocket.app.state.device_connections.send_json(
-                    serial, {"type": "llm", "emotion": "interrupted"}
-                )
+                if str(message.get("reason") or "") != "idle_timeout":
+                    await websocket.app.state.device_connections.send_json(
+                        serial, {"type": "llm", "emotion": "interrupted"}
+                    )
                 continue
             if message_type == "tts":
                 state = str(message.get("state") or "")
@@ -1227,6 +1425,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 continue
             state = message.get("state")
             if state == "detect":
+                first_turn_pending = True
                 continue
             if state == "start":
                 if active_task is not None and not active_task.done():
@@ -1312,7 +1511,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 # already opens an implicit ASR session for that race; preserve
                 # it here instead of discarding the beginning of the utterance.
                 if active_asr is None:
-                    active_asr = await websocket.app.state.realtime_providers.open_asr()
+                    active_asr = await open_asr_for_turn()
                     audio_bytes = 0
                     audio_frames = 0
                     audio_buffer.clear()
@@ -1342,9 +1541,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     },
                 )
     except WebSocketDisconnect:
-        pass
+        logger.info("device websocket disconnected serial=%s", serial)
     except asyncio.CancelledError:
         cancelled = True
+    except Exception:
+        logger.exception("device websocket failed serial=%s", serial)
     finally:
         if active_asr is not None:
             await active_asr.cancel()

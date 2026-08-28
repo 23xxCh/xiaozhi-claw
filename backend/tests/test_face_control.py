@@ -86,6 +86,8 @@ def test_all_supported_conversation_emotions_are_accepted() -> None:
         "confused",
         "concerned",
         "apologetic",
+        "shy",
+        "sad",
     }
 
     for emotion in supported:

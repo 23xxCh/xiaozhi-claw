@@ -94,6 +94,11 @@ class EmptyAsr(ImmediateAsr):
         return TranscriptionResult("", "neutral")
 
 
+class FillerAsr(ImmediateAsr):
+    async def finish(self) -> TranscriptionResult:
+        return TranscriptionResult("嗯。", "neutral")
+
+
 class SlowLlm:
     async def reply_stream(
         self,
@@ -150,9 +155,27 @@ class FallbackExerciseProviders:
         return self.Tts()
 
 
+class OpenFailingAsrProviders(FallbackExerciseProviders):
+    async def open_asr(self) -> FailingAsr:
+        raise ConnectionResetError("realtime ASR handshake reset")
+
+
 class EmptyTranscriptProviders(FallbackExerciseProviders):
     async def open_asr(self) -> EmptyAsr:
         return EmptyAsr()
+
+
+class FillerTranscriptProviders(FallbackExerciseProviders):
+    class ForbiddenLlm:
+        async def reply_stream(self, *args, **kwargs) -> AsyncIterator[str]:
+            del args, kwargs
+            raise AssertionError("ASR filler must not reach the LLM")
+            yield "unreachable"
+
+    llm = ForbiddenLlm()
+
+    async def open_asr(self) -> FillerAsr:
+        return FillerAsr()
 
 
 class FailingFallbackProviders:
@@ -162,6 +185,30 @@ class FailingFallbackProviders:
             raise TimeoutError("batch ASR unavailable")
 
     speech = Speech()
+
+
+def acknowledge_silent_turn_reset(websocket) -> None:
+    start = websocket.receive_json()
+    assert start["type"] == "tts"
+    assert start["state"] == "start"
+    websocket.send_json(
+        {
+            "type": "tts",
+            "state": "ready",
+            "turn_id": start["turn_id"],
+            "reply_id": start["reply_id"],
+        }
+    )
+    stop = websocket.receive_json()
+    assert stop == {**start, "state": "stop"}
+    websocket.send_json(
+        {
+            "type": "tts",
+            "state": "drained",
+            "turn_id": start["turn_id"],
+            "reply_id": start["reply_id"],
+        }
+    )
 
 
 def test_abort_cancels_an_inflight_llm_turn(
@@ -223,6 +270,28 @@ def test_realtime_asr_failure_uses_bounded_batch_fallback(
     assert usage.error_code == "fallback-batch"
 
 
+def test_realtime_asr_open_failure_keeps_device_connected_and_uses_batch_fallback(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = OpenFailingAsrProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-ASR-OPEN-FAILED")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes("建连失败备用识别".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+
+        stt = websocket.receive_json()
+        assert stt["type"] == "stt"
+        assert stt["text"] == "建连失败备用识别"
+
+
 def test_empty_transcript_is_reported_as_no_speech(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
@@ -238,9 +307,48 @@ def test_empty_transcript_is_reported_as_no_speech(
         websocket.send_bytes(b"silence")
         websocket.send_json({"type": "listen", "state": "stop"})
         error = websocket.receive_json()
+        acknowledge_silent_turn_reset(websocket)
 
     assert error["type"] == "error"
     assert error["code"] == "asr-no-speech"
+
+
+def test_asr_filler_silently_returns_device_to_followup_listening(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = FillerTranscriptProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-ASR-FILLER")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"room-noise")
+        websocket.send_json({"type": "listen", "state": "stop"})
+
+        start = websocket.receive_json()
+        assert start["type"] == "tts"
+        assert start["state"] == "start"
+        websocket.send_json(
+            {
+                "type": "tts",
+                "state": "ready",
+                "turn_id": start["turn_id"],
+                "reply_id": start["reply_id"],
+            }
+        )
+        stop = websocket.receive_json()
+        assert stop == {**start, "state": "stop"}
+        websocket.send_json(
+            {
+                "type": "tts",
+                "state": "drained",
+                "turn_id": start["turn_id"],
+                "reply_id": start["reply_id"],
+            }
+        )
 
 
 def test_realtime_and_batch_asr_failure_returns_stable_error(
@@ -259,6 +367,7 @@ def test_realtime_and_batch_asr_failure_returns_stable_error(
         websocket.send_bytes(b"audio")
         websocket.send_json({"type": "listen", "state": "stop"})
         error = websocket.receive_json()
+        acknowledge_silent_turn_reset(websocket)
 
     assert error["type"] == "error"
     assert error["code"] == "asr-fallback-failed"
@@ -280,6 +389,7 @@ def test_realtime_asr_failure_without_fallback_returns_stable_error(
         websocket.send_bytes(b"audio")
         websocket.send_json({"type": "listen", "state": "stop"})
         error = websocket.receive_json()
+        acknowledge_silent_turn_reset(websocket)
 
     assert error["type"] == "error"
     assert error["code"] == "asr-realtime-invalid"
