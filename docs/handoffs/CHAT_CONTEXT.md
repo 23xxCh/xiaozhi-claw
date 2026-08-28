@@ -96,7 +96,7 @@ Qwen ASR 的情绪描述的是“用户说话时的情绪”，不是机器人�
 
 ```text
 sleep → wake → listening → recognizing → thinking
-→ speaking → settling(约800ms) → listening(10s) → sleep
+→ speaking → settling(约800ms) → echo guard → listening(10s) → sleep
 ```
 
 - “你好小灿”负责本地唤醒。
@@ -104,7 +104,7 @@ sleep → wake → listening → recognizing → thinking
 - “小灿闭嘴”是服务端退出意图。
 - 软睡眠保留 Wi-Fi、本地唤醒和 BOOT，不进入深睡眠。
 
-曾使用 3 秒继续聆听，用户反馈还没来得及说话就睡了；当前本地金样机采用 10 秒。
+当前本地横屏金样机采用一次唤醒后的 10 秒自然续聊。ESP32-S3 CAM 为半双工，播放期间不开麦；播放排空后先经过余响保护，再真正启动麦克风和 10 秒计时。短于 900ms 的续聊脉冲以及仅含“嗯、啊、呃”等语气词的 ASR 结果不进入 LLM/TTS，避免幽灵轮次。10 秒无人讲话时只切换睡眠表情，不朗读休眠文案。
 
 ## 9. 嘴型与表情连贯性迭代
 

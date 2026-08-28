@@ -1,6 +1,6 @@
 # Hensun Desk 项目交接说明
 
-> 状态核对时间：2026-08-19（Asia/Hong_Kong）  
+> 状态核对时间：2026-08-28（Asia/Hong_Kong）
 > 当前阶段：单台本地金样机稳定性收口  
 > 当前工作目录：`E:\HENSUN_STABILITY_WT`  
 > 当前分支：`feature/hensun-stability-quality`  
@@ -37,8 +37,8 @@ ESP32-S3 CAM 设备
 → DeepSeek 流式回答
 → Qwen 实时 TTS
 → 第一帧真实声音出现时才显示说话
-→ 声音结束后收尾并继续聆听
-→ 10 秒无人讲话后进入软睡眠
+→ 声音结束后收尾并自动聆听 10 秒
+→ 用户继续讲话则进入下一轮，无人讲话则静默进入睡眠表情
 ```
 
 当前优先级是语音稳定、表情同步、TFT 长稳、测试和提交收口，不是搜索、声纹、支付、小程序、Staging 或继续增加表情数量。
@@ -89,12 +89,12 @@ ESP32-S3 CAM 设备
 - `turn_id + reply_id` 用于隔离旧轮次消息。
 - 第一块真正送入扬声器的 PCM 才触发 `speaking`，不是收到 `tts.start` 就触发。
 - 本地解码器和扬声器队列真正排空后才发送 `drained`。
-- 回复结束后显示约 0.8 秒收尾，再聆听 10 秒；无人讲话后进入软睡眠。
+- 回复结束后显示约 0.8 秒收尾和约 1 秒扬声器余响保护，再从麦克风真正开始采集时计算 10 秒续聊窗口；无人讲话后静默进入软睡眠。
 - “小灿闭嘴”保留为服务端停止对话意图。
 
 ### 表情与口型
 
-- 当前表情包包含 12 个系统/展示状态。
+- 当前表情包索引包含 20 项：14 个运行状态动画（含 `shy/sad`）和 6 个说话/口型底图资源。
 - 后端支持 10 类受控 `[[face:...]]` 对话标签，每轮最多两次，并从 TTS、用户正文和日志中剥离。
 - 当前真机只完整接入三套独立说话脸：`talk_base`、`talk_happy`、`talk_caring`。
 - 当前嘴型为独立 PCM 叠加层，不生成“情绪数 × 嘴型数”的全屏动画组合。
@@ -109,6 +109,15 @@ ESP32-S3 CAM 设备
   - `.github/workflows/firmware-release.yml`：手动/定时 ESP-IDF 固件矩阵构建，包含本地横屏版；产物明确标记 CI-only，不能现场下发。
   - `.github/workflows/deploy-staging.yml`：必须人工确认的 Staging 发布。
 - `scripts/flash_firmware.ps1` 会在写入前重新识别 CH340/CH341，只允许写 `app` 和 `emote_gen`；不会写 bootloader、分区表、OTA 数据、模型、NVS 或设备身份。
+- 2026-08-28 当前可聊天版本的完整本地快照位于：
+
+  ```text
+  E:\HENSUN_STABILITY_WT\run\backups\20260828-200611-current-chat-freeze
+  ```
+
+  - 应用 `xiaozhi.bin`：2701120 字节，SHA256 `B6551273893B988489D65C9AC3E04E109535834CD404C7315D6AA9DC2C6A94BC`。
+  - 当前标准版加害羞/难过测试表情包：4659246 字节，20 个索引，SHA256 `78D0F3AF53C57D6890681F28D0AAA3C1011B5DB9C520550D729873D68870878F`。
+  - 快照同时保存 SQLite、tracked 二进制补丁、untracked 压缩包和 SHA256 清单。
 - 当前金样机恢复包位于：
 
   ```text
@@ -123,13 +132,14 @@ ESP32-S3 CAM 设备
 
 ### 已有验证证据
 
-- 五个实现提交已按暂存区快照隔离验证：实时语音、对话表情、固件显示、安全刷写、CI。
-- 对话表情解析相关 32 项、刷写/板型相关 33 项及全部固件主机测试通过。
+- 本轮稳定性收口已拆成实时网关、固件、构建/CI、数据库迁移和文档五个本地提交。
+- 后端完整测试为 133 passed、1 skipped；固件主机/Profile/资源测试为 121 passed。
+- 前端 ESLint、TypeScript 和隔离的 Next.js 生产构建通过，共生成 17 个页面。
 - 表情源、运行时资源、BIN 哈希与 320×240/20 FPS 约束通过一致性检查。
 - `scripts/release_gate.py`：通过（仅源码/配置门禁）。
 - 旧金样机应用和表情分区曾通过 esptool 哈希校验；串口曾确认表情资源、Wi-Fi、Bootstrap、MultiNet 和“你好小灿”加载成功。
 - 用户已完成上一版视觉和基础对话人工确认。
-- **最新提交的 ESP-IDF 三版本完整构建和真机刷写仍未完成，不能引用旧构建替代。**
+- 2026-08-28 已用 ESP-IDF 6.0.2 完成本地横屏版、官网回退版和通用自有版构建矩阵；本轮没有再次刷机，真机仍保留快照中记录的应用与标准版加害羞/难过表情包。
 
 这些证据不等于 30 轮对话或长稳验收已经通过。
 
@@ -141,21 +151,14 @@ ESP32-S3 CAM 设备
 - 分支：`feature/hensun-stability-quality`
 - 当前分支没有配置 upstream，未推送、未创建 PR。
 - 远端：`https://github.com/23xxCh/xiaozhi-claw.git`
-- 已生成忽略目录下的可恢复工作树快照：`run/backups/worktree-snapshot-20260818-191118/`。
-- 已完成的本地实现提交：
-  1. `cc317bf fix(realtime): stabilize ASR and playback lifecycle`
-  2. `3cd38b8 feat(realtime): add bounded dialogue face controls`
-  3. `4f86228 feat(firmware): synchronize speech and landscape expressions`
-  4. `ff36dcd build(firmware): harden local landscape build and safe flashing`
-  5. `ca69cc3 ci: cover local golden sample`
-- 本交接文档及相关金样机入口文档是第六个独立提交。
-- 评审债收口后又补了本地提交：
-  1. `959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby`
-  2. `99522cd fix(config): point default device WS to gateway 8001`
-  3. `4a23fc6 docs: refresh golden-sample status after review`
-  4. `d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD`
-  5. 本文档更新（以 `git log -1 --oneline` 为准）
-- `migrations/versions/20260815_06_device_config_contract.py` 与 `design/` 明确排除，仍不得混入、删除或擅自提交。
+- 已生成忽略目录下的可恢复工作树快照：`run/backups/20260828-200611-current-chat-freeze/`。
+- 本轮新增的本地提交：
+  1. `28de5fc fix(realtime): stabilize local multi-turn recovery`
+  2. `a5eb95a feat(firmware): stabilize bounded multi-turn display flow`
+  3. `93a70c7 build: align local multi-turn gates and startup`
+  4. `3b2d858 db: add versioned device config contract`
+  5. `docs: freeze current local multi-turn sample`（提交哈希以 `git log -1 --oneline` 为准）
+- 设备配置迁移已在 SQLite 副本完成升级、降级、再升级测试并纳入 `3b2d858`；仅 `design/` 属于其他视觉工作线，继续排除且不得删除。
 - 禁止 reset、checkout 覆盖、清理未跟踪目录或整批 `git add -A`。
 
 提交时禁止 `git add -A`。必须逐组检查、测试和暂存。
@@ -203,7 +206,7 @@ ESP32-S3 CAM 设备
 - 播放必须使用 `start → ready → PCM → stop → drained`。
 - `speaking` 只能由第一块真实扬声器 PCM 触发。
 - `turn_id + reply_id` 不匹配的旧消息必须忽略。
-- 回复结束后保持约 0.8 秒收尾，再聆听 10 秒，之后软睡眠。
+- 回复结束后保持约 0.8 秒收尾和约 1 秒余响保护，再开放 10 秒续聊；用户开始讲话后由 VAD 完整收音，无人讲话才进入软睡眠。
 - 当前接受的嘴型是细线 U 形五档；不要恢复白色圆环、实心椭圆或“香肠嘴”。
 - 嘴型读取真实 PCM 包络；不要让 LLM 猜口型。
 - TFT 尺寸、方向和资源由 Display Profile 管理，不应散落写死到业务代码。
@@ -230,7 +233,7 @@ ESP32-S3 CAM 设备
 | 旧表情插队、动画不连贯 | 表情请求排队、回复中途反复重启动画 | 容量 1 mailbox、`xQueueOverwrite`、generation 丢弃旧请求；情绪更新不重启整脸 | 用户已确认当前效果 |
 | 嘴型像圆环、香肠或随机跳 | 五种嘴型形状差异过大，且整脸资源和口型耦合 | 改为细线 U 形五档 PCM 叠加层，20 FPS 平滑移动 | 用户已确认 |
 | `mmap has no file` | `talk_neutral.eaf` 正好填满 16 字节索引槽，没有结尾 NUL | 内部名称改为 `talk_base.eaf`；测试强制每个槽含 NUL | 已修复 |
-| 用户还没说下一句就睡眠 | 继续聆听只有 3 秒 | 当前改为 10 秒，无人讲话后再软睡眠 | 已确认方向 |
+| 回复后噪声被识别为“嗯”，形成幽灵轮次 | 单工硬件在回复后开放麦克风，扬声器尾音或短噪声被 ASR 当成人声 | 播放排空后增加余响保护；续聊短于 900ms 或仅含语气词时不进入 LLM/TTS，并重新开放剩余续聊窗口 | 自动测试通过，30 轮待验 |
 | 公网版迟钝、无声、状态不同步 | Staging 网络与服务链路放大了本地尚未收口的问题 | 暂停公网验证，回到本地三进程做金样机 | 当前主线 |
 | TFT 偶发黑屏/冻结 | 曾涉及资源缺失、旧请求积压、显示任务与状态错乱；仍需长稳排除剩余问题 | 修复资源索引和队列；故障时先看串口，不直接擦除 Flash | 基础运行正常，8 小时待机未验收 |
 
@@ -238,8 +241,9 @@ ESP32-S3 CAM 设备
 
 ### 必须完成后才能标记本地金样机稳定
 
-- 五个实现提交、交接文档和评审债收口已经完成。剩余未跟踪内容仅限明确排除的 `design/` 与设备配置迁移。
-- 后端测试当前为 106 项，约 105 过、1 skip（`test_qwen_realtime_integration.py` 实网集成）。
+- 稳定性实现、设备配置迁移和交接文档已按职责收口。剩余未跟踪内容仅限明确排除的 `design/`。
+- 后端完整测试为 133 passed、1 skipped；固件主机/Profile/资源测试为 121 passed；前端 ESLint、TypeScript 和生产构建通过。
+- ESP-IDF 6.0.2 的本地横屏版、官网回退版和通用自有版均已完整构建；通用自有版必须显式使用真实 Bootstrap，保留域名 `.invalid` 会被安全门禁拒绝。
 - 用户已确认当前金样机可以对话；说「小灿闭嘴」或「闭嘴」会进入软待机。
 - 默认 `DEVICE_WS_URL` 已改为 `ws://127.0.0.1:8001/v1/device/ws`。不要读取或改写本机 `.env`。金样机只用 `scripts/start_local_pilot.ps1`，不要用只起控制面的 `scripts/start_lan_backend.ps1`。
 - 产品决定：退出词保持现状，含单独「闭嘴」「退出」的子串匹配。已知可能误伤普通句子，暂不收紧。
@@ -248,7 +252,7 @@ ESP32-S3 CAM 设备
 - 尚未完成 2 小时连续对话运行。
 - 尚未完成 8 小时待机与 TFT 冻结检查。
 - 尚未形成最终验收报告，包括唤醒、STT、首段音频、drained、丢包、重连、内存和看门狗证据。
-- 用户已口头授权。2026-08-19 已把当前本地应用 `0x20000` 和表情 `0xB00000` 刷入这台 ESP32-S3；`verify-flash` 两个分区 digest matched。串口确认 SKU `hensun-cam-selfhosted-landscape-local-v1`、`emote_gen` 挂载、Wi-Fi 有 IP、Bootstrap 指向本机 `192.168.5.49:8000`、`ni hao xiao can` / MultiNet 已加载。未做用户在场口测，不能标记金样机已稳定。
+- 历史刷机和串口冒烟已完成；2026-08-28 本轮冻结没有刷写任何分区。当前物理应用和表情的精确副本、大小及 SHA256 已保存到 `run/backups/20260828-200611-current-chat-freeze/`。30 轮与长稳尚未通过，不能标记金样机已稳定。
 - 本地 GitHub Actions 已覆盖 landscape 金样机变体和 `test_hensun_dialogue_faces.py`；远端 CI 要等用户明确要求推送后才会运行。
 
 ### 已规划但当前不要做
@@ -265,18 +269,16 @@ ESP32-S3 CAM 设备
 
 ## 7. 下一步最应该做什么
 
-刷机授权已执行。下一步必须用户在场：先说两次「你好小灿」冒烟，再按矩阵做 30 轮口测；不要恢复 Staging 或正式域。不要把串口冒烟写成金样机已稳定。
+自动门禁与本地提交已完成。下一步必须用户在场按矩阵做 30 轮口测；不要恢复 Staging 或正式域，也不要把基础可聊天误写成金样机已稳定。
 
-### 已完成：刷入当前本地应用和表情
+### 当前可恢复基线
 
-2026-08-19 用户说「可以刷」后，只写了应用 `0x20000` 和表情 `0xB00000`，未擦 NVS / Wi-Fi / 身份 / 分区表 / 语音模型。
+2026-08-28 冻结快照位于 `run/backups/20260828-200611-current-chat-freeze/`。本轮只读出并归档当前状态，没有刷写设备：
 
-- 固件名：`hensun-cam-selfhosted-landscape-local-v1`
-- 已写入 `xiaozhi.bin` SHA256 `C53A6A51ACEF8CBDDFA3EA0F3ADA8EA3D98B8F372270BB7FAEF4157A14E115B6`，2699312 字节
-- 已写入 `emote_gen.bin` SHA256 `4A0E2C6B1A42B620BF615FD99ED2F86EB6C0BB3146482E07C4844126A7D5AF85`，2837200 字节
-- `verify-flash`：两个分区都是 Verification successful (digest matched)
-- 10:56 金样机备份 `45A4F6FF...` 仍留在 `run/backups/golden-local-face-20260818`，需要时只恢复这两个分区
-- 刷机后发现本机三进程已退出，且 `127.0.0.1:8000` 被无关项目占用；按命令行确认后结束该进程，并重新拉起 hensun 控制面/网关/前端。`8000/8001/3000` 健康检查 200
+- 当前物理应用副本 `xiaozhi.bin`：2701120 字节，SHA256 `B6551273893B988489D65C9AC3E04E109535834CD404C7315D6AA9DC2C6A94BC`。
+- 当前物理表情副本 `emote-current-standard-shy-sad.bin`：4659246 字节，SHA256 `78D0F3AF53C57D6890681F28D0AAA3C1011B5DB9C520550D729873D68870878F`。
+- 同目录 `emote_gen.bin` 是仓库构建产物，不是当前物理表情包，恢复时不得混淆。
+- 旧版回退包 `run/backups/golden-local-face-20260818/` 继续保留。
 
 ### 下一步：用户在场完成真机验收
 
@@ -284,10 +286,10 @@ ESP32-S3 CAM 设备
 
 1. 十次“你好小灿 + 问题”，至少九次一次成功。
 2. 十次唤醒后停顿再提问，不漏开头。
-3. 十轮无需重复唤醒的连续对话。
+3. 一次唤醒后完成十轮连续对话，全程不重复喊名字；10 秒窗口外普通讲话不得启动新会话。
 4. 短句、长句、数字、英文、时间、天气。
 5. BOOT 打断和“小灿闭嘴”。
-6. 回复后 0.8 秒收尾、10 秒继续聆听、自动睡眠和再次唤醒。
+6. 回复后 0.8 秒收尾、余响保护、10 秒续聊、无人讲话后静默睡眠并可再次唤醒。
 7. 累计 30 轮无沉默、断音、旧音频、无声说话脸或 TFT 卡死。
 8. 连续运行 2 小时，再待机 8 小时。
 

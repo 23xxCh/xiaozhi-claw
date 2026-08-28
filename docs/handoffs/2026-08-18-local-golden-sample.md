@@ -1,7 +1,7 @@
 ---
 status: in-progress
 branch: feature/hensun-stability-quality
-timestamp: 2026-08-19T12:00:00+08:00
+timestamp: 2026-08-28T21:00:00+08:00
 worktree: E:\HENSUN_STABILITY_WT
 base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 ---
@@ -10,7 +10,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 一句话状态
 
-当前 ESP32-S3 CAM 已恢复本地多轮语音；横屏说话脸、细线嘴型和「小灿闭嘴 / 闭嘴」软待机已得到用户确认。实时 ASR 已改为 Manual。2026-08-19 用户授权后已把当前本地应用和表情刷入真机，串口冒烟通过。后端测试 106 项约 105 过 1 skip。工作树只剩明确排除的 `design/` 与设备配置迁移。30 轮真机回归、2 小时连续对话和 8 小时待机尚未做；不要把串口冒烟写成金样机已稳定。
+当前 ESP32-S3 CAM 已恢复本地多轮语音；横屏说话脸、细线嘴型和「小灿闭嘴 / 闭嘴」软待机已得到用户确认。后端 133 passed、1 skipped，固件主机/Profile/资源测试 121 passed，前端门禁和 ESP-IDF 三版本构建通过。稳定性实现和设备配置迁移已拆成本地提交，工作树只剩明确排除的 `design/`。30 轮真机回归、2 小时连续对话和 8 小时待机尚未做；不要把基础可聊天写成金样机已稳定。
 
 ## 接手前必读
 
@@ -68,7 +68,7 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 - 回复播放采用 `tts.start → ready → PCM → stop → drained`。
 - `turn_id + reply_id` 用于拒绝旧轮次 ACK、旧情绪和旧停止事件。
 - 第一块真实扬声器 PCM 才能触发说话脸和口型。
-- 回复结束后显示约 0.8 秒收尾，再聆听 10 秒；无人讲话后进入睡眠。
+- 回复结束后显示约 0.8 秒收尾并经过余响保护，再开放 10 秒续聊；无人讲话后静默进入睡眠表情。
 
 ### 表情与嘴型
 
@@ -94,22 +94,18 @@ base_head: 41439eea809412d43603bd62142cd06ff4825ba8
 
 ## 当前 Git 状态
 
-当前 HEAD 以 `git log -1 --oneline` 为准。评审债收口后的相关提交：
+当前 HEAD 以 `git log -1 --oneline` 为准。本轮冻结新增提交：
 
 ```text
-41f70f7 docs: record realtime ASR invalid_request_error root cause
-d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD
-4a23fc6 docs: refresh golden-sample status after review
-99522cd fix(config): point default device WS to gateway 8001
-959b8e4 fix(realtime): recognize 小灿闭嘴 as soft standby
+3b2d858 db: add versioned device config contract
+93a70c7 build: align local multi-turn gates and startup
+a5eb95a feat(firmware): stabilize bounded multi-turn display flow
+28de5fc fix(realtime): stabilize local multi-turn recovery
 ```
 
-以及随后记录刷机事实的文档提交。分支没有已记录的 upstream，不要推送。
+以及本次文档冻结提交。分支没有已记录的 upstream，不要推送。
 
-工作树现在只应剩下明确排除、不得混入的内容：
-
-- `migrations/versions/20260815_06_device_config_contract.py`
-- `design/`
+工作树现在只应剩下明确排除、不得混入的 `design/`。
 
 禁止 `git add -A`，禁止 reset 或删除未跟踪目录。
 
@@ -125,12 +121,13 @@ d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD
 
 ## 验证证据
 
-- 后端测试：106 项，约 105 过、1 skip（`test_qwen_realtime_integration.py` 实网集成）。
-- 实时 ASR 已从 `server_vad` + commit 改为 Manual；相关单测与 `backend/tests` 均绿。2026-08-19 已按授权只刷 `0x20000`/`0xB00000`，`verify-flash` digest matched。串口冒烟通过。未做用户在场 30 轮口测，不能标记金样机已稳定。
+- 后端完整测试：133 passed、1 skipped（实网集成测试）。
+- 实时 ASR 已从 `server_vad` + commit 改为 Manual；实时失败时保留同轮批量降级。2026-08-28 冻结没有再次刷机；当前物理应用和表情已读出到独立快照。未做用户在场 30 轮口测，不能标记金样机已稳定。
 - 用户已确认当前金样机可以对话；「小灿闭嘴」和「闭嘴」可进软待机。
-- 全部 Hensun 固件主机测试：47 项通过。
+- 固件主机/Profile/资源测试：121 项通过。
 - `scripts/release_gate.py`：PASS（仅源码/配置门禁）。
-- ESP-IDF 6.0.2 完整构建通过；应用仍有约 35% OTA 分区空间。
+- 前端 ESLint、TypeScript 和 Next.js 生产构建通过，共 17 个页面。
+- ESP-IDF 6.0.2 的本地横屏版、官网回退版和通用自有版完整构建通过；本地版应用仍有约 35% OTA 分区空间。
 - 应用和 `emote_gen` 两个分区刷写均通过 esptool 哈希验证。
 - 串口启动日志确认：`emote_gen` 挂载、Wi-Fi、Bootstrap、MultiNet 和“你好小灿”加载成功；不再出现 `talk_neutral.eaf` 缺失。
 - 用户真机确认最新表情和对话“可以了”。
@@ -139,7 +136,18 @@ d8594e6 fix(realtime): use Qwen ASR Manual mode instead of commit-in-VAD
 
 ## 可恢复金样机
 
-本机路径：
+当前可聊天状态冻结路径：
+
+```text
+E:\HENSUN_STABILITY_WT\run\backups\20260828-200611-current-chat-freeze
+```
+
+| 文件 | 大小 | SHA256 |
+|---|---:|---|
+| `xiaozhi.bin` | 2701120 | `B6551273893B988489D65C9AC3E04E109535834CD404C7315D6AA9DC2C6A94BC` |
+| `emote-current-standard-shy-sad.bin` | 4659246 | `78D0F3AF53C57D6890681F28D0AAA3C1011B5DB9C520550D729873D68870878F` |
+
+旧版回退路径：
 
 ```text
 E:\HENSUN_STABILITY_WT\run\backups\golden-local-face-20260818
@@ -157,7 +165,7 @@ E:\HENSUN_STABILITY_WT\run\backups\golden-local-face-20260818
 
 刷机授权已执行，串口冒烟通过。下一步必须用户在场做口测；不要恢复 Staging 或正式域。不要把串口冒烟写成金样机已稳定。
 
-1. 不要把 `design/` 和 `20260815_06_device_config_contract.py` 混入任何提交。
+1. 不要把 `design/` 混入任何提交；设备配置迁移已经独立提交。
 2. 实时 ASR 已改为 Manual；Ogg-Opus 未改。真机是否不再走 batch fallback，要等用户在场口测确认。
 3. 应用 `0x20000` 和表情 `0xB00000` 已刷入当前本地构建；不要再刷，除非用户再次授权。
 4. 下一步真机矩阵：先说两次「你好小灿」冒烟，再测唤醒、停顿后提问、连续对话、中性/开心/关怀、长句、数字、英文、时间、天气、BOOT 打断、“小灿闭嘴”、自动睡眠；累计 30 轮。
