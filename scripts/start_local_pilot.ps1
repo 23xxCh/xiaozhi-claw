@@ -1,5 +1,6 @@
 param(
     [string]$HostAddress = "192.168.5.49",
+    [string]$ProviderHostOverrides = "",
     [switch]$NoBrowser
 )
 
@@ -28,6 +29,31 @@ function Test-TrackedProcess {
     return $null -ne $process -and $process.CommandLine -like "*$Marker*"
 }
 
+function Set-EnvFileValue {
+    param(
+        [string]$Path,
+        [string]$Key,
+        [string]$Value
+    )
+
+    $lines = Get-Content -LiteralPath $Path
+    $replacement = "$Key=$Value"
+    $found = $false
+    $updated = foreach ($line in $lines) {
+        if ($line -match "^$([regex]::Escape($Key))=") {
+            $found = $true
+            $replacement
+        }
+        else {
+            $line
+        }
+    }
+    if (-not $found) {
+        $updated += $replacement
+    }
+    Set-Content -LiteralPath $Path -Value $updated -Encoding utf8
+}
+
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Python environment is missing: $python"
 }
@@ -42,6 +68,17 @@ if (-not (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | W
 }
 
 New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+
+Set-EnvFileValue -Path (Join-Path $projectRoot ".env") `
+    -Key "DEVICE_WS_URL" -Value "ws://$HostAddress`:8001/v1/device/ws"
+Set-EnvFileValue -Path (Join-Path $projectRoot ".env") `
+    -Key "WEB_APP_URL" -Value "http://$HostAddress`:3000"
+Set-EnvFileValue -Path (Join-Path $projectRoot "web\.env.local") `
+    -Key "NEXT_PUBLIC_CONTROL_API_URL" -Value "http://$HostAddress`:8000"
+if (-not [string]::IsNullOrWhiteSpace($ProviderHostOverrides)) {
+    Set-EnvFileValue -Path (Join-Path $projectRoot ".env") `
+        -Key "PROVIDER_HOST_OVERRIDES" -Value $ProviderHostOverrides
+}
 
 if (Test-Path -LiteralPath $statePath) {
     $existing = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json

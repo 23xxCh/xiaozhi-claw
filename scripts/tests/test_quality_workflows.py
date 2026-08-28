@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,3 +20,25 @@ def test_firmware_matrix_compiles_local_variant_as_ci_only() -> None:
     assert "https://api.hensun.invalid/v1/device/xiaozhi-bootstrap" in source
     assert "CI_ONLY_DO_NOT_FLASH.txt" in source
     assert "ci-only-${{ matrix.variant }}" in source
+
+
+def test_local_landscape_variant_keeps_bounded_multiturn_enabled() -> None:
+    config = json.loads(
+        (
+            ROOT
+            / "firmware"
+            / "xiaozhi-esp32"
+            / "main"
+            / "boards"
+            / "hensun"
+            / "hensun-cam-pilot-v1"
+            / "config.json"
+        ).read_text(encoding="utf-8")
+    )
+    local_build = next(
+        build
+        for build in config["builds"]
+        if build["name"] == "hensun-cam-selfhosted-landscape-local-v1"
+    )
+
+    assert "CONFIG_HENSUN_ONE_SHOT_CONVERSATION=n" in local_build["sdkconfig_append"]

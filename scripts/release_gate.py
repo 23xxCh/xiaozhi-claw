@@ -72,7 +72,9 @@ def main() -> int:
     if "api.hensun.invalid" not in local_sdkconfig:
         errors.append("local CAM firmware lacks its safe .invalid default")
     if "CONFIG_HENSUN_ONE_SHOT_CONVERSATION=n" not in local_sdkconfig:
-        errors.append("local CAM firmware does not enable continuous conversation")
+        errors.append("local CAM firmware does not enable the bounded follow-up window")
+    if "CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y" in local_sdkconfig:
+        errors.append("local CAM firmware unexpectedly disables multi-turn follow-up")
     for required_option in (
         "CONFIG_USE_CUSTOM_WAKE_WORD=y",
         'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',
