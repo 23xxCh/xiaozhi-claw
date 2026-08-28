@@ -16,6 +16,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -37,6 +38,7 @@ using HensunPilotDisplay = HensunFaceDisplay;
 constexpr size_t kSpeechPcmSampleStride = 8;
 constexpr uint32_t kSpeechNoiseFloor = 180;
 constexpr uint32_t kSpeechReferenceAmplitude = 5000;
+constexpr int kHensunMicInputGain = 1;
 
 class HensunAudioCodecSimplex final : public NoAudioCodecSimplex {
 public:
@@ -84,11 +86,38 @@ protected:
         }
 
         samples = bytes_read / sizeof(int32_t);
+        uint64_t abs_sum = 0;
+        int32_t peak = 0;
         for (int index = 0; index < samples; ++index) {
             // The pilot board's 24-bit I2S microphone is left-aligned in the
-            // 32-bit slot. Keep the upper 16 bits; the generic >>12 path adds
-            // 16x gain and clips most of this microphone's samples.
-            dest[index] = static_cast<int16_t>(bit32_buffer[index] >> 16);
+            // 32-bit slot. Keep the upper 16 bits, then apply a small
+            // board-local gain for wake-word sensitivity. The generic >>12
+            // path adds 16x gain and clips most of this microphone's samples.
+            int32_t value = (bit32_buffer[index] >> 16) * kHensunMicInputGain;
+            if (value > INT16_MAX) {
+                value = INT16_MAX;
+            } else if (value < -INT16_MAX) {
+                value = -INT16_MAX;
+            }
+            dest[index] = static_cast<int16_t>(value);
+            const int32_t abs_value = value < 0 ? -value : value;
+            abs_sum += static_cast<uint32_t>(abs_value);
+            peak = std::max(peak, abs_value);
+        }
+        static int64_t last_level_log_us = 0;
+        const int64_t now_us = esp_timer_get_time();
+        if (samples > 0 && now_us - last_level_log_us >= 2 * 1000 * 1000) {
+            last_level_log_us = now_us;
+            ESP_LOGI(TAG,
+                "Mic input level: avg_abs=%lu peak=%ld samples=%d gain=%d "
+                "gpio0=%d gpio3=%d gpio14=%d gpio46=%d gpio48=%d",
+                static_cast<unsigned long>(abs_sum / samples),
+                static_cast<long>(peak), samples, kHensunMicInputGain,
+                gpio_get_level(GPIO_NUM_0),
+                gpio_get_level(GPIO_NUM_3),
+                gpio_get_level(GPIO_NUM_14),
+                gpio_get_level(GPIO_NUM_46),
+                gpio_get_level(GPIO_NUM_48));
         }
         return samples;
     }
@@ -222,8 +251,10 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
+            ESP_LOGI(TAG, "BOOT click received, state=%d",
+                static_cast<int>(app.GetDeviceState()));
             if (app.GetDeviceState() == kDeviceStateStarting) {
-                EnterWifiConfigMode();
+                ESP_LOGW(TAG, "Ignoring BOOT click while device is starting");
                 return;
             }
             if (app.GetDeviceState() == kDeviceStateSpeaking) {

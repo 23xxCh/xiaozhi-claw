@@ -156,6 +156,49 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             self.assertIn("input_buffer_.clear();", method.group(1))
             self.assertIn("multinet_->clean(multinet_model_data_);", method.group(1))
 
+    def test_custom_wake_aligns_multinet_window_to_vad_speech_onset(self):
+        custom_source = (
+            ROOT / "main/audio/wake_words/custom_wake_word.cc"
+        ).read_text(encoding="utf-8")
+        custom_header = (
+            ROOT / "main/audio/wake_words/custom_wake_word.h"
+        ).read_text(encoding="utf-8")
+        handler = re.search(
+            r"void AfeAudioEngine::HandleWakeWordResult\(const afe_fetch_result_t\* result\) \{(.*?)\n\}",
+            self.audio_engine_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(handler)
+        body = handler.group(1)
+        self.assertIn("result->vad_state == VAD_SPEECH", body)
+        self.assertIn("custom_wake_word_->BeginSpeechWindow()", body)
+        self.assertLess(
+            body.index("custom_wake_word_->BeginSpeechWindow()"),
+            body.index("custom_wake_word_->FeedMono("),
+        )
+        self.assertIn("void BeginSpeechWindow();", custom_header)
+        self.assertIn("void CustomWakeWord::BeginSpeechWindow()", custom_source)
+
+    def test_custom_wake_allocates_command_table_before_update(self):
+        source = (
+            ROOT / "main/audio/wake_words/custom_wake_word.cc"
+        ).read_text(encoding="utf-8")
+        initialize = re.search(
+            r"bool CustomWakeWord::Initialize\(AudioCodec\* codec, srmodel_list_t\* models_list\) \{(.*?)\n\}",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(initialize)
+        body = initialize.group(1)
+        self.assertLess(
+            body.index("esp_mn_commands_alloc(multinet_, multinet_model_data_)"),
+            body.index("esp_mn_commands_add(i + 1, commands_[i].command.c_str())"),
+        )
+        self.assertLess(
+            body.index("esp_mn_commands_add(i + 1, commands_[i].command.c_str())"),
+            body.index("esp_mn_commands_update()"),
+        )
+
     def test_selfhosted_tts_uses_ready_drained_handshake_and_queue_backpressure(self):
         protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")
         protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(encoding="utf-8")
@@ -177,11 +220,18 @@ class HensunCamPilotBoardTests(unittest.TestCase):
 
         self.assertIn("virtual void BeginReplySettle() {}", display_header)
         self.assertIn("kAwaitingAudio", display_source)
-        self.assertIn('QueueAnimation("thinking", false, true);', display_source)
         self.assertIn("if (awaiting_audio_.exchange(false))", display_source)
         self.assertIn(
             "QueueAnimation(ConversationAnimation(), false, true);", display_source
         )
+        awaiting_audio = re.search(
+            r"else if \(std::strcmp\(status, Lang::Strings::SPEAKING\) == 0\) \{"
+            r"(.*?)else if \(std::strcmp\(status, Lang::Strings::ERROR\) == 0\)",
+            display_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(awaiting_audio)
+        self.assertNotIn('QueueAnimation("thinking"', awaiting_audio.group(1))
         self.assertIn("BeginReplySettle", self.application_source)
 
         finish = re.search(
@@ -197,6 +247,50 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("kReplySettleDurationUs = 800 * 1000", display_source)
         self.assertIn("kIdleSleepDurationUs = 10 * 1000 * 1000", display_source)
         self.assertIn("reply_settle_pending_.load()", display_source)
+
+    def test_post_speech_reply_wait_does_not_flash_the_sleep_face(self):
+        self.assertIn("reply_pending_", self.application_header)
+
+        vad_stop = re.search(
+            r"else if \(vad_speech_detected_\) \{(.*?)StopListening\(\);",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(vad_stop)
+        self.assertIn("reply_pending_ = true", vad_stop.group(1))
+
+        idle_state = re.search(
+            r"case kDeviceStateUnknown:\s*case kDeviceStateIdle:(.*?)"
+            r"case kDeviceStateConnecting:",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(idle_state)
+        self.assertIn("if (reply_pending_)", idle_state.group(1))
+        pending_branch = re.search(
+            r"if \(reply_pending_\) \{(.*?)\}\s*display->SetStatus",
+            idle_state.group(1),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(pending_branch)
+        self.assertNotIn("SetStatus", pending_branch.group(1))
+        self.assertIn(
+            "audio_service_.EnableVoiceProcessing(false)", pending_branch.group(1)
+        )
+        self.assertIn(
+            "audio_service_.EnableWakeWordDetection(false)", pending_branch.group(1)
+        )
+
+        playback_started = re.search(
+            r"if \(bits & MAIN_EVENT_PLAYBACK_STARTED\) \{(.*?)\n        \}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(playback_started)
+        self.assertLess(
+            playback_started.group(1).index("reply_pending_ = false"),
+            playback_started.group(1).index("SetDeviceState(kDeviceStateSpeaking)"),
+        )
 
     def test_selfhosted_emote_profile_uses_a_matching_landscape_canvas(self):
         config = (BOARD / "config.h").read_text(encoding="utf-8")
@@ -278,6 +372,83 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIn("AbortSpeaking(kAbortReasonNone)", self.application_source)
 
+    def test_follow_up_timeout_starts_with_capture_and_preserves_vad_edge(self):
+        self.assertIn("listening_capture_ready_", self.application_header)
+        self.assertIn("vad_speech_edge_pending_", self.application_header)
+
+        listening = re.search(
+            r"void Application::StartListeningAudio\(\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(listening)
+        self.assertIn("clock_ticks_ = 0", listening.group(1))
+        self.assertIn("listening_capture_ready_ = true", listening.group(1))
+
+        self.assertRegex(
+            self.application_source,
+            r"kDeviceStateListening\s*&&\s*listening_capture_ready_\s*&&",
+        )
+        self.assertIn(
+            "!vad_speech_edge_pending_.load(std::memory_order_acquire)",
+            self.application_source,
+        )
+        self.assertLess(
+            self.application_source.index(
+                "vad_speech_edge_pending_.store(true, std::memory_order_release)"
+            ),
+            self.application_source.index("Schedule([this, speaking]()"),
+        )
+
+    def test_failed_cloud_turn_recovers_standby_and_wake_detection(self):
+        self.assertIn("RecoverFailedTurnToStandby", self.application_header)
+        self.assertRegex(
+            self.application_source,
+            r"kReplyPendingTimeoutTicks\s*=\s*12",
+        )
+        self.assertIn(
+            "reply_pending_ && clock_ticks_ >= kReplyPendingTimeoutTicks",
+            self.application_source,
+        )
+
+        recovery = re.search(
+            r"void Application::RecoverFailedTurnToStandby\("
+            r"const char\* reason, bool close_audio_channel\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(recovery)
+        body = recovery.group(1)
+        self.assertIn("reply_pending_ = false", body)
+        self.assertIn("audio_service_.ResetDecoder()", body)
+        self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
+        self.assertIn("display->SetStatus(Lang::Strings::STANDBY)", body)
+        self.assertIn("audio_service_.EnableVoiceProcessing(false)", body)
+        self.assertIn("audio_service_.EnableWakeWordDetection(true)", body)
+
+        # A socket closure after real PCM must keep the bounded reply settle
+        # instead of jumping straight from the speaking face to sleep.
+        self.assertIn("const bool had_audio = tts_audio_started_", body)
+        self.assertIn("if (had_audio)", body)
+        self.assertIn("display->BeginReplySettle()", body)
+        self.assertLess(
+            body.index("display->BeginReplySettle()"),
+            body.index("SetDeviceState(kDeviceStateIdle)"),
+        )
+
+        self.assertIsNotNone(
+            re.search(
+                r'else if \(strcmp\(type->valuestring, "error"\) == 0\).*?'
+                r'RecoverFailedTurnToStandby',
+                self.application_source,
+                re.DOTALL,
+            )
+        )
+        self.assertIn(
+            'RecoverFailedTurnToStandby("audio-channel-closed", false)',
+            self.application_source,
+        )
+
     def test_selfhosted_emote_state_is_not_overwritten_by_neutral(self):
         display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(
             encoding="utf-8"
@@ -308,14 +479,48 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         body = finish.group(1)
         self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION", body)
         self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
+        one_shot = re.search(
+            r"#if CONFIG_HENSUN_ONE_SHOT_CONVERSATION(.*?)#else",
+            body,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(one_shot)
+        self.assertIn("protocol_->CloseAudioChannel()", one_shot.group(1))
+
+    def test_hensun_half_duplex_disables_wake_word_detection_while_speaking(self):
+        speaking = re.search(
+            r"case kDeviceStateSpeaking:(.*?)case kDeviceStateWifiConfiguring:",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(speaking)
+        hensun = re.search(
+            r"#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1(.*?)#else",
+            speaking.group(1),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(hensun)
+        self.assertIn(
+            "audio_service_.EnableWakeWordDetection(false)",
+            hensun.group(1),
+        )
 
     def test_local_landscape_variant_keeps_a_ten_second_followup_window(self):
         local = "\n".join(
             self.builds["hensun-cam-selfhosted-landscape-local-v1"]["sdkconfig_append"]
         )
         self.assertIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=n", local)
+        self.assertNotIn("CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y", local)
+        self.assertNotIn("CONFIG_HENSUN_DIAGNOSTIC_AUTO_LISTEN_ON_BOOT=y", local)
         self.assertIn("CONFIG_USE_EMOTE_MESSAGE_STYLE=y", local)
+        self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", local)
         self.assertIn('CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"', local)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"', local)
+        self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15", local)
+        self.assertIn("CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y", local)
+        self.assertNotIn("CONFIG_USE_AFE_WAKE_WORD=y", local)
+        self.assertNotIn("CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y", local)
+        self.assertNotIn("CONFIG_CUSTOM_WAKE_WORD_SECONDARY", local)
         self.assertRegex(
             self.application_source,
             r"kWaitForSpeechTimeoutTicks\s*=\s*10",
@@ -325,14 +530,39 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             r"kMaximumSpeechDurationTicks\s*=\s*20",
         )
 
+    def test_afe_engine_respects_configured_wake_detector_type(self):
+        engine = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("kUseCustomWakeWord && multinet_model_name != nullptr", engine)
+        self.assertIn("kUseAfeWakeWord && wakenet_model_name != nullptr", engine)
+
+    def test_legacy_tts_stop_honors_one_shot_mode(self):
+        start = self.application_source.index(
+            "// Official xiaozhi servers do not provide reply_id"
+        )
+        end = self.application_source.index(
+            '} else if (strcmp(state->valuestring, "sentence_start") == 0)', start
+        )
+        legacy_stop = self.application_source[start:end]
+
+        one_shot = re.search(
+            r"#if CONFIG_HENSUN_ONE_SHOT_CONVERSATION(.*?)#else",
+            legacy_stop,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(one_shot)
+        self.assertIn("protocol_->CloseAudioChannel()", one_shot.group(1))
+        self.assertIn("SetDeviceState(kDeviceStateIdle)", one_shot.group(1))
+
     def test_hensun_cam_uses_noise_tolerant_vad_settings(self):
         self.assertIn(
             "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1",
             self.audio_engine_source,
         )
-        self.assertIn("afe_config->vad_mode = VAD_MODE_1", self.audio_engine_source)
+        self.assertIn("afe_config->vad_mode = VAD_MODE_3", self.audio_engine_source)
         self.assertIn(
-            "afe_config->vad_min_noise_ms = 1200",
+            "afe_config->vad_min_noise_ms = 700",
             self.audio_engine_source,
         )
 
@@ -389,7 +619,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("return EnsureCamera() && camera_->Capture();", self.source)
         self.assertIn("camera_ = new HensunLazyCamera(camera_config);", self.source)
 
-    def test_hensun_i2s_microphone_uses_the_upper_16_bits_without_clipping(self):
+    def test_hensun_i2s_microphone_uses_upper_16_bits_with_bounded_input_gain(self):
         codec = re.search(
             r"class HensunAudioCodecSimplex.*?\n\};",
             self.source,
@@ -398,7 +628,10 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIsNotNone(codec)
         body = codec.group(0)
         self.assertRegex(body, r"int\s+Read\(int16_t\*\s+dest,\s*int\s+samples\)\s+override")
-        self.assertIn("bit32_buffer[index] >> 16", body)
+        self.assertIn("constexpr int kHensunMicInputGain = 1", self.source)
+        self.assertIn("(bit32_buffer[index] >> 16) * kHensunMicInputGain", body)
+        self.assertIn("value > INT16_MAX", body)
+        self.assertNotIn("bit32_buffer[index] >> 12", body)
 
     def test_build_chain_selects_the_new_board(self):
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")

@@ -156,7 +156,10 @@ private:
     std::string pending_tts_stop_reply_id_;
     std::atomic<bool> tts_playback_prepared_{false};
     bool tts_audio_started_ = false;
+    std::atomic<bool> vad_speech_edge_pending_{false};  // Protect a VAD-start edge from the timeout tick
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started
+    bool listening_capture_ready_ = false;  // Start the quiet timeout only when listen.start can accept audio
+    bool reply_pending_ = false;  // User speech ended; keep the face awake while cloud reply is pending
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -176,6 +179,7 @@ private:
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void FinishTtsPlayback(std::string reply_id);
+    void RecoverFailedTurnToStandby(const char* reason, bool close_audio_channel);
 
     // Activation task (runs in background)
     void ActivationTask();

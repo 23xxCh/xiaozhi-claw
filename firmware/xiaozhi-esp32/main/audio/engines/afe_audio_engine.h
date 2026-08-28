@@ -76,6 +76,7 @@ private:
     // Incremented whenever an active AFE session is invalidated. ProcessingTask
     // uses it to reject a fetch result produced before a disable/re-enable cycle.
     std::atomic<uint32_t> control_generation_{0};
+    std::atomic<bool> custom_wake_vad_speech_{false};
     WakeDetector wake_detector_ = WakeDetector::kNone;
 
     std::unique_ptr<CustomWakeWord> custom_wake_word_;

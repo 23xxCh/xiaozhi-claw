@@ -50,6 +50,8 @@ private:
         kNeutral,
         kHappy,
         kCaring,
+        kShy,
+        kSad,
     };
 
     struct SwitchRequest {

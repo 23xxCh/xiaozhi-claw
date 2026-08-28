@@ -4,6 +4,7 @@
 #include "assets.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
@@ -98,6 +99,13 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
     commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
     ESP_LOGI(TAG, "Using compiled custom wake command: %s", CONFIG_CUSTOM_WAKE_WORD);
+#ifdef CONFIG_CUSTOM_WAKE_WORD_SECONDARY
+    if (std::string(CONFIG_CUSTOM_WAKE_WORD_SECONDARY).size() > 0) {
+        commands_.push_back({CONFIG_CUSTOM_WAKE_WORD_SECONDARY, CONFIG_CUSTOM_WAKE_WORD_SECONDARY_DISPLAY, "wake"});
+        ESP_LOGI(TAG, "Using secondary compiled custom wake command: %s", CONFIG_CUSTOM_WAKE_WORD_SECONDARY);
+    }
+#endif
+    ESP_LOGI(TAG, "Custom wake threshold: %.2f", threshold_);
 #else
     if (models_list != nullptr) {
         ParseWakenetModelConfig();
@@ -127,11 +135,20 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     multinet_model_data_ = multinet_->create(mn_name_, duration_);
     multinet_->set_det_threshold(multinet_model_data_, threshold_);
     input_buffer_.reserve(multinet_->get_samp_chunksize(multinet_model_data_));
-    esp_mn_commands_clear();
-    for (int i = 0; i < commands_.size(); i++) {
-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
+    if (esp_mn_commands_alloc(multinet_, multinet_model_data_) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to allocate multinet command table");
+        return false;
     }
-    esp_mn_commands_update();
+    for (int i = 0; i < commands_.size(); i++) {
+        if (esp_mn_commands_add(i + 1, commands_[i].command.c_str()) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add custom wake command: %s", commands_[i].command.c_str());
+            return false;
+        }
+    }
+    if (esp_mn_commands_update() != nullptr) {
+        ESP_LOGE(TAG, "Failed to update custom wake commands");
+        return false;
+    }
     
     multinet_->print_active_speech_commands(multinet_model_data_);
 #if CONFIG_SEND_WAKE_WORD_DATA
@@ -162,6 +179,19 @@ void CustomWakeWord::Stop() {
     if (multinet_model_data_ != nullptr) {
         multinet_->clean(multinet_model_data_);
     }
+}
+
+void CustomWakeWord::BeginSpeechWindow() {
+    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+    if (!running_ || multinet_model_data_ == nullptr) {
+        return;
+    }
+    // MultiNet's command window is finite. Align a fresh window to the AFE's
+    // speech onset instead of allowing an arbitrary idle timeout to cut across
+    // the wake phrase. The current delayed AFE frame is fed immediately after
+    // this reset, so the beginning of the phrase is retained.
+    input_buffer_.clear();
+    multinet_->clean(multinet_model_data_);
 }
 
 void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
@@ -205,6 +235,10 @@ void CustomWakeWord::FeedSamples(const int16_t* data, size_t samples, bool mono)
             for (int i = 0; i < mn_result->num && running_; i++) {
                 ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
                         mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+                if (mn_result->command_id[i] <= 0 || mn_result->command_id[i] > commands_.size()) {
+                    ESP_LOGW(TAG, "Ignoring out-of-range wake command id: %d", mn_result->command_id[i]);
+                    continue;
+                }
                 auto& command = commands_[mn_result->command_id[i] - 1];
                 if (command.action == "wake") {
                     last_detected_wake_word_ = command.text;

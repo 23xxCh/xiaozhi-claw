@@ -50,6 +50,8 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("MALLOC_CAP_DMA", renderer_source)
         self.assertIn("mouth_renderer_.ComposeStripe", self.source)
         self.assertIn("mouth_renderer_.SetLevel", self.source)
+        self.assertNotIn("ClearMouthRegion", renderer_source)
+        self.assertNotIn("std::fill", renderer_source)
         self.assertNotIn("kSpeakingAnimations", self.source)
         self.assertIn("QuantizeSpeechLevel", self.source)
         self.assertIn("speech_level_", self.header)
@@ -64,7 +66,8 @@ class HensunEmoteFormalMergeTests(unittest.TestCase):
         self.assertIn("sleep", spec["animations"])
         self.assertIn('"sleep"', self.source)
         self.assertIn("sleep_entered", self.source)
-        self.assertIn("kExpectedAnimationCount = 18", self.source)
+        self.assertIn("kExpectedAnimationCount = 20", self.source)
+        self.assertIn('"shy", "sad"', self.source)
 
     def test_camera_uses_display_independent_rgb565_preview(self):
         display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")

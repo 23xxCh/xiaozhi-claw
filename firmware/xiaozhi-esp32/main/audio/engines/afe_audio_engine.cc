@@ -20,6 +20,18 @@ static constexpr bool kUseAfeForVoiceProcessing = true;
 static constexpr bool kUseAfeForVoiceProcessing = false;
 #endif
 
+#ifdef CONFIG_USE_CUSTOM_WAKE_WORD
+static constexpr bool kUseCustomWakeWord = CONFIG_USE_CUSTOM_WAKE_WORD;
+#else
+static constexpr bool kUseCustomWakeWord = false;
+#endif
+
+#ifdef CONFIG_USE_AFE_WAKE_WORD
+static constexpr bool kUseAfeWakeWord = CONFIG_USE_AFE_WAKE_WORD;
+#else
+static constexpr bool kUseAfeWakeWord = false;
+#endif
+
 AfeAudioEngine::AfeAudioEngine() {
     event_group_ = xEventGroupCreate();
 }
@@ -73,7 +85,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
         }
     }
 
-    if (multinet_model_name != nullptr) {
+    if (kUseCustomWakeWord && multinet_model_name != nullptr) {
         wake_detector_ = WakeDetector::kMultiNet;
         custom_wake_word_ = std::make_unique<CustomWakeWord>();
         custom_wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
@@ -90,7 +102,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
             wake_detector_ = WakeDetector::kNone;
             return false;
         }
-    } else if (wakenet_model_name != nullptr) {
+    } else if (kUseAfeWakeWord && wakenet_model_name != nullptr) {
         wake_detector_ = WakeDetector::kWakeNet;
         auto words = esp_srmodel_get_wake_words(models_, wakenet_model_name);
         if (words != nullptr) {
@@ -139,12 +151,12 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
     afe_config->vad_init = kUseAfeForVoiceProcessing;
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
     // The open speaker/microphone layout on the pilot board picks up more
-    // ambient noise. The corrected microphone scale no longer needs the
-    // aggressive mode that clipped quiet syllables. Keep enough silence tail
-    // for a natural clause pause without returning to the old stuck-listening
-    // behavior.
-    afe_config->vad_mode = VAD_MODE_1;
-    afe_config->vad_min_noise_ms = 1200;
+    // ambient noise. MODE_1 allowed steady room/electrical noise to hold VAD
+    // open until the 20-second utterance watchdog, producing ghost turns.
+    // MODE_3 rejects that noise while a 700 ms silence tail still preserves
+    // normal clause pauses and finishes noticeably faster than 1200 ms.
+    afe_config->vad_mode = VAD_MODE_3;
+    afe_config->vad_min_noise_ms = 700;
 #else
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
@@ -224,11 +236,18 @@ void AfeAudioEngine::Feed(std::vector<int16_t>&& data) {
 
 void AfeAudioEngine::EnableWakeWordDetection(bool enable) {
     if (!HasWakeWord()) {
+        ESP_LOGI(TAG, "Wake word detection requested=%s but no detector is available",
+            enable ? "on" : "off");
         return;
     }
 
     // WakeNet enable/disable on the AFE instance is applied by ProcessingTask
     // (see ApplyAfeControls), driven by the kWakeWordEnabled bit.
+    const char* detector = wake_detector_ == WakeDetector::kWakeNet
+        ? "WakeNet"
+        : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
+    ESP_LOGI(TAG, "Wake word detection %s (%s)", enable ? "enabled" : "disabled", detector);
+    custom_wake_vad_speech_.store(false);
     if (enable) {
         if (wake_detector_ == WakeDetector::kMultiNet) {
             custom_wake_word_->Start();
@@ -395,6 +414,11 @@ void AfeAudioEngine::ProcessingTask() {
 
 void AfeAudioEngine::HandleWakeWordResult(const afe_fetch_result_t* result) {
     if (wake_detector_ == WakeDetector::kMultiNet) {
+        const bool vad_speech = result->vad_state == VAD_SPEECH;
+        const bool was_speaking = custom_wake_vad_speech_.exchange(vad_speech);
+        if (vad_speech && !was_speaking) {
+            custom_wake_word_->BeginSpeechWindow();
+        }
         custom_wake_word_->FeedMono(
             result->data, result->data_size / sizeof(int16_t));
         return;

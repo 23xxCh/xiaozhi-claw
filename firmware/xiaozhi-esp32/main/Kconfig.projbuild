@@ -876,6 +876,20 @@ config CUSTOM_WAKE_WORD_DISPLAY
     help
         Greeting sent to the server after wake word detection
 
+config CUSTOM_WAKE_WORD_SECONDARY
+    string "Secondary Custom Wake Word"
+    default ""
+    depends on USE_CUSTOM_WAKE_WORD
+    help
+        Optional second wake command, use pinyin for Chinese, separated by spaces
+
+config CUSTOM_WAKE_WORD_SECONDARY_DISPLAY
+    string "Secondary Custom Wake Word Display"
+    default ""
+    depends on USE_CUSTOM_WAKE_WORD
+    help
+        Text sent to the server after the optional second wake command is detected
+
 config CUSTOM_WAKE_WORD_THRESHOLD
     int "Custom Wake Word Threshold (%)"
     default 20
@@ -908,6 +922,14 @@ config HENSUN_ONE_SHOT_CONVERSATION
     help
         End the current listening turn after TTS playback drains so the device
         returns to local wake-word standby instead of opening a follow-up turn.
+
+config HENSUN_DIAGNOSTIC_AUTO_LISTEN_ON_BOOT
+    bool "Diagnostic: start one listening turn after activation"
+    default n
+    depends on BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    help
+        Local lab-only diagnostic switch used when wake-word and physical
+        button entry are under investigation. Do not enable for release builds.
 
 config USE_AUDIO_PROCESSOR
     bool "Enable AFE Audio Processing"

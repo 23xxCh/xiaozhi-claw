@@ -13,6 +13,8 @@
 
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <cstring>
@@ -24,6 +26,7 @@ namespace {
 // bound an abnormal continuously-speaking VAD state.
 constexpr int kWaitForSpeechTimeoutTicks = 10;
 constexpr int kMaximumSpeechDurationTicks = 20;
+constexpr int kReplyPendingTimeoutTicks = 12;
 constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
 }
 
@@ -102,9 +105,16 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        if (speaking) {
+            // The clock event and the scheduled VAD handler run on different
+            // tasks. Latch the edge immediately so a 9.9-second utterance
+            // cannot lose a race to the quiet-listening timeout.
+            vad_speech_edge_pending_.store(true, std::memory_order_release);
+        }
         Schedule([this, speaking]() {
             if (GetDeviceState() != kDeviceStateListening ||
                 listening_mode_ != kListeningModeAutoStop) {
+                vad_speech_edge_pending_.store(false, std::memory_order_release);
                 return;
             }
             if (speaking) {
@@ -112,8 +122,10 @@ void Application::Initialize() {
                 clock_ticks_ = 0;
             } else if (vad_speech_detected_) {
                 vad_speech_detected_ = false;
+                reply_pending_ = true;
                 StopListening();
             }
+            vad_speech_edge_pending_.store(false, std::memory_order_release);
         });
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
@@ -221,6 +233,7 @@ void Application::Run() {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
 
         if (bits & MAIN_EVENT_ERROR) {
+            reply_pending_ = false;
             SetDeviceState(kDeviceStateIdle);
             Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "cancel",
                   Lang::Sounds::OGG_EXCLAMATION);
@@ -258,6 +271,7 @@ void Application::Run() {
             if (tts_playback_prepared_.load() && !tts_audio_started_ &&
                 !active_tts_reply_id_.empty()) {
                 tts_audio_started_ = true;
+                reply_pending_ = false;
                 SetDeviceState(kDeviceStateSpeaking);
             }
         }
@@ -331,16 +345,25 @@ void Application::Run() {
             // deadlines. A quiet follow-up window is cancelled without asking
             // ASR to transcribe silence.
             if (GetDeviceState() == kDeviceStateListening &&
+                listening_capture_ready_ &&
                 listening_mode_ == kListeningModeAutoStop) {
-                if (!vad_speech_detected_ && clock_ticks_ >= kWaitForSpeechTimeoutTicks) {
+                if (!vad_speech_detected_ &&
+                    !vad_speech_edge_pending_.load(std::memory_order_acquire) &&
+                    clock_ticks_ >= kWaitForSpeechTimeoutTicks) {
                     ESP_LOGI(TAG, "No follow-up speech; returning to standby");
                     AbortSpeaking(kAbortReasonNone);
                     SetDeviceState(kDeviceStateIdle);
                 } else if (vad_speech_detected_ &&
                            clock_ticks_ >= kMaximumSpeechDurationTicks) {
                     ESP_LOGW(TAG, "Maximum utterance duration reached");
+                    reply_pending_ = true;
                     StopListening();
                 }
+            }
+
+            if (GetDeviceState() == kDeviceStateIdle &&
+                reply_pending_ && clock_ticks_ >= kReplyPendingTimeoutTicks) {
+                RecoverFailedTurnToStandby("reply-timeout", true);
             }
 
             // Print debug info every 10 seconds
@@ -416,6 +439,21 @@ void Application::HandleActivationDoneEvent() {
         // Play the success sound to indicate the device is ready
         audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
     });
+#if CONFIG_HENSUN_DIAGNOSTIC_AUTO_LISTEN_ON_BOOT
+    xTaskCreate(
+        [](void* arg) {
+            auto* app = static_cast<Application*>(arg);
+            ESP_LOGW(TAG, "Diagnostic auto-listen armed; starting every 60 seconds");
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                vTaskDelay(pdMS_TO_TICKS(60000));
+                ESP_LOGW(TAG, "Diagnostic auto-listen firing attempt=%d state=%d",
+                         attempt, static_cast<int>(app->GetDeviceState()));
+                app->StartListening();
+            }
+            vTaskDelete(nullptr);
+        },
+        "diag_auto_listen", 4096, this, 1, nullptr);
+#endif
 }
 
 void Application::ActivationTask() {
@@ -618,14 +656,7 @@ void Application::InitializeProtocol() {
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
-            tts_playback_prepared_.store(false);
-            tts_audio_started_ = false;
-            active_tts_reply_id_.clear();
-            pending_tts_stop_reply_id_.clear();
-            active_turn_id_.clear();
-            auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
+            RecoverFailedTurnToStandby("audio-channel-closed", false);
         });
     });
 
@@ -674,6 +705,7 @@ void Application::InitializeProtocol() {
                     } else {
                         // Official servers do not use the ready handshake. Keep
                         // their legacy start-immediately behavior.
+                        reply_pending_ = false;
                         SetDeviceState(kDeviceStateSpeaking);
                     }
                 });
@@ -706,11 +738,16 @@ void Application::InitializeProtocol() {
                         tts_playback_prepared_.store(false);
                         tts_audio_started_ = false;
                         if (GetDeviceState() == kDeviceStateSpeaking) {
+#if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+                            protocol_->CloseAudioChannel();
+                            SetDeviceState(kDeviceStateIdle);
+#else
                             if (listening_mode_ == kListeningModeManualStop) {
                                 SetDeviceState(kDeviceStateIdle);
                             } else {
                                 SetDeviceState(kDeviceStateListening);
                             }
+#endif
                         }
                     });
                 }
@@ -766,6 +803,12 @@ void Application::InitializeProtocol() {
                     display->SetEmotion(emotion_str.c_str());
                 });
             }
+        } else if (strcmp(type->valuestring, "error") == 0) {
+            auto code = cJSON_GetObjectItem(root, "code");
+            std::string reason = cJSON_IsString(code) ? code->valuestring : "gateway-error";
+            Schedule([this, reason]() {
+                RecoverFailedTurnToStandby(reason.c_str(), true);
+            });
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");
             if (cJSON_IsObject(payload)) {
@@ -867,11 +910,13 @@ void Application::HandleDeviceConfig(const cJSON* root) {
 }
 
 bool Application::OpenAudioChannelWithConfigRefresh() {
+    ESP_LOGI(TAG, "Opening audio channel; protocol=%p", protocol_.get());
     // The cached device-session token is valid for a short period. Reuse it
     // first so an ordinary wake-up does not pay for a second HTTPS bootstrap
     // round trip. If it has expired, the failed WSS attempt falls through to a
     // fresh bootstrap below.
     if (protocol_ && protocol_->OpenAudioChannel()) {
+        ESP_LOGI(TAG, "Audio channel opened using cached websocket configuration");
         last_error_message_.clear();
         xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
         return true;
@@ -885,6 +930,7 @@ bool Application::OpenAudioChannelWithConfigRefresh() {
     if (ota_->CheckVersion() == ESP_OK) {
         InitializeProtocol();
         if (protocol_ && protocol_->OpenAudioChannel()) {
+            ESP_LOGI(TAG, "Audio channel opened after bootstrap refresh");
             last_error_message_.clear();
             xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
             return true;
@@ -896,10 +942,12 @@ bool Application::OpenAudioChannelWithConfigRefresh() {
     // Keep an offline-friendly fallback for a transient bootstrap failure.
     // It succeeds only while the previously saved token is still valid.
     if (protocol_ && protocol_->OpenAudioChannel()) {
+        ESP_LOGI(TAG, "Audio channel opened using saved websocket fallback");
         last_error_message_.clear();
         xEventGroupClearBits(event_group_, MAIN_EVENT_ERROR);
         return true;
     }
+    ESP_LOGE(TAG, "Open audio channel failed after cached, bootstrap, and fallback attempts");
     return false;
 }
 
@@ -978,6 +1026,14 @@ void Application::HandleToggleChatEvent() {
     }
 
     if (state == kDeviceStateIdle) {
+        if (reply_pending_) {
+            reply_pending_ = false;
+            if (protocol_->IsAudioChannelOpened()) {
+                protocol_->CloseAudioChannel();
+            }
+            Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::STANDBY);
+            return;
+        }
         ListeningMode mode = GetDefaultListeningMode();
         if (!protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
@@ -996,8 +1052,13 @@ void Application::HandleToggleChatEvent() {
 void Application::ContinueOpenAudioChannel(ListeningMode mode) {
     // Check state again in case it was changed during scheduling
     if (GetDeviceState() != kDeviceStateConnecting) {
+        ESP_LOGW(TAG, "Skip opening audio channel because state changed to %d",
+                 static_cast<int>(GetDeviceState()));
         return;
     }
+    ESP_LOGI(TAG, "ContinueOpenAudioChannel(mode=%d), channel_open=%d",
+             static_cast<int>(mode),
+             protocol_ ? protocol_->IsAudioChannelOpened() : false);
 
     // Switch to performance mode before connecting to reduce latency
     auto& board = Board::GetInstance();
@@ -1029,6 +1090,9 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
 
 void Application::HandleStartListeningEvent() {
     auto state = GetDeviceState();
+    ESP_LOGI(TAG, "HandleStartListeningEvent(state=%d, protocol=%p, channel_open=%d)",
+             static_cast<int>(state), protocol_.get(),
+             protocol_ ? protocol_->IsAudioChannelOpened() : false);
 
     if (state == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
@@ -1109,6 +1173,7 @@ void Application::HandleWakeWordDetectedEvent() {
 
 void Application::BeginWakeWordInvoke(const std::string& wake_word) {
     // Must run in the main task with the device in idle state
+    reply_pending_ = false;
     audio_service_.EncodeWakeWord();
 
     if (!protocol_->IsAudioChannelOpened()) {
@@ -1188,6 +1253,8 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
     clock_ticks_ = 0;
+    listening_capture_ready_ = false;
+    vad_speech_edge_pending_.store(false, std::memory_order_release);
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;
@@ -1200,6 +1267,14 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            if (reply_pending_) {
+                // VAD has ended a real utterance, but the cloud has not produced
+                // speaker PCM yet. Preserve the current open-eyed listening face;
+                // mapping this protocol idle state to standby flashes sleep eyes.
+                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(false);
+                break;
+            }
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
 #if !CONFIG_USE_EMOTE_MESSAGE_STYLE
@@ -1251,8 +1326,14 @@ void Application::HandleStateChangedEvent() {
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+                // Hensun is half-duplex. Listening for the wake word while its
+                // own speaker is active can make the reply interrupt itself.
+                audio_service_.EnableWakeWordDetection(false);
+#else
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+#endif
             }
             break;
         case kDeviceStateWifiConfiguring:
@@ -1277,6 +1358,11 @@ void Application::StartListeningAudio() {
     if (!audio_service_.IsAudioProcessorRunning()) {
         audio_service_.EnableVoiceProcessing(true);
     }
+    // The follow-up deadline starts here, not when the UI first enters the
+    // listening state. Playback drain and echo-guard time must not consume the
+    // user's ten-second response window.
+    clock_ticks_ = 0;
+    listening_capture_ready_ = true;
     // A first utterance may already be queued while Bootstrap/WSS connected.
     // Re-arm the main loop so those packets are drained after listen.start.
     xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
@@ -1306,6 +1392,7 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     }
     const bool had_audio = tts_audio_started_;
     const std::string turn_id = active_turn_id_;
+    reply_pending_ = false;
     pending_tts_stop_reply_id_.clear();
     active_tts_reply_id_.clear();
     tts_playback_prepared_.store(false);
@@ -1323,6 +1410,9 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     }
     active_turn_id_.clear();
 #if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+        protocol_->CloseAudioChannel();
+    }
     SetDeviceState(kDeviceStateIdle);
 #else
     if (listening_mode_ == kListeningModeManualStop) {
@@ -1351,6 +1441,40 @@ void Application::FinishTtsPlayback(std::string reply_id) {
 #endif
 }
 
+void Application::RecoverFailedTurnToStandby(const char* reason, bool close_audio_channel) {
+    ESP_LOGW(TAG, "Recovering failed turn to standby: %s", reason ? reason : "unknown");
+    const bool had_audio = tts_audio_started_;
+    reply_pending_ = false;
+    post_playback_guard_active_ = false;
+    pending_listening_start_ = false;
+    tts_playback_prepared_.store(false);
+    tts_audio_started_ = false;
+    active_tts_reply_id_.clear();
+    pending_tts_stop_reply_id_.clear();
+    active_turn_id_.clear();
+    if (post_playback_listen_timer_handle_ != nullptr) {
+        esp_timer_stop(post_playback_listen_timer_handle_);
+    }
+    audio_service_.ResetDecoder();
+
+    auto display = Board::GetInstance().GetDisplay();
+    if (had_audio) {
+        // A transport close may race the final drained acknowledgement. Keep
+        // the same bounded visual finish as the normal playback path instead
+        // of jumping directly from a speaking face to sleep.
+        display->BeginReplySettle();
+    }
+    SetDeviceState(kDeviceStateIdle);
+    display->SetStatus(Lang::Strings::STANDBY);
+    display->ClearChatMessages();
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableWakeWordDetection(true);
+
+    if (close_audio_channel && protocol_ && protocol_->IsAudioChannelOpened()) {
+        protocol_->CloseAudioChannel();
+    }
+}
+
 void Application::Schedule(std::function<void()>&& callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1362,6 +1486,7 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    reply_pending_ = false;
     tts_playback_prepared_.store(false);
     tts_audio_started_ = false;
     active_tts_reply_id_.clear();
@@ -1376,6 +1501,7 @@ void Application::AbortSpeaking(AbortReason reason) {
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     vad_speech_detected_ = false;
+    reply_pending_ = false;
     SetDeviceState(kDeviceStateListening);
 }
 

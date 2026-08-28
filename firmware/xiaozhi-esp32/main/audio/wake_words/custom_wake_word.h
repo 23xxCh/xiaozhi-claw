@@ -9,6 +9,7 @@
 #include <model_path.h>
 
 #include <deque>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <functional>
@@ -31,6 +32,7 @@ public:
     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback);
     void Start();
     void Stop();
+    void BeginSpeechWindow();
     size_t GetFeedSize();
     void EncodeWakeWordData();
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);

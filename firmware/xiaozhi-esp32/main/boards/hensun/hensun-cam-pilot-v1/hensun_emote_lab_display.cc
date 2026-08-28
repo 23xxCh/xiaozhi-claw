@@ -22,16 +22,16 @@ constexpr int64_t kReplySettleDurationUs = 800 * 1000;
 // a reply.  Three seconds only covered the end-of-reply animation, so the
 // screen often entered sleep before the user could react.
 constexpr int64_t kIdleSleepDurationUs = 10 * 1000 * 1000;
-constexpr size_t kExpectedAnimationCount = 18;
+constexpr size_t kExpectedAnimationCount = 20;
 constexpr const char* kExpectedAnimations[kExpectedAnimationCount] = {
     "sleep", "wake", "idle", "listening", "thinking", "speaking", "speaking_0",
     "speaking_1", "speaking_3", "happy", "caring", "curious", "surprised",
-    "confused", "alert", "talk_base", "talk_happy", "talk_caring",
+    "confused", "alert", "shy", "sad", "talk_base", "talk_happy", "talk_caring",
 };
-constexpr size_t kShowcaseAnimationCount = 12;
+constexpr size_t kShowcaseAnimationCount = 14;
 constexpr const char* kShowcaseAnimations[kShowcaseAnimationCount] = {
     "sleep", "wake", "idle", "listening", "thinking", "speaking", "happy", "caring",
-    "curious", "surprised", "confused", "alert",
+    "curious", "surprised", "confused", "alert", "shy", "sad",
 };
 bool IsOneOf(const char* value, std::initializer_list<const char*> choices) {
     if (value == nullptr) {
@@ -225,9 +225,9 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         speaking_active_.store(false);
         awaiting_audio_.store(true);
         mouth_renderer_.SetActive(false);
-        // tts.start only means the gateway has reserved a reply. Do not claim
-        // that the device is speaking until the first PCM block reaches I2S.
-        QueueAnimation("thinking", false, true);
+        // tts.start only means the gateway has reserved a reply. Preserve the
+        // current face until the first PCM block reaches I2S so a brief
+        // awaiting-audio window does not flash the squinting thinking face.
     } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
         InvalidatePresentationTimers();
         presentation_state_.store(PresentationState::kAlert);
@@ -250,6 +250,10 @@ void HensunEmoteLabDisplay::SetEmotion(const char* emotion) {
         reply_emotion_.store(ReplyEmotion::kHappy);
     } else if (std::strcmp(animation, "caring") == 0) {
         reply_emotion_.store(ReplyEmotion::kCaring);
+    } else if (std::strcmp(animation, "shy") == 0) {
+        reply_emotion_.store(ReplyEmotion::kShy);
+    } else if (std::strcmp(animation, "sad") == 0) {
+        reply_emotion_.store(ReplyEmotion::kSad);
     } else {
         reply_emotion_.store(ReplyEmotion::kNeutral);
     }
@@ -278,6 +282,12 @@ void HensunEmoteLabDisplay::BeginReplySettle() {
             break;
         case ReplyEmotion::kCaring:
             animation = "caring";
+            break;
+        case ReplyEmotion::kShy:
+            animation = "shy";
+            break;
+        case ReplyEmotion::kSad:
+            animation = "sad";
             break;
         case ReplyEmotion::kNeutral:
             break;
@@ -589,6 +599,15 @@ const char* HensunEmoteLabDisplay::ConversationAnimation() const {
             return "talk_happy";
         case ReplyEmotion::kCaring:
             return "talk_caring";
+        case ReplyEmotion::kShy:
+            // The current shy asset has its own baked mouth. Use the shared
+            // mouthless speech base while PCM overlay is active; the dedicated
+            // shy animation is still shown during the reply settle.
+            return "talk_base";
+        case ReplyEmotion::kSad:
+            // The current sad asset also has a baked mouth and would otherwise
+            // render two mouths on top of each other during speech.
+            return "talk_base";
         case ReplyEmotion::kNeutral:
         default:
             return "talk_base";
@@ -662,7 +681,13 @@ const char* HensunEmoteLabDisplay::MapEmotion(const char* emotion, bool* urgent)
     if (IsOneOf(emotion, {"happy", "positive_response", "laughter", "laughing", "amused"})) {
         return "happy";
     }
-    if (IsOneOf(emotion, {"caring", "comfort_mode_entered", "sad", "fearful", "fear"})) {
+    if (IsOneOf(emotion, {"shy", "embarrassed", "affectionate"})) {
+        return "shy";
+    }
+    if (IsOneOf(emotion, {"sad", "crying", "concerned", "apologetic", "worried"})) {
+        return "sad";
+    }
+    if (IsOneOf(emotion, {"caring", "comfort_mode_entered", "fearful", "fear"})) {
         return "caring";
     }
     if (IsOneOf(emotion, {"safe_block", "content_safety_blocked", "network_unavailable",
