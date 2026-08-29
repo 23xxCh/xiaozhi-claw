@@ -259,6 +259,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         display_header = (ROOT / "main/display/display.h").read_text(encoding="utf-8")
 
         self.assertIn("virtual void BeginReplySettle() {}", display_header)
+        self.assertIn("virtual void CompleteReplySettle() {}", display_header)
         self.assertIn("kAwaitingAudio", display_source)
         self.assertIn("if (awaiting_audio_.exchange(false))", display_source)
         self.assertIn(
@@ -281,11 +282,13 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIsNotNone(finish)
         self.assertLess(
-            finish.group(1).index("BeginReplySettle()"),
+            finish.group(1).index("BeginReplySettle("),
             finish.group(1).index("SetDeviceState(kDeviceStateIdle)"),
         )
-        self.assertIn("kReplySettleDurationUs = 800 * 1000", display_source)
-        self.assertIn("kIdleSleepDurationUs = 10 * 1000 * 1000", display_source)
+        self.assertIn("kReplySettleDurationUs = 800 * 1000", self.application_source)
+        self.assertNotIn("esp_timer_start_once", display_source)
+        self.assertNotIn("IdleSleepTimerCallback", display_source)
+        self.assertNotIn("EnterSleepAfterIdle", display_source)
         self.assertIn("reply_settle_pending_.load()", display_source)
 
     def test_post_speech_reply_wait_does_not_flash_the_sleep_face(self):
@@ -359,7 +362,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
     def test_auto_listening_waits_for_post_playback_echo_guard(self):
         self.assertRegex(
             self.application_source,
-            r"kPostPlaybackListenGuardUs\s*=\s*1000\s*\*\s*1000",
+            r"kReplySettleDurationUs\s*=\s*800\s*\*\s*1000",
         )
         self.assertIn("MAIN_EVENT_POST_PLAYBACK_GUARD", self.application_header)
         self.assertIn("post_playback_listen_timer_handle_", self.application_header)
@@ -372,10 +375,17 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIsNotNone(finish)
         body = finish.group(1)
-        self.assertIn("post_playback_guard_active_ = true", body)
-        self.assertIn("esp_timer_start_once", body)
+        self.assertIn("BeginReplySettle(true)", body)
+        settle = re.search(
+            r"void Application::BeginReplySettle\(bool resume_listening\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(settle)
+        self.assertIn("post_playback_guard_active_ = resume_listening", settle.group(1))
+        self.assertIn("esp_timer_start_once", settle.group(1))
         self.assertLess(
-            body.index("post_playback_guard_active_ = true"),
+            body.index("BeginReplySettle(true)"),
             body.index("SetDeviceState(kDeviceStateListening)"),
         )
 
@@ -396,6 +406,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIsNotNone(run)
         self.assertIn("bits & MAIN_EVENT_POST_PLAYBACK_GUARD", run.group(1))
+        self.assertIn("CompleteReplySettle()", run.group(1))
 
     def test_auto_listening_has_a_bounded_safety_timeout(self):
         self.assertRegex(
@@ -470,9 +481,9 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         # instead of jumping straight from the speaking face to sleep.
         self.assertIn("const bool had_audio = tts_audio_started_", body)
         self.assertIn("if (had_audio)", body)
-        self.assertIn("display->BeginReplySettle()", body)
+        self.assertIn("BeginReplySettle(false)", body)
         self.assertLess(
-            body.index("display->BeginReplySettle()"),
+            body.index("BeginReplySettle(false)"),
             body.index("SetDeviceState(kDeviceStateIdle)"),
         )
 

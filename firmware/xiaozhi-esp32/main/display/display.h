@@ -43,6 +43,9 @@ public:
     // playback queue. Displays that do not provide a reply animation can keep
     // the existing idle transition by ignoring this optional lifecycle hook.
     virtual void BeginReplySettle() {}
+    // Called by the dialogue owner after the bounded reply-settle interval.
+    // Displays render the requested state but must not own conversation timers.
+    virtual void CompleteReplySettle() {}
     virtual void SetChatMessage(const char* role, const char* content);
     virtual bool SetPreviewFrame(const uint16_t* pixels, size_t pixel_count,
                                  int width, int height, int stride_bytes);

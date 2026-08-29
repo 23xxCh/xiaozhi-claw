@@ -27,7 +27,7 @@ namespace {
 constexpr int kWaitForSpeechTimeoutTicks = 10;
 constexpr int kMaximumSpeechDurationTicks = 20;
 constexpr int kReplyPendingTimeoutTicks = 12;
-constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
+constexpr int64_t kReplySettleDurationUs = 800 * 1000;
 constexpr int kHeartbeatIntervalTicks = 15;
 constexpr int kHeartbeatMissLimit = 3;
 }
@@ -279,11 +279,16 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_POST_PLAYBACK_GUARD) {
-            if (post_playback_guard_active_ && GetDeviceState() == kDeviceStateIdle) {
+            if (reply_settle_active_) {
+                const bool resume_listening = post_playback_guard_active_;
+                reply_settle_active_ = false;
                 post_playback_guard_active_ = false;
-                SetDeviceState(kDeviceStateListening);
-            } else {
-                post_playback_guard_active_ = false;
+                Board::GetInstance().GetDisplay()->CompleteReplySettle();
+                if (resume_listening && GetDeviceState() == kDeviceStateIdle) {
+                    SetDeviceState(kDeviceStateListening);
+                } else if (GetDeviceState() == kDeviceStateIdle) {
+                    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::STANDBY);
+                }
             }
             if (pending_listening_start_ && GetDeviceState() == kDeviceStateListening &&
                 audio_service_.IsPlaybackIdle()) {
@@ -743,6 +748,7 @@ void Application::InitializeProtocol() {
                         active_turn_id_ = playback_turn_id;
                     }
                     post_playback_guard_active_ = false;
+                    reply_settle_active_ = false;
                     pending_listening_start_ = false;
                     if (post_playback_listen_timer_handle_ != nullptr) {
                         esp_timer_stop(post_playback_listen_timer_handle_);
@@ -883,6 +889,7 @@ void Application::InitializeProtocol() {
                         return;
                     }
                     post_playback_guard_active_ = false;
+                    reply_settle_active_ = false;
                     pending_listening_start_ = false;
                     if (post_playback_listen_timer_handle_ != nullptr) {
                         esp_timer_stop(post_playback_listen_timer_handle_);
@@ -1476,6 +1483,37 @@ void Application::ConfigureWakeWordForListening() {
 #endif
 }
 
+void Application::CancelReplySettle() {
+    reply_settle_active_ = false;
+    post_playback_guard_active_ = false;
+    if (post_playback_listen_timer_handle_ != nullptr) {
+        esp_timer_stop(post_playback_listen_timer_handle_);
+    }
+}
+
+void Application::BeginReplySettle(bool resume_listening) {
+    auto display = Board::GetInstance().GetDisplay();
+    display->BeginReplySettle();
+    reply_settle_active_ = true;
+    post_playback_guard_active_ = resume_listening;
+
+    esp_err_t timer_status = ESP_ERR_INVALID_STATE;
+    if (post_playback_listen_timer_handle_ != nullptr) {
+        esp_timer_stop(post_playback_listen_timer_handle_);
+        timer_status = esp_timer_start_once(post_playback_listen_timer_handle_,
+                                            kReplySettleDurationUs);
+    }
+    if (timer_status == ESP_OK) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "Unable to start reply settle timer: %s",
+             esp_err_to_name(timer_status));
+    // Preserve main-loop ordering even when the hardware timer is unavailable.
+    // The caller still transitions to idle before this event is handled.
+    xEventGroupSetBits(event_group_, MAIN_EVENT_POST_PLAYBACK_GUARD);
+}
+
 void Application::FinishTtsPlayback(std::string reply_id) {
     if (reply_id.empty() || reply_id != active_tts_reply_id_) {
         return;
@@ -1492,37 +1530,24 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     }
     ESP_LOGI(TAG, "TTS playback drained (decode drops=%lu)",
              (unsigned long)audio_service_.GetDecodeDropCount());
-    if (had_audio) {
-        // The device has proved that all queued audio reached the speaker. Let
-        // Hensun's display run its bounded reply settle before the generic
-        // state machine returns the board to idle/standby.
-        Board::GetInstance().GetDisplay()->BeginReplySettle();
-    }
     active_turn_id_.clear();
 #if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
     if (protocol_ && protocol_->IsAudioChannelOpened()) {
         protocol_->CloseAudioChannel();
     }
+    if (had_audio) {
+        BeginReplySettle(false);
+    }
     SetDeviceState(kDeviceStateIdle);
 #else
     if (listening_mode_ == kListeningModeManualStop) {
+        if (had_audio) {
+            BeginReplySettle(false);
+        }
         SetDeviceState(kDeviceStateIdle);
     } else {
-        post_playback_guard_active_ = true;
-        esp_err_t guard_status = ESP_ERR_INVALID_STATE;
-        if (post_playback_listen_timer_handle_ != nullptr) {
-            esp_timer_stop(post_playback_listen_timer_handle_);
-            guard_status = esp_timer_start_once(post_playback_listen_timer_handle_,
-                                                kPostPlaybackListenGuardUs);
-        }
-        if (guard_status != ESP_OK) {
-            ESP_LOGW(TAG, "Unable to start post-playback guard: %s",
-                     esp_err_to_name(guard_status));
-            post_playback_guard_active_ = false;
-        }
-        if (guard_status == ESP_OK) {
-            // Stay in idle while the 0.8-second visual settle completes. The
-            // guard event opens the microphone for the follow-up window.
+        if (had_audio) {
+            BeginReplySettle(true);
             SetDeviceState(kDeviceStateIdle);
         } else {
             SetDeviceState(kDeviceStateListening);
@@ -1535,7 +1560,7 @@ void Application::RecoverFailedTurnToStandby(const char* reason, bool close_audi
     ESP_LOGW(TAG, "Recovering failed turn to standby: %s", reason ? reason : "unknown");
     const bool had_audio = tts_audio_started_;
     reply_pending_ = false;
-    post_playback_guard_active_ = false;
+    CancelReplySettle();
     pending_listening_start_ = false;
     tts_playback_prepared_.store(false);
     tts_audio_started_ = false;
@@ -1552,10 +1577,12 @@ void Application::RecoverFailedTurnToStandby(const char* reason, bool close_audi
         // A transport close may race the final drained acknowledgement. Keep
         // the same bounded visual finish as the normal playback path instead
         // of jumping directly from a speaking face to sleep.
-        display->BeginReplySettle();
+        BeginReplySettle(false);
     }
     SetDeviceState(kDeviceStateIdle);
-    display->SetStatus(Lang::Strings::STANDBY);
+    if (!had_audio) {
+        display->SetStatus(Lang::Strings::STANDBY);
+    }
     display->ClearChatMessages();
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.EnableWakeWordDetection(true);

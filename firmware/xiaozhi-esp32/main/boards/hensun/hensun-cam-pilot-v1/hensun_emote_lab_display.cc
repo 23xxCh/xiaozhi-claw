@@ -17,11 +17,6 @@ constexpr char kPartitionLabel[] = "emote_gen";
 constexpr int kFrameRate = 20;
 constexpr int kRenderStripeHeight = 16;
 constexpr int kPreviewDurationMs = 1500;
-constexpr int64_t kReplySettleDurationUs = 800 * 1000;
-// Give a person a natural chance to begin the next wake-word utterance after
-// a reply.  Three seconds only covered the end-of-reply animation, so the
-// screen often entered sleep before the user could react.
-constexpr int64_t kIdleSleepDurationUs = 10 * 1000 * 1000;
 constexpr size_t kExpectedAnimationCount = 20;
 constexpr const char* kExpectedAnimations[kExpectedAnimationCount] = {
     "sleep", "wake", "idle", "listening", "thinking", "speaking", "speaking_0",
@@ -128,41 +123,11 @@ HensunEmoteLabDisplay::HensunEmoteLabDisplay(esp_lcd_panel_io_handle_t panel_io,
         switch_task_ = nullptr;
         return;
     }
-    const esp_timer_create_args_t reply_settle_timer_args = {
-        .callback = ReplySettleTimerCallback,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "hensun_reply_settle",
-        .skip_unhandled_events = true,
-    };
-    if (esp_timer_create(&reply_settle_timer_args, &reply_settle_timer_handle_) != ESP_OK) {
-        ESP_LOGE(kTag, "reply settle timer create failed");
-    }
-    const esp_timer_create_args_t idle_sleep_timer_args = {
-        .callback = IdleSleepTimerCallback,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "hensun_idle_sleep",
-        .skip_unhandled_events = true,
-    };
-    if (esp_timer_create(&idle_sleep_timer_args, &idle_sleep_timer_handle_) != ESP_OK) {
-        ESP_LOGE(kTag, "idle sleep timer create failed");
-    }
     QueueAnimation("idle", true);
 }
 
 HensunEmoteLabDisplay::~HensunEmoteLabDisplay() {
     showcase_active_.store(false);
-    if (reply_settle_timer_handle_ != nullptr) {
-        esp_timer_stop(reply_settle_timer_handle_);
-        esp_timer_delete(reply_settle_timer_handle_);
-        reply_settle_timer_handle_ = nullptr;
-    }
-    if (idle_sleep_timer_handle_ != nullptr) {
-        esp_timer_stop(idle_sleep_timer_handle_);
-        esp_timer_delete(idle_sleep_timer_handle_);
-        idle_sleep_timer_handle_ = nullptr;
-    }
     if (switch_task_ != nullptr) {
         vTaskDelete(switch_task_);
         switch_task_ = nullptr;
@@ -193,7 +158,7 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         return;
     }
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
-        InvalidatePresentationTimers();
+        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kListening);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
@@ -205,21 +170,21 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         if (reply_settle_pending_.load()) {
             return;
         }
-        InvalidatePresentationTimers();
+        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kSleep);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
         mouth_renderer_.SetActive(false);
         QueueAnimation("sleep");
     } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
-        InvalidatePresentationTimers();
+        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kThinking);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
         mouth_renderer_.SetActive(false);
         QueueAnimation("thinking", false, true);
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        InvalidatePresentationTimers();
+        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kAwaitingAudio);
         speech_level_.store(0);
         speaking_active_.store(false);
@@ -229,7 +194,7 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         // current face until the first PCM block reaches I2S so a brief
         // awaiting-audio window does not flash the squinting thinking face.
     } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
-        InvalidatePresentationTimers();
+        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kAlert);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
@@ -267,13 +232,12 @@ void HensunEmoteLabDisplay::SetEmotion(const char* emotion) {
 }
 
 void HensunEmoteLabDisplay::BeginReplySettle() {
-    const uint32_t generation = InvalidatePresentationTimers();
+    InvalidatePresentationState();
     presentation_state_.store(PresentationState::kReplySettle);
     speaking_active_.store(false);
     awaiting_audio_.store(false);
     mouth_renderer_.SetActive(false);
     reply_settle_pending_.store(true);
-    reply_settle_generation_.store(generation);
 
     const char* animation = "idle";
     switch (reply_emotion_.load()) {
@@ -293,12 +257,6 @@ void HensunEmoteLabDisplay::BeginReplySettle() {
             break;
     }
     QueueAnimation(animation, true, true);
-
-    if (reply_settle_timer_handle_ == nullptr ||
-        esp_timer_start_once(reply_settle_timer_handle_, kReplySettleDurationUs) != ESP_OK) {
-        ESP_LOGW(kTag, "reply settle timer unavailable; returning to idle immediately");
-        CompleteReplySettle();
-    }
 }
 
 void HensunEmoteLabDisplay::SetChatMessage(const char* role, const char* content) {
@@ -377,7 +335,7 @@ void HensunEmoteLabDisplay::SetPowerSaveMode(bool on) {
     // Soft standby must remain visibly alive so the user knows that the local
     // wake word is still available. Do not blank the panel here.
     esp_lcd_panel_disp_on_off(panel_, true);
-    InvalidatePresentationTimers();
+    InvalidatePresentationState();
     speaking_active_.store(false);
     awaiting_audio_.store(false);
     mouth_renderer_.SetActive(false);
@@ -461,14 +419,6 @@ void HensunEmoteLabDisplay::ShowcaseTaskEntry(void* context) {
     static_cast<HensunEmoteLabDisplay*>(context)->ShowcaseTask();
 }
 
-void HensunEmoteLabDisplay::ReplySettleTimerCallback(void* context) {
-    static_cast<HensunEmoteLabDisplay*>(context)->CompleteReplySettle();
-}
-
-void HensunEmoteLabDisplay::IdleSleepTimerCallback(void* context) {
-    static_cast<HensunEmoteLabDisplay*>(context)->EnterSleepAfterIdle();
-}
-
 bool HensunEmoteLabDisplay::Lock(int timeout_ms) {
     (void)timeout_ms;
     gfx_handle_t gfx = emote_gen_player_get_gfx_handle(player_);
@@ -519,45 +469,16 @@ void HensunEmoteLabDisplay::ShowcaseTask() {
     vTaskDelete(nullptr);
 }
 
-uint32_t HensunEmoteLabDisplay::InvalidatePresentationTimers() {
-    const uint32_t generation = presentation_generation_.fetch_add(1) + 1;
+void HensunEmoteLabDisplay::InvalidatePresentationState() {
     reply_settle_pending_.store(false);
-    idle_sleep_pending_.store(false);
-    if (reply_settle_timer_handle_ != nullptr) {
-        esp_timer_stop(reply_settle_timer_handle_);
-    }
-    if (idle_sleep_timer_handle_ != nullptr) {
-        esp_timer_stop(idle_sleep_timer_handle_);
-    }
-    return generation;
 }
 
 void HensunEmoteLabDisplay::CompleteReplySettle() {
-    const uint32_t generation = reply_settle_generation_.load();
-    if (!reply_settle_pending_.exchange(false) ||
-        generation != presentation_generation_.load()) {
+    if (!reply_settle_pending_.exchange(false)) {
         return;
     }
     presentation_state_.store(PresentationState::kIdle);
     QueueAnimation("idle", true, true);
-    idle_sleep_generation_.store(generation);
-    idle_sleep_pending_.store(true);
-    if (idle_sleep_timer_handle_ == nullptr ||
-        esp_timer_start_once(idle_sleep_timer_handle_, kIdleSleepDurationUs) != ESP_OK) {
-        ESP_LOGW(kTag, "idle sleep timer unavailable; keeping idle animation");
-        idle_sleep_pending_.store(false);
-    }
-}
-
-void HensunEmoteLabDisplay::EnterSleepAfterIdle() {
-    const uint32_t generation = idle_sleep_generation_.load();
-    if (!idle_sleep_pending_.exchange(false) ||
-        generation != presentation_generation_.load() ||
-        presentation_state_.load() != PresentationState::kIdle) {
-        return;
-    }
-    presentation_state_.store(PresentationState::kSleep);
-    QueueAnimation("sleep", false, true);
 }
 
 void HensunEmoteLabDisplay::QueueAnimation(const char* animation, bool urgent, bool immediate) {
