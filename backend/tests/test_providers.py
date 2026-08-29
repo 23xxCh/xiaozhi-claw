@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from backend.ai.context import LlmContext, LlmRequest
 from backend.app.config import Settings
 from backend.app.providers import (
     OpenAICompatibleLlmProvider,
@@ -77,7 +78,22 @@ async def test_custom_llm_provider_uses_configured_model_and_memory() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICompatibleLlmProvider(custom_settings(), client=client)
-        reply = await provider.reply("提醒我", ["用户喜欢温水"])
+        reply = await provider.reply(
+            LlmRequest(
+                context=LlmContext(
+                    messages=(
+                        {"role": "system", "content": "你是助手"},
+                        {"role": "system", "content": "用户喜欢温水"},
+                        {"role": "user", "content": "提醒我"},
+                    ),
+                    estimated_input_tokens=12,
+                    source_token_counts={},
+                    selected_memory_ids=("memory-1",),
+                ),
+                model="llm-model",
+                temperature=0.6,
+            )
+        )
 
     assert reply == "今天记得喝水"
     assert captured["model"] == "llm-model"
@@ -95,13 +111,23 @@ async def test_batch_llm_fallback_preserves_voice_prompt_and_history() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = OpenAICompatibleLlmProvider(custom_settings(), client=client)
         reply = await provider.reply(
-            "今天星期几",
-            [],
-            history=[
-                {"role": "user", "content": "我们刚才在聊周末安排"},
-                {"role": "assistant", "content": "记得你想去散步"},
-            ],
-            system_prompt="可信本地日期：2026年8月28日，星期五。",
+            LlmRequest(
+                context=LlmContext(
+                    messages=(
+                        {
+                            "role": "system",
+                            "content": "可信本地日期：2026年8月28日，星期五。",
+                        },
+                        {"role": "user", "content": "我们刚才在聊周末安排"},
+                        {"role": "assistant", "content": "记得你想去散步"},
+                        {"role": "user", "content": "今天星期几"},
+                    ),
+                    estimated_input_tokens=24,
+                    source_token_counts={},
+                ),
+                model="llm-model",
+                temperature=0.6,
+            )
         )
 
     assert reply == "周五"

@@ -12,6 +12,14 @@ from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.ai.context import (
+    ConfirmedMemory,
+    ContextBuilder,
+    ContextOverflowError,
+    ContextSummary,
+    LlmRequest,
+    MemoryKind,
+)
 from backend.app.audit import add_audit_event
 from backend.app.catalog import ensure_default_agent
 from backend.app.device_connections import ConnectionLease
@@ -117,7 +125,6 @@ class AgentSnapshot:
     config_version: int
     system_prompt: str
     memory_consent: bool
-    memories: list[str]
     asr_provider: str
     asr_model: str
     llm_provider: str
@@ -310,7 +317,7 @@ async def _stop_playback(
     return drained or not playback.strict_ack
 
 
-async def _load_snapshot(session: AsyncSession, device: Device, settings) -> AgentSnapshot:
+async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot:
     if device.active_agent_id is None:
         user = await session.get(User, device.owner_user_id)
         if user is None:
@@ -337,15 +344,7 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
     voice = await session.get(VoicePreset, agent.voice_preset_id)
     if model is None or not model.enabled or voice is None or not voice.enabled:
         raise RuntimeError("agent preset is unavailable")
-    memories: list[str] = []
     profile_memory_allowed = profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent
-    if agent.memory_consent and profile_memory_allowed:
-        encrypted = list(
-            await session.scalars(
-                select(AgentMemory.encrypted_value).where(AgentMemory.agent_id == agent.id)
-            )
-        )
-        memories = [decrypt_memory(value, settings) for value in encrypted]
     return AgentSnapshot(
         agent_id=agent.id,
         usage_profile_id=profile.id,
@@ -353,7 +352,6 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         config_version=agent.config_version,
         system_prompt=agent.system_prompt,
         memory_consent=agent.memory_consent and profile_memory_allowed,
-        memories=memories,
         asr_provider=model.asr_provider,
         asr_model=model.asr_model,
         llm_provider=model.llm_provider,
@@ -369,6 +367,81 @@ async def _load_snapshot(session: AsyncSession, device: Device, settings) -> Age
         llm_output_cost_micros_per_million_tokens=(model.llm_output_cost_micros_per_million_tokens),
         tts_cost_micros_per_10k_chars=model.tts_cost_micros_per_10k_chars,
     )
+
+
+def _memory_kind_from_key(key: str) -> MemoryKind:
+    normalized = key.lower()
+    if normalized in {"name", "preferred_name", "display_name"}:
+        return "name"
+    if normalized.startswith("todo") or normalized.startswith("task"):
+        return "todo"
+    if normalized.startswith("preference") or normalized.startswith("pref"):
+        return "preference"
+    return "note"
+
+
+async def _load_context_sources(
+    session_factory: async_sessionmaker[AsyncSession],
+    snapshot: AgentSnapshot,
+    settings,
+) -> tuple[list[ConfirmedMemory], list[ContextSummary]]:
+    """Reload consent and prompt sources for each turn so revocations apply immediately."""
+
+    async with session_factory() as session:
+        agent = await session.get(Agent, snapshot.agent_id)
+        profile = await session.get(UsageProfile, snapshot.usage_profile_id)
+        if agent is None or profile is None:
+            return [], []
+        profile_memory_allowed = (
+            profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent
+        )
+        if not agent.memory_consent or not profile_memory_allowed:
+            return [], []
+        memory_rows = list(
+            await session.scalars(
+                select(AgentMemory)
+                .where(AgentMemory.agent_id == snapshot.agent_id)
+                .order_by(AgentMemory.updated_at.desc(), AgentMemory.id.desc())
+            )
+        )
+        summary_rows = list(
+            await session.scalars(
+                select(EncryptedSessionSummary)
+                .where(EncryptedSessionSummary.agent_id == snapshot.agent_id)
+                .order_by(
+                    EncryptedSessionSummary.created_at.desc(),
+                    EncryptedSessionSummary.id.desc(),
+                )
+                .limit(10)
+            )
+        )
+
+    memories: list[ConfirmedMemory] = []
+    for row in memory_rows:
+        try:
+            value = decrypt_memory(row.encrypted_value, settings)
+        except Exception:
+            logger.warning("ignored unreadable confirmed memory id=%s", row.id)
+            continue
+        memories.append(
+            ConfirmedMemory(
+                id=row.id,
+                key=row.key,
+                value=value,
+                kind=_memory_kind_from_key(row.key),
+                updated_at=row.updated_at,
+            )
+        )
+
+    summaries: list[ContextSummary] = []
+    for row in summary_rows:
+        try:
+            text = decrypt_memory(row.encrypted_summary, settings)
+        except Exception:
+            logger.warning("ignored unreadable conversation summary id=%s", row.id)
+            continue
+        summaries.append(ContextSummary(id=row.id, text=text, created_at=row.created_at))
+    return memories, summaries
 
 
 async def _send_error(
@@ -459,6 +532,7 @@ async def _record_turn(
     audio_duration_ms: int,
     transcript: str,
     reply: str,
+    estimated_input_tokens: int,
     asr_latency_ms: int,
     llm_latency_ms: int,
     tts_latency_ms: int,
@@ -466,7 +540,6 @@ async def _record_turn(
     safety_category: str | None,
     fallback_operations: set[str],
 ) -> None:
-    estimated_input_tokens = max(1, len(transcript) // 4)
     estimated_output_tokens = max(1, len(reply) // 4)
     asr_cost = round(snapshot.asr_cost_micros_per_minute * audio_duration_ms / 60_000)
     llm_cost = round(
@@ -842,6 +915,36 @@ async def _process_turn(
             + "。如果第二句情绪明显变化，可以在第一句完整结束后再输出一个标记；"
             "整次回复最多两个标记，标记之外不要输出其他内部标签。"
         )
+        context_memories, context_summaries = await _load_context_sources(
+            websocket.app.state.session_factory,
+            snapshot,
+            websocket.app.state.settings,
+        )
+        try:
+            llm_context = ContextBuilder().build(
+                system_prompt=voice_system_prompt,
+                current_question=transcript,
+                history=[dict(message) for message in history],
+                memories=context_memories,
+                summaries=context_summaries,
+                tools=tool_schemas or None,
+            )
+        except ContextOverflowError:
+            await _send_turn_error_and_reset(
+                websocket,
+                lease,
+                playback,
+                turn_id,
+                "llm-context-overflow",
+                "conversation context is too large",
+            )
+            return False
+        llm_request = LlmRequest(
+            context=llm_context,
+            model=snapshot.llm_model,
+            temperature=snapshot.llm_temperature,
+            tools=tool_schemas or None,
+        )
         reply_parts: list[str] = []
         spoken_parts: list[str] = []
         spoken_chars = 0
@@ -924,17 +1027,9 @@ async def _process_turn(
             await speak(safety.fixed_response)
         else:
             try:
-                llm_kwargs: dict[str, object] = {}
-                if tool_schemas:
-                    llm_kwargs = {"tools": tool_schemas, "tool_executor": execute_tool}
                 async for token in providers.llm.reply_stream(
-                    transcript,
-                    history,
-                    snapshot.memories,
-                    system_prompt=voice_system_prompt,
-                    model=snapshot.llm_model,
-                    temperature=snapshot.llm_temperature,
-                    **llm_kwargs,
+                    llm_request,
+                    tool_executor=execute_tool if tool_schemas else None,
                 ):
                     for face_event in face_parser.feed(token):
                         apply_face_event(face_event)
@@ -967,10 +1062,7 @@ async def _process_turn(
                 reply_parts.clear()
                 sentence_buffer = SentenceBuffer()
                 fallback_text = await fallback.llm.reply(
-                    transcript,
-                    snapshot.memories,
-                    history=history,
-                    system_prompt=voice_system_prompt,
+                    llm_request.with_model(websocket.app.state.settings.fallback_llm_model)
                 )
                 reply_parts.append(fallback_text)
                 for sentence in sentence_buffer.feed(fallback_text):
@@ -1038,6 +1130,7 @@ async def _process_turn(
                 audio_duration_ms=audio_duration_ms,
                 transcript=transcript,
                 reply=reply,
+                estimated_input_tokens=llm_context.estimated_input_tokens,
                 asr_latency_ms=asr_latency_ms,
                 llm_latency_ms=llm_latency_ms,
                 tts_latency_ms=tts_latency_ms,
@@ -1124,13 +1217,22 @@ async def _save_session_summary(
     prompt = "请把这次对话概括为不超过120字的偏好和待办摘要，不要记录敏感原文。"
     parts: list[str] = []
     try:
-        async for token in websocket.app.state.realtime_providers.llm.reply_stream(
-            prompt,
-            history[-20:],
-            [],
+        summary_context = ContextBuilder().build(
             system_prompt="只输出简短、客观的会话摘要。",
+            current_question=prompt,
+            history=[dict(message) for message in history],
+            memories=[],
+            summaries=[],
+            tools=None,
+        )
+        summary_request = LlmRequest(
+            context=summary_context,
             model=snapshot.llm_model,
             temperature=0.2,
+            max_output_tokens=256,
+        )
+        async for token in websocket.app.state.realtime_providers.llm.reply_stream(
+            summary_request,
         ):
             parts.append(token)
         summary = "".join(parts).strip()[:500]
@@ -1288,7 +1390,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             )
             await websocket.close(code=4403, reason="device is not active and owned")
             return
-        snapshot = await _load_snapshot(session, device, settings)
+        snapshot = await _load_snapshot(session, device)
         await session.flush()
         connection_id = str(uuid.uuid4())
         conversation = ConversationSession(
@@ -1667,7 +1769,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     if current_device is None:
                         await websocket.close(code=4404, reason="device removed")
                         break
-                    snapshot = await _load_snapshot(session, current_device, settings)
+                    snapshot = await _load_snapshot(session, current_device)
                     profile = await session.get(UsageProfile, snapshot.usage_profile_id)
                     if profile is None:
                         await websocket.close(code=4404, reason="usage profile removed")

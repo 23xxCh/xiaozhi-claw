@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from backend.ai.context import LlmRequest
 from backend.app.models import Agent, ConversationSession, Device, ProviderUsage, UsageProfile
 from backend.realtime.emotion import EmotionRouter
 from backend.realtime.providers import TranscriptionResult
@@ -102,15 +103,11 @@ class FillerAsr(ImmediateAsr):
 class SlowLlm:
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
+        tool_executor=None,
     ) -> AsyncIterator[str]:
-        del transcript, history, memories, system_prompt, model, temperature
+        del request, tool_executor
         await asyncio.sleep(60)
         yield "不应到达"
 

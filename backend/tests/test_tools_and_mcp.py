@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from backend.ai.context import ContextBuilder, LlmRequest
 from backend.realtime import providers as realtime_providers
 from backend.realtime import tools as realtime_tools
 from backend.realtime.mcp import DeviceMcpClient, DeviceMcpError
@@ -237,13 +238,19 @@ async def test_deepseek_tool_call_round_trip(monkeypatch) -> None:
     chunks = [
         chunk
         async for chunk in provider.reply_stream(
-            "算一下",
-            [],
-            [],
-            system_prompt="你是助手",
-            model="deepseek-v4-flash",
-            temperature=0.3,
-            tools=[{"type": "function", "function": {"name": "calculator"}}],
+            LlmRequest(
+                context=ContextBuilder().build(
+                    system_prompt="你是助手",
+                    current_question="算一下",
+                    history=[],
+                    memories=[],
+                    summaries=[],
+                    tools=[{"type": "function", "function": {"name": "calculator"}}],
+                ),
+                model="deepseek-v4-flash",
+                temperature=0.3,
+                tools=[{"type": "function", "function": {"name": "calculator"}}],
+            ),
             tool_executor=execute,
         )
     ]

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+from backend.ai.context import ContextBuilder, LlmRequest
 from backend.app.audio_formats import ogg_opus_packets
 from backend.app.config import Settings
 from backend.realtime import providers as realtime_providers
@@ -51,12 +52,18 @@ async def test_deepseek_streaming_request_uses_fast_non_thinking_mode(monkeypatc
     chunks = [
         chunk
         async for chunk in provider.reply_stream(
-            "你好",
-            [],
-            [],
-            system_prompt="你是助手",
-            model="deepseek-v4-flash",
-            temperature=0.35,
+            LlmRequest(
+                context=ContextBuilder().build(
+                    system_prompt="你是助手",
+                    current_question="你好",
+                    history=[],
+                    memories=[],
+                    summaries=[],
+                    tools=None,
+                ),
+                model="deepseek-v4-flash",
+                temperature=0.35,
+            )
         )
     ]
 

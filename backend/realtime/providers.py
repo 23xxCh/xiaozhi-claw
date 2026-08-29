@@ -11,6 +11,7 @@ from typing import Protocol
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
 
+from backend.ai.context import LlmRequest
 from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
 
@@ -57,14 +58,8 @@ class RealtimeAsrSession(Protocol):
 class RealtimeLlmProvider(Protocol):
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
-        tools: list[dict[str, object]] | None = None,
         tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]: ...
 
@@ -97,17 +92,12 @@ class MockAsrSession:
 class MockLlmProvider:
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
-        tools: list[dict[str, object]] | None = None,
         tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]:
-        del history, memories, system_prompt, model, temperature, tools, tool_executor
+        del tool_executor
+        transcript = str(request.context.messages[-1].get("content", ""))
         yield f"收到：{transcript}"
 
 
@@ -260,45 +250,30 @@ class DeepSeekStreamingLlmProvider:
 
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
-        tools: list[dict[str, object]] | None = None,
         tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]:
-        messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
-        if memories:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": "用户主动授权保存的摘要记忆：\n"
-                    + "\n".join(f"- {item}" for item in memories[:10]),
-                }
-            )
-        messages.extend(history[-10:])
-        messages.append({"role": "user", "content": transcript})
+        messages = [dict(message) for message in request.context.messages]
         base_url = self.settings.llm_url.rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         tool_result_added = False
         for _ in range(3):
-            request: dict[str, object] = {
-                "model": model,
+            payload: dict[str, object] = {
+                "model": request.model,
                 "messages": messages,
-                "temperature": temperature,
+                "temperature": request.temperature,
+                "max_tokens": request.max_output_tokens,
                 "stream": True,
                 # Voice turns are short and latency-sensitive. DeepSeek V4
                 # enables thinking by default, which can add several seconds
                 # before the first audible sentence for simple questions.
                 "thinking": {"type": "disabled"},
             }
-            if tools:
-                request["tools"] = tools
+            if request.tools:
+                payload["tools"] = request.tools
                 if tool_result_added:
-                    request["tool_choice"] = "none"
+                    payload["tool_choice"] = "none"
             tool_calls: dict[int, dict[str, str]] = {}
             assistant_parts: list[str] = []
             reasoning_parts: list[str] = []
@@ -307,7 +282,7 @@ class DeepSeekStreamingLlmProvider:
                     "POST",
                     url,
                     headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
-                    json=request,
+                    json=payload,
                 ) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

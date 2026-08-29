@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
+from backend.ai.context import LlmRequest
 from backend.app.models import ConversationSession, DeviceSession
 from backend.realtime import session as realtime_session
 from backend.realtime.providers import TranscriptionResult
@@ -29,15 +30,11 @@ class FixedAsrSession:
 class FixedStreamingLlm:
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
+        tool_executor=None,
     ) -> AsyncIterator[str]:
-        del transcript, history, memories, system_prompt, model, temperature
+        del request, tool_executor
         yield "多帧回复。"
 
 
@@ -74,16 +71,18 @@ class HistoryCapturingLlm(FixedStreamingLlm):
 
     async def reply_stream(
         self,
-        transcript: str,
-        history: list[dict[str, str]],
-        memories: list[str],
+        request: LlmRequest,
         *,
-        system_prompt: str,
-        model: str,
-        temperature: float,
+        tool_executor=None,
     ) -> AsyncIterator[str]:
-        del transcript, memories, system_prompt, model, temperature
-        self.histories.append([dict(message) for message in history])
+        del tool_executor
+        self.histories.append(
+            [
+                dict(message)
+                for message in request.context.messages[1:-1]
+                if message.get("role") in {"user", "assistant"}
+            ]
+        )
         yield "多轮回复。"
 
 
