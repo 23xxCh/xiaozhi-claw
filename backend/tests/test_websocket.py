@@ -217,6 +217,33 @@ def test_mock_voice_turn_uses_xiaozhi_message_shapes(
     assert entitlement.json()["remaining_turns"] == 599
 
 
+def test_device_stage_events_are_bounded_diagnostics(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-STAGE-EVENTS")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+        for stage in ("capture_started", "speaker_pcm_started", "playback_drained"):
+            websocket.send_json(
+                {
+                    "type": "device_stage",
+                    "stage": stage,
+                    "turn_id": "turn-stage-test",
+                    "reply_id": "reply-stage-test",
+                }
+            )
+        websocket.send_json({"type": "ping", "sequence": 7})
+        pong = websocket.receive_json()
+        assert pong["type"] == "pong"
+        assert pong["sequence"] == 7
+
+        websocket.send_json({"type": "device_stage", "stage": "transcript_captured"})
+        error = websocket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "invalid-device-stage"
+
+
 def test_strict_playback_ready_timeout_aborts_before_audio(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:

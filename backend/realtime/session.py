@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.app.audit import add_audit_event
 from backend.app.catalog import ensure_default_agent
 from backend.app.device_connections import ConnectionLease
+from backend.app.generated.device_ws_contract import DEVICE_STAGE_STATES
 from backend.app.models import (
     Agent,
     AgentMemory,
@@ -1608,6 +1609,24 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 continue
             if message_type == "device_config_ack":
                 await _handle_device_config_ack(session_factory, device_id, message)
+                continue
+            if message_type == "device_stage":
+                stage = str(message.get("stage") or "")
+                if stage not in DEVICE_STAGE_STATES:
+                    await _send_error(
+                        websocket,
+                        connection_lease,
+                        "invalid-device-stage",
+                        "unsupported device stage",
+                    )
+                    continue
+                logger.info(
+                    "device stage serial=%s stage=%s turn_id=%s reply_id=%s",
+                    serial,
+                    stage,
+                    str(message.get("turn_id") or ""),
+                    str(message.get("reply_id") or ""),
+                )
                 continue
             if message_type != "listen":
                 logger.info("ignored unknown device message type %r from %s", message_type, serial)

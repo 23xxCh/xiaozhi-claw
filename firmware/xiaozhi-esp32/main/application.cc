@@ -275,6 +275,12 @@ void Application::Run() {
                 tts_audio_started_ = true;
                 reply_pending_ = false;
                 SetDeviceState(kDeviceStateSpeaking);
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+                if (protocol_) {
+                    protocol_->SendDeviceStage(
+                        "speaker_pcm_started", active_turn_id_, active_tts_reply_id_);
+                }
+#endif
             }
         }
 
@@ -1452,6 +1458,9 @@ void Application::StartListeningAudio() {
 
     // Register the new turn before releasing the pre-connect audio buffer.
     protocol_->SendStartListening(listening_mode_);
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+    protocol_->SendDeviceStage("capture_started", active_turn_id_);
+#endif
     if (!audio_service_.IsAudioProcessorRunning()) {
         audio_service_.EnableVoiceProcessing(true);
     }
@@ -1527,6 +1536,9 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     tts_audio_started_ = false;
     if (protocol_) {
         protocol_->SendTtsState("drained", reply_id, turn_id);
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+        protocol_->SendDeviceStage("playback_drained", turn_id, reply_id);
+#endif
     }
     ESP_LOGI(TAG, "TTS playback drained (decode drops=%lu)",
              (unsigned long)audio_service_.GetDecodeDropCount());

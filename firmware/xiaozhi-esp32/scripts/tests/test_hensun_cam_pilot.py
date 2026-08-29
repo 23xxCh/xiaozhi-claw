@@ -291,6 +291,17 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("EnterSleepAfterIdle", display_source)
         self.assertIn("reply_settle_pending_.load()", display_source)
 
+    def test_hensun_reports_privacy_safe_device_stage_events(self):
+        protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")
+        protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(encoding="utf-8")
+
+        self.assertIn("SendDeviceStage", protocol_header)
+        self.assertIn('"type", "device_stage"', protocol_source)
+        self.assertIn('SendDeviceStage("capture_started"', self.application_source)
+        self.assertIn('"speaker_pcm_started"', self.application_source)
+        self.assertIn('SendDeviceStage("playback_drained"', self.application_source)
+        self.assertNotIn('cJSON_AddStringToObject(root, "text"', protocol_source)
+
     def test_post_speech_reply_wait_does_not_flash_the_sleep_face(self):
         self.assertIn("reply_pending_", self.application_header)
 

@@ -8,9 +8,11 @@
     "mcp",
     "system",
     "alert",
+    "device_stage",
     "device_config_ack"
   ],
   "tts_states": ["start", "ready", "stop", "drained"],
+  "device_stage_states": ["capture_started", "speaker_pcm_started", "playback_drained"],
   "optional_correlation_fields": ["session_id", "turn_id", "reply_id"],
   "compatibility": "Unknown optional fields are ignored. turn_id is self-hosted-only and optional for upstream XiaoZhi compatibility."
 }

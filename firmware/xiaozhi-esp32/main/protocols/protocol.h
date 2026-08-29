@@ -66,6 +66,8 @@ public:
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendTtsState(const std::string& state, const std::string& reply_id,
                               const std::string& turn_id = "");
+    virtual void SendDeviceStage(const std::string& stage, const std::string& turn_id = "",
+                                 const std::string& reply_id = "");
     virtual bool SendHeartbeat(uint32_t sequence);
     virtual void SendMcpMessage(const std::string& message);
     virtual void SendDeviceConfigAck(const std::string& command_id, int config_version,

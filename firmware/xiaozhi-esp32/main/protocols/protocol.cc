@@ -109,6 +109,26 @@ void Protocol::SendTtsState(const std::string& state, const std::string& reply_i
     cJSON_Delete(root);
 }
 
+void Protocol::SendDeviceStage(const std::string& stage, const std::string& turn_id,
+                               const std::string& reply_id) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "device_stage");
+    cJSON_AddStringToObject(root, "stage", stage.c_str());
+    if (!turn_id.empty()) {
+        cJSON_AddStringToObject(root, "turn_id", turn_id.c_str());
+    }
+    if (!reply_id.empty()) {
+        cJSON_AddStringToObject(root, "reply_id", reply_id.c_str());
+    }
+    char* json = cJSON_PrintUnformatted(root);
+    if (json != nullptr) {
+        SendText(json);
+        cJSON_free(json);
+    }
+    cJSON_Delete(root);
+}
+
 bool Protocol::SendHeartbeat(uint32_t sequence) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());

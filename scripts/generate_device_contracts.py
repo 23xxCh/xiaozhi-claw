@@ -29,6 +29,7 @@ def _load() -> dict[str, object]:
         raise ValueError("device WSS protocol_version must remain 1")
     message_types = contract.get("message_types")
     tts_states = contract.get("tts_states")
+    device_stage_states = contract.get("device_stage_states")
     correlation = contract.get("optional_correlation_fields")
     if not isinstance(message_types, list) or not all(
         isinstance(item, str) for item in message_types
@@ -36,12 +37,22 @@ def _load() -> dict[str, object]:
         raise ValueError("message_types must be a string array")
     if not isinstance(tts_states, list) or not all(isinstance(item, str) for item in tts_states):
         raise ValueError("tts_states must be a string array")
+    if not isinstance(device_stage_states, list) or not all(
+        isinstance(item, str) for item in device_stage_states
+    ):
+        raise ValueError("device_stage_states must be a string array")
     if not isinstance(correlation, list) or not all(isinstance(item, str) for item in correlation):
         raise ValueError("optional_correlation_fields must be a string array")
     if "tts" not in message_types or {"start", "ready", "stop", "drained"} != set(tts_states):
         raise ValueError("the playback handshake is a required V1 contract")
     if "turn_id" not in correlation:
         raise ValueError("turn_id must remain an optional self-hosted correlation field")
+    if set(device_stage_states) != {
+        "capture_started",
+        "speaker_pcm_started",
+        "playback_drained",
+    }:
+        raise ValueError("device stage states are a required V1 diagnostic extension")
     return contract
 
 
@@ -52,8 +63,14 @@ def _quoted(items: list[str]) -> str:
 def _render_python(contract: dict[str, object]) -> str:
     messages = contract["message_types"]
     states = contract["tts_states"]
+    device_stages = contract["device_stage_states"]
     fields = contract["optional_correlation_fields"]
-    assert isinstance(messages, list) and isinstance(states, list) and isinstance(fields, list)
+    assert (
+        isinstance(messages, list)
+        and isinstance(states, list)
+        and isinstance(device_stages, list)
+        and isinstance(fields, list)
+    )
     return "\n".join(
         [
             "# ruff: noqa: E501",
@@ -62,6 +79,7 @@ def _render_python(contract: dict[str, object]) -> str:
             f"DEVICE_WS_PROTOCOL_VERSION = {contract['protocol_version']}",
             f"DEVICE_WS_MESSAGE_TYPES = frozenset(({_quoted(messages)},))",
             f"TTS_STATES = frozenset(({_quoted(states)},))",
+            f"DEVICE_STAGE_STATES = frozenset(({_quoted(device_stages)},))",
             f"OPTIONAL_CORRELATION_FIELDS = frozenset(({_quoted(fields)},))",
             "",
         ]
@@ -71,17 +89,25 @@ def _render_python(contract: dict[str, object]) -> str:
 def _render_typescript(contract: dict[str, object]) -> str:
     messages = contract["message_types"]
     states = contract["tts_states"]
+    device_stages = contract["device_stage_states"]
     fields = contract["optional_correlation_fields"]
-    assert isinstance(messages, list) and isinstance(states, list) and isinstance(fields, list)
+    assert (
+        isinstance(messages, list)
+        and isinstance(states, list)
+        and isinstance(device_stages, list)
+        and isinstance(fields, list)
+    )
     return "\n".join(
         [
             "// Generated device WSS V1 vocabulary. Do not edit by hand.",
             f"export const deviceWsProtocolVersion = {contract['protocol_version']} as const;",
             f"export const deviceWsMessageTypes = [{_quoted(messages)}] as const;",
             f"export const ttsStates = [{_quoted(states)}] as const;",
+            f"export const deviceStageStates = [{_quoted(device_stages)}] as const;",
             f"export const optionalCorrelationFields = [{_quoted(fields)}] as const;",
             "export type DeviceWsMessageType = (typeof deviceWsMessageTypes)[number];",
             "export type TtsState = (typeof ttsStates)[number];",
+            "export type DeviceStageState = (typeof deviceStageStates)[number];",
             "",
         ]
     )
@@ -90,8 +116,14 @@ def _render_typescript(contract: dict[str, object]) -> str:
 def _render_cpp(contract: dict[str, object]) -> str:
     messages = contract["message_types"]
     states = contract["tts_states"]
+    device_stages = contract["device_stage_states"]
     fields = contract["optional_correlation_fields"]
-    assert isinstance(messages, list) and isinstance(states, list) and isinstance(fields, list)
+    assert (
+        isinstance(messages, list)
+        and isinstance(states, list)
+        and isinstance(device_stages, list)
+        and isinstance(fields, list)
+    )
     return "\n".join(
         [
             "#pragma once",
@@ -108,6 +140,10 @@ def _render_cpp(contract: dict[str, object]) -> str:
             (
                 f"constexpr std::array<std::string_view, {len(states)}> "
                 f"kTtsStates = {{{{{_quoted(states)}}}}};"
+            ),
+            (
+                f"constexpr std::array<std::string_view, {len(device_stages)}> "
+                f"kDeviceStageStates = {{{{{_quoted(device_stages)}}}}};"
             ),
             (
                 f"constexpr std::array<std::string_view, {len(fields)}> "

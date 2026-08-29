@@ -17,6 +17,11 @@ def test_device_wss_contract_is_generated_and_preserves_playback_handshake() -> 
         contract["message_types"]
     )
     assert set(contract["tts_states"]) == {"start", "ready", "stop", "drained"}
+    assert set(contract["device_stage_states"]) == {
+        "capture_started",
+        "speaker_pcm_started",
+        "playback_drained",
+    }
     assert "turn_id" in contract["optional_correlation_fields"]
 
     result = subprocess.run(
