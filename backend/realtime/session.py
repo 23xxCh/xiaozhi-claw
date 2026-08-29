@@ -208,6 +208,7 @@ class PlaybackHandshake:
         self.drained = asyncio.Event()
         self._drain_timeout_seconds = drain_timeout_seconds
         self.strict_ack = False
+        self.last_drain_acknowledged = False
 
     def configure(self, *, strict_ack: bool) -> None:
         self.strict_ack = strict_ack
@@ -217,6 +218,7 @@ class PlaybackHandshake:
         self.turn_id = turn_id
         self.ready = asyncio.Event()
         self.drained = asyncio.Event()
+        self.last_drain_acknowledged = False
         return self.reply_id
 
     def acknowledge(self, state: str, reply_id: str, turn_id: str = "") -> bool:
@@ -300,6 +302,7 @@ async def _stop_playback(
         playback.clear(reply_id)
         return False
     drained = not wait_for_drain or await playback.wait_drained(reply_id)
+    playback.last_drain_acknowledged = drained
     if not drained:
         logger.warning("device %s did not acknowledge TTS drained", lease.serial_number)
     playback.clear(reply_id)
@@ -1052,6 +1055,20 @@ async def _process_turn(
                 logger.exception("turn telemetry write failed for device %s", serial)
 
         telemetry_task.add_done_callback(observe_telemetry)
+        if not playback.strict_ack and not playback.last_drain_acknowledged:
+            # Legacy devices never send drained. Their one-second compatibility
+            # wait has already elapsed, so finish the telemetry handoff here
+            # instead of keeping the turn task alive until the socket closes.
+            await asyncio.gather(telemetry_task, return_exceptions=True)
+            await websocket.app.state.device_connections.send_json_for_lease(
+                lease,
+                {
+                    "type": "turn",
+                    "state": "completed",
+                    "turn_id": turn_id,
+                    "reply_id": reply_id,
+                },
+            )
         return safety.end_session
     except asyncio.CancelledError:
         interrupted = True

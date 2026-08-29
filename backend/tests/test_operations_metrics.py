@@ -42,6 +42,9 @@ def _complete_mock_turn(websocket) -> None:
     assert websocket.receive_json()["state"] == "sentence_start"
     websocket.receive_bytes()
     assert websocket.receive_json()["state"] == "stop"
+    completed = websocket.receive_json()
+    assert completed["type"] == "turn"
+    assert completed["state"] == "completed"
 
 
 def test_default_catalog_uses_current_official_list_prices(
