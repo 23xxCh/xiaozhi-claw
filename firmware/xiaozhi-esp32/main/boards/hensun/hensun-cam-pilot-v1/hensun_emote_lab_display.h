@@ -73,7 +73,6 @@ private:
     void Unlock() override;
     void SwitchTask();
     void ShowcaseTask();
-    void InvalidatePresentationState();
     void QueueAnimation(const char* animation, bool urgent = false, bool immediate = false);
     bool ValidatePack() const;
     const char* MapEmotion(const char* emotion, bool* urgent) const;
@@ -94,7 +93,6 @@ private:
     std::atomic<bool> showcase_active_{false};
     std::atomic<bool> speaking_active_{false};
     std::atomic<bool> awaiting_audio_{false};
-    std::atomic<bool> reply_settle_pending_{false};
     std::atomic<bool> preview_active_{false};
     std::atomic<bool> preview_flush_pending_{false};
     std::atomic<uint32_t> animation_flushes_pending_{0};

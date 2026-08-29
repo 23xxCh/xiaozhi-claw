@@ -289,7 +289,11 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("esp_timer_start_once", display_source)
         self.assertNotIn("IdleSleepTimerCallback", display_source)
         self.assertNotIn("EnterSleepAfterIdle", display_source)
-        self.assertIn("reply_settle_pending_.load()", display_source)
+        self.assertNotIn("reply_settle_pending_", display_source)
+        self.assertIn(
+            "presentation_state_.load() != PresentationState::kReplySettle",
+            display_source,
+        )
 
     def test_hensun_reports_privacy_safe_device_stage_events(self):
         protocol_header = (ROOT / "main/protocols/protocol.h").read_text(encoding="utf-8")

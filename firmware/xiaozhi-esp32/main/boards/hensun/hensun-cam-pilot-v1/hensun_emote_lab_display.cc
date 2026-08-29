@@ -158,33 +158,24 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         return;
     }
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
-        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kListening);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
         mouth_renderer_.SetActive(false);
         QueueAnimation("listening", false, true);
     } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
-        // A reply has already reached the generic idle state at this point,
-        // but its animation must finish before the display may sleep.
-        if (reply_settle_pending_.load()) {
-            return;
-        }
-        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kSleep);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
         mouth_renderer_.SetActive(false);
         QueueAnimation("sleep");
     } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0) {
-        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kThinking);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
         mouth_renderer_.SetActive(false);
         QueueAnimation("thinking", false, true);
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kAwaitingAudio);
         speech_level_.store(0);
         speaking_active_.store(false);
@@ -194,7 +185,6 @@ void HensunEmoteLabDisplay::SetStatus(const char* status) {
         // current face until the first PCM block reaches I2S so a brief
         // awaiting-audio window does not flash the squinting thinking face.
     } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
-        InvalidatePresentationState();
         presentation_state_.store(PresentationState::kAlert);
         speaking_active_.store(false);
         awaiting_audio_.store(false);
@@ -232,13 +222,10 @@ void HensunEmoteLabDisplay::SetEmotion(const char* emotion) {
 }
 
 void HensunEmoteLabDisplay::BeginReplySettle() {
-    InvalidatePresentationState();
     presentation_state_.store(PresentationState::kReplySettle);
     speaking_active_.store(false);
     awaiting_audio_.store(false);
     mouth_renderer_.SetActive(false);
-    reply_settle_pending_.store(true);
-
     const char* animation = "idle";
     switch (reply_emotion_.load()) {
         case ReplyEmotion::kHappy:
@@ -335,7 +322,6 @@ void HensunEmoteLabDisplay::SetPowerSaveMode(bool on) {
     // Soft standby must remain visibly alive so the user knows that the local
     // wake word is still available. Do not blank the panel here.
     esp_lcd_panel_disp_on_off(panel_, true);
-    InvalidatePresentationState();
     speaking_active_.store(false);
     awaiting_audio_.store(false);
     mouth_renderer_.SetActive(false);
@@ -469,12 +455,8 @@ void HensunEmoteLabDisplay::ShowcaseTask() {
     vTaskDelete(nullptr);
 }
 
-void HensunEmoteLabDisplay::InvalidatePresentationState() {
-    reply_settle_pending_.store(false);
-}
-
 void HensunEmoteLabDisplay::CompleteReplySettle() {
-    if (!reply_settle_pending_.exchange(false)) {
+    if (presentation_state_.load() != PresentationState::kReplySettle) {
         return;
     }
     presentation_state_.store(PresentationState::kIdle);
