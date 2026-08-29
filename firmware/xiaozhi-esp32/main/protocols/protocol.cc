@@ -109,6 +109,21 @@ void Protocol::SendTtsState(const std::string& state, const std::string& reply_i
     cJSON_Delete(root);
 }
 
+bool Protocol::SendHeartbeat(uint32_t sequence) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "ping");
+    cJSON_AddNumberToObject(root, "sequence", sequence);
+    char* json = cJSON_PrintUnformatted(root);
+    bool sent = false;
+    if (json != nullptr) {
+        sent = SendText(json);
+        cJSON_free(json);
+    }
+    cJSON_Delete(root);
+    return sent;
+}
+
 void Protocol::SendMcpMessage(const std::string& payload) {
     std::string message =
         "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";

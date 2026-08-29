@@ -86,6 +86,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
     }
 
     error_occurred_ = false;
+    heartbeat_supported_ = false;
 
     auto network = Board::GetInstance().GetNetwork();
     websocket_ = network->CreateWebSocket(1);
@@ -232,6 +233,12 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
     if (cJSON_IsString(session_id)) {
         session_id_ = session_id->valuestring;
         ESP_LOGI(TAG, "Session ID: %s", session_id_.c_str());
+    }
+
+    auto features = cJSON_GetObjectItem(root, "features");
+    if (cJSON_IsObject(features)) {
+        auto heartbeat = cJSON_GetObjectItem(features, "heartbeat");
+        heartbeat_supported_ = cJSON_IsTrue(heartbeat);
     }
 
     auto audio_params = cJSON_GetObjectItem(root, "audio_params");

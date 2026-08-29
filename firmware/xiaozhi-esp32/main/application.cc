@@ -28,6 +28,8 @@ constexpr int kWaitForSpeechTimeoutTicks = 10;
 constexpr int kMaximumSpeechDurationTicks = 20;
 constexpr int kReplyPendingTimeoutTicks = 12;
 constexpr int64_t kPostPlaybackListenGuardUs = 1000 * 1000;
+constexpr int kHeartbeatIntervalTicks = 15;
+constexpr int kHeartbeatMissLimit = 3;
 }
 
 Application::Application() {
@@ -341,6 +343,35 @@ void Application::Run() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
+            if (protocol_ && protocol_->IsAudioChannelOpened() &&
+                protocol_->SupportsHeartbeat()) {
+                heartbeat_ticks_++;
+                if (heartbeat_ticks_ >= kHeartbeatIntervalTicks) {
+                    heartbeat_ticks_ = 0;
+                    if (heartbeat_awaiting_ != 0) {
+                        heartbeat_missed_++;
+                    }
+                    if (heartbeat_missed_ >= kHeartbeatMissLimit) {
+                        ESP_LOGW(TAG, "Device heartbeat timed out after %d missed replies",
+                                 heartbeat_missed_);
+                        RecoverFailedTurnToStandby("heartbeat-timeout", true);
+                    } else {
+                        heartbeat_sequence_++;
+                        if (heartbeat_sequence_ == 0) {
+                            heartbeat_sequence_ = 1;
+                        }
+                        heartbeat_awaiting_ = heartbeat_sequence_;
+                        if (!protocol_->SendHeartbeat(heartbeat_sequence_)) {
+                            RecoverFailedTurnToStandby("heartbeat-send-failed", true);
+                        }
+                    }
+                }
+            } else {
+                heartbeat_ticks_ = 0;
+                heartbeat_missed_ = 0;
+                heartbeat_awaiting_ = 0;
+            }
+
             // Waiting for speech and recording an active utterance use separate
             // deadlines. A quiet follow-up window is cancelled without asking
             // ASR to transcribe silence.
@@ -645,6 +676,9 @@ void Application::InitializeProtocol() {
 
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        heartbeat_ticks_ = 0;
+        heartbeat_missed_ = 0;
+        heartbeat_awaiting_ = 0;
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG,
                      "Server sample rate %d does not match device output sample rate %d, "
@@ -656,6 +690,14 @@ void Application::InitializeProtocol() {
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+            heartbeat_ticks_ = 0;
+            heartbeat_missed_ = 0;
+            heartbeat_awaiting_ = 0;
+            if (GetDeviceState() == kDeviceStateIdle && !reply_pending_ &&
+                !tts_playback_prepared_.load() && active_tts_reply_id_.empty()) {
+                ESP_LOGI(TAG, "Ignoring audio channel close after standby");
+                return;
+            }
             RecoverFailedTurnToStandby("audio-channel-closed", false);
         });
     });
@@ -667,7 +709,18 @@ void Application::InitializeProtocol() {
             ESP_LOGW(TAG, "Incoming JSON message has no type");
             return;
         }
-        if (strcmp(type->valuestring, "tts") == 0) {
+        if (strcmp(type->valuestring, "pong") == 0) {
+            auto sequence = cJSON_GetObjectItem(root, "sequence");
+            if (cJSON_IsNumber(sequence) && sequence->valuedouble >= 0) {
+                uint32_t pong_sequence = static_cast<uint32_t>(sequence->valuedouble);
+                Schedule([this, pong_sequence]() {
+                    if (heartbeat_awaiting_ == pong_sequence) {
+                        heartbeat_awaiting_ = 0;
+                        heartbeat_missed_ = 0;
+                    }
+                });
+            }
+        } else if (strcmp(type->valuestring, "tts") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
             if (!cJSON_IsString(state)) {
                 return;
@@ -809,6 +862,43 @@ void Application::InitializeProtocol() {
             Schedule([this, reason]() {
                 RecoverFailedTurnToStandby(reason.c_str(), true);
             });
+        } else if (strcmp(type->valuestring, "listen") == 0) {
+            auto state = cJSON_GetObjectItem(root, "state");
+            if (!cJSON_IsString(state)) {
+                return;
+            }
+            if (strcmp(state->valuestring, "resume") == 0) {
+                Schedule([this]() {
+                    if (tts_playback_prepared_.load() || !active_tts_reply_id_.empty() ||
+                        GetDeviceState() == kDeviceStateSpeaking ||
+                        !audio_service_.IsPlaybackIdle()) {
+                        ESP_LOGW(TAG, "Ignoring listen resume while playback is active");
+                        return;
+                    }
+                    if (GetDeviceState() == kDeviceStateListening) {
+                        return;
+                    }
+                    if (GetDeviceState() != kDeviceStateIdle) {
+                        ESP_LOGW(TAG, "Ignoring listen resume outside idle state");
+                        return;
+                    }
+                    post_playback_guard_active_ = false;
+                    pending_listening_start_ = false;
+                    if (post_playback_listen_timer_handle_ != nullptr) {
+                        esp_timer_stop(post_playback_listen_timer_handle_);
+                    }
+                    SetListeningMode(GetDefaultListeningMode());
+                });
+            } else if (strcmp(state->valuestring, "standby") == 0) {
+                auto reason = cJSON_GetObjectItem(root, "reason");
+                std::string reason_str =
+                    cJSON_IsString(reason) ? reason->valuestring : "asr-no-speech";
+                Schedule([this, reason_str]() {
+                    const bool user_exit = reason_str == "user-exit";
+                    RecoverFailedTurnToStandby(
+                        user_exit ? "user-exit" : "asr-no-speech", true);
+                });
+            }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");
             if (cJSON_IsObject(payload)) {
@@ -1470,7 +1560,7 @@ void Application::RecoverFailedTurnToStandby(const char* reason, bool close_audi
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.EnableWakeWordDetection(true);
 
-    if (close_audio_channel && protocol_ && protocol_->IsAudioChannelOpened()) {
+    if (close_audio_channel && protocol_) {
         protocol_->CloseAudioChannel();
     }
 }

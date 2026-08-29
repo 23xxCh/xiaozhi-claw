@@ -161,6 +161,10 @@ private:
     bool listening_capture_ready_ = false;  // Start the quiet timeout only when listen.start can accept audio
     bool reply_pending_ = false;  // User speech ended; keep the face awake while cloud reply is pending
     int clock_ticks_ = 0;
+    int heartbeat_ticks_ = 0;
+    int heartbeat_missed_ = 0;
+    uint32_t heartbeat_sequence_ = 0;
+    uint32_t heartbeat_awaiting_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
 

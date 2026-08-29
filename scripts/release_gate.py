@@ -75,6 +75,8 @@ def main() -> int:
         errors.append("local CAM firmware does not enable the bounded follow-up window")
     if "CONFIG_HENSUN_ONE_SHOT_CONVERSATION=y" in local_sdkconfig:
         errors.append("local CAM firmware unexpectedly disables multi-turn follow-up")
+    if "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=12" not in local_sdkconfig:
+        errors.append("local CAM firmware lacks the calibrated 0.12 wake threshold")
     for required_option in (
         "CONFIG_USE_CUSTOM_WAKE_WORD=y",
         'CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"',

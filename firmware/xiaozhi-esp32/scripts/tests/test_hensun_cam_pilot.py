@@ -212,6 +212,42 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("GetDecodeDropCount", self.application_source)
         self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
 
+    def test_selfhosted_websocket_uses_real_device_heartbeat(self):
+        protocol_header = (ROOT / "main/protocols/protocol.h").read_text(
+            encoding="utf-8"
+        )
+        protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(
+            encoding="utf-8"
+        )
+        websocket_source = (
+            ROOT / "main/protocols/websocket_protocol.cc"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("bool SupportsHeartbeat() const", protocol_header)
+        self.assertIn("bool SendHeartbeat(uint32_t sequence)", protocol_header)
+        self.assertIn('cJSON_AddStringToObject(root, "type", "ping")', protocol_source)
+        self.assertIn('strcmp(type->valuestring, "pong") == 0', self.application_source)
+        self.assertIn('cJSON_GetObjectItem(features, "heartbeat")', websocket_source)
+        self.assertRegex(
+            self.application_source,
+            r"kHeartbeatIntervalTicks\s*=\s*15",
+        )
+        self.assertRegex(
+            self.application_source,
+            r"kHeartbeatMissLimit\s*=\s*3",
+        )
+        self.assertIn("protocol_->SendHeartbeat", self.application_source)
+        self.assertIn('RecoverFailedTurnToStandby("heartbeat-timeout", true)', self.application_source)
+
+    def test_asr_noise_resume_reopens_listening_without_fake_tts(self):
+        self.assertIn('strcmp(type->valuestring, "listen") == 0', self.application_source)
+        self.assertIn('strcmp(state->valuestring, "resume") == 0', self.application_source)
+        self.assertIn('strcmp(state->valuestring, "standby") == 0', self.application_source)
+        self.assertIn('cJSON_GetObjectItem(root, "reason")', self.application_source)
+        self.assertIn('reason_str == "user-exit"', self.application_source)
+        self.assertIn("Ignoring listen resume while playback is active", self.application_source)
+        self.assertIn("SetListeningMode(GetDefaultListeningMode())", self.application_source)
+
     def test_hensun_speaking_face_waits_for_real_pcm_and_keeps_a_reply_window(self):
         display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(
             encoding="utf-8"
@@ -516,7 +552,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", local)
         self.assertIn('CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"', local)
         self.assertIn('CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"', local)
-        self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15", local)
+        self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=12", local)
         self.assertIn("CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y", local)
         self.assertNotIn("CONFIG_USE_AFE_WAKE_WORD=y", local)
         self.assertNotIn("CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y", local)
