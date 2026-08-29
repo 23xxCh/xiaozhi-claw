@@ -7,7 +7,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260813_05"
-CONTRACT_REVISION = "20260815_06"
+CONTRACT_REVISION = "20260829_07"
 
 
 def _alembic(database: Path, *args: str) -> None:
@@ -27,6 +27,10 @@ def _alembic(database: Path, *args: str) -> None:
 
 def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def _alembic_check(database: Path) -> None:
+    _alembic(database, "check")
 
 
 def test_device_config_contract_migration_backfills_and_round_trips_sqlite(
@@ -106,6 +110,7 @@ def test_device_config_contract_migration_backfills_and_round_trips_sqlite(
             "audio.speaker_volume": 66,
             "display.brightness": 72,
         }
+    _alembic_check(database)
 
     _alembic(database, "downgrade", PREVIOUS_REVISION)
     with sqlite3.connect(database) as connection:

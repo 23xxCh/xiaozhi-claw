@@ -2,7 +2,17 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -218,6 +228,13 @@ class Device(Base):
     ota_auto_update: Mapped[bool] = mapped_column(Boolean, default=True)
     memory_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     firmware_version: Mapped[str] = mapped_column(String(32), default="0.0.0")
+    hardware_profile_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    display_profile_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    profile_schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    profile_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    device_config_schema_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1"
+    )
     reset_epoch: Mapped[int] = mapped_column(Integer, default=0)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -235,6 +252,11 @@ class DeviceConfiguration(Base):
     __tablename__ = "device_configurations"
 
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    desired_values: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=dict, server_default="{}"
+    )
+    applied_values: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     desired_version: Mapped[int] = mapped_column(Integer, default=0)
     applied_version: Mapped[int] = mapped_column(Integer, default=0)
     speaker_volume: Mapped[int] = mapped_column(Integer, default=70)

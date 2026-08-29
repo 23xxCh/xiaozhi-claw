@@ -77,7 +77,12 @@ def test_stale_runtime_state_is_reconciled_without_closing_the_active_pair(
         async with factory() as session:
             device_id = owned["device_id"]
             device = await session.get(Device, device_id)
-            assert device is not None and device.active_profile_id
+            assert (
+                device is not None
+                and device.owner_user_id
+                and device.active_agent_id
+                and device.active_profile_id
+            )
             stale_started = now - timedelta(minutes=10)
             active_started = now - timedelta(seconds=20)
             stale_session = DeviceSession(
@@ -95,15 +100,15 @@ def test_stale_runtime_state_is_reconciled_without_closing_the_active_pair(
                 heartbeat_at=now,
             )
             old_conversation = ConversationSession(
-                user_id="user-old",
-                agent_id="agent-old",
+                user_id=device.owner_user_id,
+                agent_id=device.active_agent_id,
                 device_id=device_id,
                 usage_profile_id=device.active_profile_id,
                 started_at=stale_started,
             )
             active_conversation = ConversationSession(
-                user_id="user-current",
-                agent_id="agent-current",
+                user_id=device.owner_user_id,
+                agent_id=device.active_agent_id,
                 device_id=device_id,
                 usage_profile_id=device.active_profile_id,
                 started_at=active_started,
