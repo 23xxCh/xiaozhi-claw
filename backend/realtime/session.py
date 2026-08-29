@@ -55,13 +55,12 @@ from .providers import (
     RealtimeTtsSession,
     TranscriptionResult,
 )
+from .reply_policy import build_voice_reply_policy
 from .tools import ToolRegistry, create_search_provider
 
 logger = logging.getLogger(__name__)
 MAX_UTTERANCE_BYTES = 1024 * 1024
-MAX_SPOKEN_SEGMENTS = 2
-MAX_SPOKEN_CHARS = 60
-MIN_FOLLOWUP_UTTERANCE_MS = 900
+MAX_CONSECUTIVE_NOISE_RETRIES = 1
 
 
 _SPOKEN_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
@@ -96,9 +95,16 @@ def is_non_speech_filler(text: str) -> bool:
     )
 
 
-def is_too_short_for_followup(audio_duration_ms: int) -> bool:
-    """Reject the sub-second VAD pulses observed from the open pilot enclosure."""
-    return audio_duration_ms < MIN_FOLLOWUP_UTTERANCE_MS
+@dataclass
+class _NoiseTurnBudget:
+    consecutive_discards: int = 0
+
+    def consume_retry(self) -> bool:
+        self.consecutive_discards += 1
+        return self.consecutive_discards <= MAX_CONSECUTIVE_NOISE_RETRIES
+
+    def reset(self) -> None:
+        self.consecutive_discards = 0
 
 
 @dataclass(frozen=True)
@@ -374,22 +380,47 @@ async def _send_turn_error_and_reset(
     )
 
 
-async def _heartbeat(
+async def _receive_device_message(
+    websocket: WebSocket,
+    *,
+    timeout_seconds: float,
+    stop_event: asyncio.Event | None = None,
+) -> dict[str, object] | None:
+    if stop_event is None:
+        try:
+            return await asyncio.wait_for(websocket.receive(), timeout=timeout_seconds)
+        except TimeoutError:
+            return None
+
+    receive_task = asyncio.create_task(websocket.receive())
+    stop_task = asyncio.create_task(stop_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {receive_task, stop_task},
+            timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done or stop_task in done:
+            return None
+        return receive_task.result()
+    finally:
+        for task in (receive_task, stop_task):
+            if not task.done():
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def _record_device_heartbeat(
     session_factory: async_sessionmaker[AsyncSession],
     device_session_id: str,
-    stop_event: asyncio.Event,
 ) -> None:
-    while not stop_event.is_set():
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop_event.wait(), timeout=30)
-        if stop_event.is_set():
+    async with session_factory() as session:
+        device_session = await session.get(DeviceSession, device_session_id)
+        if device_session is None:
             return
-        async with session_factory() as session:
-            device_session = await session.get(DeviceSession, device_session_id)
-            if device_session is None:
-                return
-            device_session.heartbeat_at = datetime.now(UTC)
-            await session.commit()
+        device_session.heartbeat_at = datetime.now(UTC)
+        await session.commit()
 
 
 async def _record_turn(
@@ -608,6 +639,8 @@ async def _process_turn(
     history: list[dict[str, str]],
     turn_started: float,
     playback: PlaybackHandshake,
+    noise_turn_budget: _NoiseTurnBudget,
+    user_exit_event: asyncio.Event,
     mcp_client: DeviceMcpClient | None = None,
     strip_wake_name: bool = False,
 ) -> bool:
@@ -698,37 +731,25 @@ async def _process_turn(
         transcript = transcription.text.strip()
         if strip_wake_name:
             transcript = _LEADING_WAKE_NAME_RE.sub("", transcript, count=1).strip()
-        if not transcript:
-            await _send_turn_error_and_reset(
-                websocket,
-                serial,
-                playback,
-                turn_id,
-                "asr-no-speech",
-                "no speech was recognized",
-            )
-            return False
-        is_short_followup = (
-            bool(history)
-            and not providers.mock
-            and is_too_short_for_followup(audio_duration_ms)
-        )
-        if is_non_speech_filler(transcript) or is_short_followup:
+        if not transcript or is_non_speech_filler(transcript):
             # Realtime ASR can hallucinate a one-character filler from room
-            # noise during the follow-up window. Complete an empty playback
-            # handshake so the device returns to listening without invoking
-            # the LLM/TTS or displaying an error face.
-            logger.info("discarded ASR non-speech filler serial=%s code=asr-no-speech", serial)
-            silent_reply_id = await _start_playback(websocket, serial, playback, turn_id)
-            await _stop_playback(
-                websocket,
-                serial,
-                playback,
-                silent_reply_id,
-                turn_id,
-                wait_for_drain=True,
-            )
+            # noise during the follow-up window. This is expected control flow,
+            # not a device error: an error message drives the display into its
+            # alert face. Never reject a meaningful transcript solely because
+            # its audio is shorter than one second (for example "好" or "几点").
+            logger.info("discarded ASR non-speech serial=%s code=asr-no-speech", serial)
+            if noise_turn_budget.consume_retry():
+                await websocket.app.state.device_connections.send_json(
+                    serial,
+                    {"type": "listen", "state": "resume", "turn_id": turn_id},
+                )
+            else:
+                await websocket.app.state.device_connections.send_json(
+                    serial,
+                    {"type": "listen", "state": "standby", "turn_id": turn_id},
+                )
             return False
+        noise_turn_budget.reset()
         await websocket.app.state.device_connections.send_json(
             serial,
             {
@@ -753,6 +774,22 @@ async def _process_turn(
             return False
 
         safety = evaluate_text(transcript)
+        if safety.end_session:
+            # "小灿闭嘴" is a control command, not another assistant reply.
+            # Tell the device to enter standby before closing the transport so
+            # it does not interpret a normal exit as a failed audio channel.
+            await websocket.app.state.device_connections.send_json(
+                serial,
+                {
+                    "type": "listen",
+                    "state": "standby",
+                    "reason": "user-exit",
+                    "turn_id": turn_id,
+                },
+            )
+            user_exit_event.set()
+            return True
+
         emotion = router.route(transcription.emotion, safety.category)
         await websocket.app.state.device_connections.send_json(
             serial, {"type": "llm", "emotion": emotion.thinking_emotion, "turn_id": turn_id}
@@ -760,6 +797,17 @@ async def _process_turn(
 
         sentence_buffer = SentenceBuffer()
         face_parser = FaceControlParser()
+        reply_policy = build_voice_reply_policy(transcript)
+        voice_system_prompt = (
+            snapshot.system_prompt.rstrip()
+            + "\n\n"
+            + reply_policy.context
+            + "\n不要输出 Markdown、网址或舞台动作。回复正文前必须先输出且只输出一个"
+            "表情控制标记，格式为 [[face:emotion]]，emotion 只能是 "
+            + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))
+            + "。如果第二句情绪明显变化，可以在第一句完整结束后再输出一个标记；"
+            "整次回复最多两个标记，标记之外不要输出其他内部标签。"
+        )
         reply_parts: list[str] = []
         spoken_parts: list[str] = []
         spoken_chars = 0
@@ -781,9 +829,9 @@ async def _process_turn(
             nonlocal spoken_chars, spoken_segments
             nonlocal sent_reply_emotion
             sentence = sanitize_spoken_text(sentence)
-            if not sentence or spoken_segments >= MAX_SPOKEN_SEGMENTS:
+            if not sentence or spoken_segments >= reply_policy.max_spoken_segments:
                 return
-            sentence = sentence[: MAX_SPOKEN_CHARS - spoken_chars].strip()
+            sentence = sentence[: reply_policy.max_spoken_chars - spoken_chars].strip()
             if not sentence:
                 return
             if pending_reply_emotion != sent_reply_emotion:
@@ -849,15 +897,7 @@ async def _process_turn(
                     transcript,
                     history,
                     snapshot.memories,
-                    system_prompt=(
-                        snapshot.system_prompt.rstrip()
-                        + "\n\n语音回复要求：使用自然口语，只回答一到两句，总长度不超过60个汉字；"
-                        "不要输出 Markdown、网址或舞台动作。回复正文前必须先输出且只输出一个"
-                        "表情控制标记，格式为 [[face:emotion]]，emotion 只能是 "
-                        + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))
-                        + "。如果第二句情绪明显变化，可以在第一句完整结束后再输出一个标记；"
-                        "整次回复最多两个标记，标记之外不要输出其他内部标签。"
-                    ),
+                    system_prompt=voice_system_prompt,
                     model=snapshot.llm_model,
                     temperature=snapshot.llm_temperature,
                     **llm_kwargs,
@@ -892,7 +932,12 @@ async def _process_turn(
                 fallback_operations.add("llm")
                 reply_parts.clear()
                 sentence_buffer = SentenceBuffer()
-                fallback_text = await fallback.llm.reply(transcript, snapshot.memories)
+                fallback_text = await fallback.llm.reply(
+                    transcript,
+                    snapshot.memories,
+                    history=history,
+                    system_prompt=voice_system_prompt,
+                )
                 reply_parts.append(fallback_text)
                 for sentence in sentence_buffer.feed(fallback_text):
                     await speak(sentence)
@@ -1191,10 +1236,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         "token" if valid_token else "secret",
     )
     await websocket.app.state.device_connections.connect(serial, websocket, connection_id)
-    heartbeat_stop = asyncio.Event()
-    heartbeat_task = asyncio.create_task(
-        _heartbeat(session_factory, device_session_id, heartbeat_stop)
-    )
     active_asr: RealtimeAsrSession | None = None
     active_task: asyncio.Task[bool] | None = None
     audio_bytes = 0
@@ -1204,8 +1245,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     end_reason = "disconnected"
     connected_at = time.perf_counter()
     cancelled = False
+    heartbeat_timed_out = False
     continuous_reminder_sent = False
     playback = PlaybackHandshake()
+    noise_turn_budget = _NoiseTurnBudget()
+    user_exit_event = asyncio.Event()
     mcp_client: DeviceMcpClient | None = None
     mcp_initialize_task: asyncio.Task[None] | None = None
     # A warm device WebSocket can span multiple sleep/wake sessions. Only a
@@ -1257,6 +1301,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 history,
                 time.perf_counter(),
                 playback,
+                noise_turn_budget,
+                user_exit_event,
                 mcp_client,
                 strip_wake_name=strip_wake_name,
             )
@@ -1265,7 +1311,31 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
 
     try:
         while True:
-            incoming = await websocket.receive()
+            incoming = await _receive_device_message(
+                websocket,
+                timeout_seconds=settings.device_ws_activity_timeout_seconds,
+                stop_event=user_exit_event,
+            )
+            if user_exit_event.is_set():
+                end_reason = "user-exit"
+                # Persist the intentional reason before sending the close
+                # frame. Some WebSocket clients stop driving the ASGI task as
+                # soon as they receive that frame; the final cleanup will also
+                # set ended_at and idempotently retain this reason.
+                async with session_factory() as session:
+                    stored_conversation = await session.get(
+                        ConversationSession, conversation_id
+                    )
+                    if stored_conversation is not None:
+                        stored_conversation.end_reason = end_reason
+                        await session.commit()
+                await websocket.close(code=1000, reason="user requested exit")
+                break
+            if incoming is None:
+                end_reason = "heartbeat-timeout"
+                heartbeat_timed_out = True
+                logger.warning("device websocket heartbeat timeout serial=%s", serial)
+                break
             if incoming.get("type") == "websocket.disconnect":
                 logger.info(
                     "device websocket disconnect frame serial=%s payload=%s", serial, incoming
@@ -1359,7 +1429,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             "channels": 1,
                             "frame_duration": 60,
                         },
-                        "features": {"mcp": True},
+                        "features": {"mcp": True, "heartbeat": True},
                         "disclosure": "你正在与 AI 服务互动，而非自然人。",
                     },
                 )
@@ -1377,6 +1447,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         "heartbeat sequence must be a non-negative integer",
                     )
                     continue
+                await _record_device_heartbeat(session_factory, device_session_id)
                 await websocket.app.state.device_connections.send_json(
                     serial, {"type": "pong", "sequence": sequence}
                 )
@@ -1426,6 +1497,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             state = message.get("state")
             if state == "detect":
                 first_turn_pending = True
+                noise_turn_budget.reset()
                 continue
             if state == "start":
                 if active_task is not None and not active_task.done():
@@ -1547,22 +1619,15 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     except Exception:
         logger.exception("device websocket failed serial=%s", serial)
     finally:
+        if user_exit_event.is_set():
+            end_reason = "user-exit"
         if active_asr is not None:
             await active_asr.cancel()
         if active_task is not None and not active_task.done():
             active_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await active_task
-        if mcp_initialize_task is not None:
-            if not mcp_initialize_task.done():
-                mcp_initialize_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, DeviceMcpError):
-                await mcp_initialize_task
-        if mcp_client is not None:
-            await mcp_client.close()
-        heartbeat_stop.set()
-        await heartbeat_task
-        await _save_session_summary(websocket, conversation_id, user_id, snapshot, history)
+        await websocket.app.state.device_connections.disconnect(serial, websocket)
         now = datetime.now(UTC)
         async with session_factory() as session:
             stored_device_session = await session.get(DeviceSession, device_session_id)
@@ -1575,6 +1640,20 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 stored_conversation.ended_at = now
                 stored_conversation.end_reason = end_reason
             await session.commit()
-        await websocket.app.state.device_connections.disconnect(serial, websocket)
+        if heartbeat_timed_out:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1001, reason="device heartbeat timeout")
+        if mcp_initialize_task is not None:
+            if not mcp_initialize_task.done():
+                mcp_initialize_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, DeviceMcpError):
+                await mcp_initialize_task
+        if mcp_client is not None:
+            await mcp_client.close()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(
+                _save_session_summary(websocket, conversation_id, user_id, snapshot, history),
+                timeout=5.0,
+            )
     if cancelled:
         raise asyncio.CancelledError

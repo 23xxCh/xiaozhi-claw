@@ -27,7 +27,7 @@ def evaluate_text(text: str) -> SafetyDecision:
     if any(term in normalized for term in EXIT_TERMS):
         return SafetyDecision(
             category="user-exit",
-            fixed_response="好的，我现在停止互动。需要时你可以再唤醒我。",
+            fixed_response=None,
             end_session=True,
         )
     if any(term in normalized for term in SELF_HARM_TERMS):

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     gateway_id: str = "gateway-local-1"
     command_poll_interval_seconds: float = 0.5
     device_offline_after_seconds: int = 90
+    device_ws_activity_timeout_seconds: float = 45.0
     # ESP32 sends one Opus frame every 60 ms. Keep one minute bounded in memory;
     # the old value of 100 discarded the utterance after only six seconds.
     max_device_audio_queue_frames: int = 1000

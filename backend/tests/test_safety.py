@@ -23,7 +23,7 @@ def test_xiaocan_shut_up_phrases_end_session(text: str) -> None:
     decision = evaluate_text(text)
     assert decision.category == "user-exit"
     assert decision.end_session is True
-    assert decision.fixed_response == "好的，我现在停止互动。需要时你可以再唤醒我。"
+    assert decision.fixed_response is None
 
 
 def test_self_harm_phrase_uses_fixed_safety_response() -> None:

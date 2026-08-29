@@ -292,7 +292,7 @@ def test_realtime_asr_open_failure_keeps_device_connected_and_uses_batch_fallbac
         assert stt["text"] == "建连失败备用识别"
 
 
-def test_empty_transcript_is_reported_as_no_speech(
+def test_empty_transcript_reopens_listening_without_error_face(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     client.app.state.realtime_providers = EmptyTranscriptProviders()
@@ -306,11 +306,10 @@ def test_empty_transcript_is_reported_as_no_speech(
         websocket.send_json({"type": "listen", "state": "start"})
         websocket.send_bytes(b"silence")
         websocket.send_json({"type": "listen", "state": "stop"})
-        error = websocket.receive_json()
-        acknowledge_silent_turn_reset(websocket)
+        resume = websocket.receive_json()
 
-    assert error["type"] == "error"
-    assert error["code"] == "asr-no-speech"
+    assert resume["type"] == "listen"
+    assert resume["state"] == "resume"
 
 
 def test_asr_filler_silently_returns_device_to_followup_listening(
@@ -328,27 +327,34 @@ def test_asr_filler_silently_returns_device_to_followup_listening(
         websocket.send_bytes(b"room-noise")
         websocket.send_json({"type": "listen", "state": "stop"})
 
-        start = websocket.receive_json()
-        assert start["type"] == "tts"
-        assert start["state"] == "start"
-        websocket.send_json(
-            {
-                "type": "tts",
-                "state": "ready",
-                "turn_id": start["turn_id"],
-                "reply_id": start["reply_id"],
-            }
-        )
-        stop = websocket.receive_json()
-        assert stop == {**start, "state": "stop"}
-        websocket.send_json(
-            {
-                "type": "tts",
-                "state": "drained",
-                "turn_id": start["turn_id"],
-                "reply_id": start["reply_id"],
-            }
-        )
+        resume = websocket.receive_json()
+        assert resume["type"] == "listen"
+        assert resume["state"] == "resume"
+        assert resume["turn_id"]
+
+
+def test_consecutive_asr_fillers_are_bounded_without_fake_tts(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = FillerTranscriptProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-ASR-FILLER-BOUND")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        for attempt in range(2):
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.send_bytes(f"room-noise-{attempt}".encode())
+            websocket.send_json({"type": "listen", "state": "stop"})
+            response = websocket.receive_json()
+            if attempt == 0:
+                assert response["type"] == "listen"
+                assert response["state"] == "resume"
+            else:
+                assert response["type"] == "listen"
+                assert response["state"] == "standby"
 
 
 def test_realtime_and_batch_asr_failure_returns_stable_error(

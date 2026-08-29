@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -14,10 +15,10 @@ from backend.realtime.providers import (
     QwenRealtimeTtsSession,
     RealtimeProviderError,
 )
+from backend.realtime.reply_policy import build_voice_reply_policy
 from backend.realtime.session import (
     SentenceBuffer,
     is_non_speech_filler,
-    is_too_short_for_followup,
     sanitize_spoken_text,
 )
 
@@ -184,6 +185,31 @@ def test_sentence_buffer_keeps_hard_limit_after_first_chunk() -> None:
     assert buffer.feed("句" * 32) == ["句" * 32]
 
 
+def test_story_request_gets_a_larger_spoken_budget_and_explicit_capability() -> None:
+    policy = build_voice_reply_policy(
+        "给我讲一个有结尾的短故事",
+        now=datetime(2026, 8, 28, 15, 30, tzinfo=UTC),
+    )
+
+    assert policy.max_spoken_chars == 160
+    assert policy.max_spoken_segments == 5
+    assert "可以讲原创短故事" in policy.context
+    assert "直接开始讲故事" in policy.context
+
+
+def test_every_voice_turn_gets_an_authoritative_local_date() -> None:
+    policy = build_voice_reply_policy(
+        "今天几号",
+        now=datetime(2026, 8, 28, 15, 30, tzinfo=UTC),
+    )
+
+    assert policy.max_spoken_chars == 60
+    assert policy.max_spoken_segments == 2
+    assert "2026年8月28日" in policy.context
+    assert "星期五" in policy.context
+    assert "香港时间" in policy.context
+
+
 def test_sanitize_spoken_text_removes_non_speech_markup() -> None:
     assert (
         sanitize_spoken_text(
@@ -198,15 +224,9 @@ def test_short_asr_fillers_are_treated_as_non_speech(text: str) -> None:
     assert is_non_speech_filler(text) is True
 
 
-@pytest.mark.parametrize("text", ["嗯好的", "啊为什么", "哦我知道了", "几点"])
+@pytest.mark.parametrize("text", ["好", "停", "几点", "嗯好的", "啊为什么", "哦我知道了"])
 def test_meaningful_short_transcripts_are_not_treated_as_non_speech(text: str) -> None:
     assert is_non_speech_filler(text) is False
-
-
-def test_followup_duration_rejects_observed_noise_pulses() -> None:
-    assert is_too_short_for_followup(780) is True
-    assert is_too_short_for_followup(899) is True
-    assert is_too_short_for_followup(900) is False
 
 
 @pytest.mark.asyncio

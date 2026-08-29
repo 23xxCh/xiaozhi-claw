@@ -84,6 +84,39 @@ async def test_custom_llm_provider_uses_configured_model_and_memory() -> None:
     assert any("用户喜欢温水" in item["content"] for item in captured["messages"])
 
 
+@pytest.mark.asyncio
+async def test_batch_llm_fallback_preserves_voice_prompt_and_history() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "周五"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleLlmProvider(custom_settings(), client=client)
+        reply = await provider.reply(
+            "今天星期几",
+            [],
+            history=[
+                {"role": "user", "content": "我们刚才在聊周末安排"},
+                {"role": "assistant", "content": "记得你想去散步"},
+            ],
+            system_prompt="可信本地日期：2026年8月28日，星期五。",
+        )
+
+    assert reply == "周五"
+    messages = captured["messages"]
+    assert messages[0] == {
+        "role": "system",
+        "content": "可信本地日期：2026年8月28日，星期五。",
+    }
+    assert messages[-3:] == [
+        {"role": "user", "content": "我们刚才在聊周末安排"},
+        {"role": "assistant", "content": "记得你想去散步"},
+        {"role": "user", "content": "今天星期几"},
+    ]
+
+
 def test_custom_provider_bundle_announces_opus() -> None:
     providers = create_providers(custom_settings())
     assert providers.audio_codec == "opus"

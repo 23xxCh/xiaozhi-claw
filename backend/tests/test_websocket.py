@@ -1,10 +1,15 @@
+import asyncio
 import time
 from collections.abc import AsyncIterator
+from unittest.mock import ANY
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
+from backend.app.models import ConversationSession, DeviceSession
+from backend.realtime import session as realtime_session
 from backend.realtime.providers import TranscriptionResult
 
 from .conftest import provision_owned_device
@@ -126,6 +131,29 @@ def _device_headers(owned: dict[str, str]) -> dict[str, str]:
         "Authorization": f"Bearer {owned['device_secret']}",
         "Protocol-Version": "1",
     }
+
+
+async def _latest_runtime_pair(client: TestClient, device_id: str):
+    async with client.app.state.session_factory() as session:
+        device_session = await session.scalar(
+            select(DeviceSession)
+            .where(DeviceSession.device_id == device_id)
+            .order_by(DeviceSession.connected_at.desc())
+        )
+        conversation = await session.scalar(
+            select(ConversationSession)
+            .where(ConversationSession.device_id == device_id)
+            .order_by(ConversationSession.started_at.desc())
+        )
+        assert device_session is not None
+        assert conversation is not None
+        return (
+            device_session.heartbeat_at,
+            device_session.status,
+            device_session.disconnected_at,
+            conversation.ended_at,
+            conversation.end_reason,
+        )
 
 
 def _receive_mock_turn(websocket) -> tuple[dict[str, object], bytes]:
@@ -356,6 +384,73 @@ def test_xiaozhi_bootstrap_token_can_open_device_websocket(
         assert websocket.receive_json()["type"] == "hello"
 
 
+def test_device_ping_updates_persisted_heartbeat(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-HEARTBEAT")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+        before = asyncio.run(_latest_runtime_pair(client, owned["device_id"]))[0]
+
+        time.sleep(0.01)
+        websocket.send_json({"type": "ping", "sequence": 7})
+        assert websocket.receive_json() == {
+            "session_id": ANY,
+            "type": "pong",
+            "sequence": 7,
+        }
+        after = asyncio.run(_latest_runtime_pair(client, owned["device_id"]))[0]
+
+    assert after > before
+
+
+def test_silent_device_receive_returns_timeout_without_preempting_cleanup() -> None:
+    class SilentWebSocket:
+        def __init__(self) -> None:
+            self.closed: tuple[int, str] | None = None
+
+        async def receive(self):
+            await asyncio.Event().wait()
+
+        async def close(self, *, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    websocket = SilentWebSocket()
+    incoming = asyncio.run(
+        realtime_session._receive_device_message(websocket, timeout_seconds=0.01)
+    )
+
+    assert incoming is None
+    assert websocket.closed is None
+
+
+def test_silent_device_timeout_closes_runtime_records(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.settings.device_ws_activity_timeout_seconds = 0.05
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-IDLE-TIMEOUT")
+
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            websocket.receive_json()
+        assert excinfo.value.code == 1001
+
+    deadline = time.monotonic() + 1.0
+    while True:
+        runtime = asyncio.run(_latest_runtime_pair(client, owned["device_id"]))
+        if runtime[1] == "offline" or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    _, status, disconnected_at, ended_at, end_reason = runtime
+    assert status == "offline"
+    assert disconnected_at is not None
+    assert ended_at is not None
+    assert end_reason == "heartbeat-timeout"
+
+
 def test_xiaozhi_bootstrap_returns_six_digit_claim_code_for_unclaimed_device(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
@@ -376,7 +471,7 @@ def test_xiaozhi_bootstrap_returns_six_digit_claim_code_for_unclaimed_device(
     assert bootstrap.json()["activation"]["timeout_ms"] == 600_000
 
 
-def test_xiaocan_shut_up_closes_websocket_after_goodbye(
+def test_xiaocan_shut_up_enters_standby_without_goodbye(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     owned = provision_owned_device(client, admin_headers, serial="HENSUN-XIAOCAN-EXIT")
@@ -388,11 +483,27 @@ def test_xiaocan_shut_up_closes_websocket_after_goodbye(
         websocket.send_bytes("小灿闭嘴".encode())
         websocket.send_json({"type": "listen", "state": "stop"})
 
-        stt, audio = _receive_mock_turn(websocket)
+        stt = websocket.receive_json()
+        assert stt["type"] == "stt"
         assert stt["text"] == "小灿闭嘴"
-        assert audio.decode() == "好的，我现在停止互动。需要时你可以再唤醒我。"
+
+        standby = websocket.receive_json()
+        assert standby == {
+            "session_id": ANY,
+            "type": "listen",
+            "state": "standby",
+            "reason": "user-exit",
+            "turn_id": stt["turn_id"],
+        }
 
         with pytest.raises(WebSocketDisconnect) as excinfo:
-            websocket.send_json({"type": "listen", "state": "start"})
             websocket.receive_json()
         assert excinfo.value.code == 1000
+
+    deadline = time.monotonic() + 1.0
+    while True:
+        runtime = asyncio.run(_latest_runtime_pair(client, owned["device_id"]))
+        if runtime[4] == "user-exit" or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    assert runtime[4] == "user-exit"

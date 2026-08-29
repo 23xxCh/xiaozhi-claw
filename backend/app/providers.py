@@ -21,7 +21,14 @@ class SpeechProvider(Protocol):
 
 
 class LlmProvider(Protocol):
-    async def reply(self, text: str, memories: list[str]) -> str: ...
+    async def reply(
+        self,
+        text: str,
+        memories: list[str],
+        *,
+        history: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> str: ...
 
 
 class TtsAudioNormalizer(Protocol):
@@ -40,7 +47,15 @@ class MockSpeechProvider:
 
 
 class MockLlmProvider:
-    async def reply(self, text: str, memories: list[str]) -> str:
+    async def reply(
+        self,
+        text: str,
+        memories: list[str],
+        *,
+        history: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
+        del history, system_prompt
         prefix = "我记得你的偏好。" if memories else ""
         return f"{prefix}收到：{text}"[:50]
 
@@ -231,9 +246,18 @@ class OpenAICompatibleLlmProvider:
                 _append_path(self.settings.llm_url, "/chat/completions"), **kwargs
             )
 
-    async def reply(self, text: str, memories: list[str]) -> str:
+    async def reply(
+        self,
+        text: str,
+        memories: list[str],
+        *,
+        history: list[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
         memory_block = "\n".join(f"- {item}" for item in memories[:10])
-        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT}
+        ]
         if memory_block:
             messages.append(
                 {
@@ -241,13 +265,14 @@ class OpenAICompatibleLlmProvider:
                     "content": f"用户主动授权保存的摘要记忆：\n{memory_block}",
                 }
             )
+        messages.extend((history or [])[-10:])
         messages.append({"role": "user", "content": text})
         response = await self._post(
             headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
             json={
                 "model": self.settings.llm_model,
                 "messages": messages,
-                "max_tokens": 150,
+                "max_tokens": 256,
                 "temperature": 0.6,
                 "stream": False,
             },
