@@ -178,6 +178,14 @@ def _receive_mock_turn(websocket) -> tuple[dict[str, object], bytes]:
     assert stop["reply_id"] == start["reply_id"]
     assert stop["turn_id"] == start["turn_id"]
     websocket.send_json({"type": "tts", "state": "drained", "reply_id": start["reply_id"]})
+    completed = websocket.receive_json()
+    assert completed == {
+        "session_id": start["session_id"],
+        "type": "turn",
+        "state": "completed",
+        "turn_id": start["turn_id"],
+        "reply_id": start["reply_id"],
+    }
     return stt, audio
 
 
@@ -207,6 +215,67 @@ def test_mock_voice_turn_uses_xiaozhi_message_shapes(
     )
     assert entitlement.json()["used_turns"] == 1
     assert entitlement.json()["remaining_turns"] == 599
+
+
+def test_strict_playback_ready_timeout_aborts_before_audio(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-STRICT-READY")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json(
+            {
+                "type": "hello",
+                "version": 1,
+                "features": {"strict_playback_ack": True},
+            }
+        )
+        assert websocket.receive_json()["type"] == "hello"
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes("测试严格握手".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+        assert websocket.receive_json()["type"] == "stt"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["state"] == "start"
+        error = websocket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "tts-ready-timeout"
+
+
+def test_strict_playback_drained_timeout_reports_stable_error(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-STRICT-DRAINED")
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json(
+            {
+                "type": "hello",
+                "version": 1,
+                "features": {"strict_playback_ack": True},
+            }
+        )
+        assert websocket.receive_json()["type"] == "hello"
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes("测试播放完成".encode())
+        websocket.send_json({"type": "listen", "state": "stop"})
+        assert websocket.receive_json()["type"] == "stt"
+        assert websocket.receive_json()["type"] == "llm"
+        assert websocket.receive_json()["type"] == "llm"
+        start = websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "tts",
+                "state": "ready",
+                "turn_id": start["turn_id"],
+                "reply_id": start["reply_id"],
+            }
+        )
+        assert websocket.receive_json()["state"] == "sentence_start"
+        websocket.receive_bytes()
+        assert websocket.receive_json()["state"] == "stop"
+        error = websocket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "tts-drained-timeout"
 
 
 def test_admin_can_push_whitelisted_face_events_to_an_online_device(

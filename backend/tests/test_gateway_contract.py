@@ -252,10 +252,32 @@ def test_realtime_asr_failure_uses_bounded_batch_fallback(
         assert stt["emotion"] == "neutral"
         assert websocket.receive_json()["type"] == "llm"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["state"] == "start"
+        start = websocket.receive_json()
+        assert start["state"] == "start"
+        websocket.send_json(
+            {
+                "type": "tts",
+                "state": "ready",
+                "turn_id": start["turn_id"],
+                "reply_id": start["reply_id"],
+            }
+        )
         assert websocket.receive_json()["state"] == "sentence_start"
         websocket.receive_bytes()
-        assert websocket.receive_json()["state"] == "stop"
+        stop = websocket.receive_json()
+        assert stop["state"] == "stop"
+        websocket.send_json(
+            {
+                "type": "tts",
+                "state": "drained",
+                "turn_id": stop["turn_id"],
+                "reply_id": stop["reply_id"],
+            }
+        )
+        completed = websocket.receive_json()
+        assert completed["type"] == "turn"
+        assert completed["state"] == "completed"
+        assert completed["turn_id"] == stop["turn_id"]
 
     async def load_asr_usage() -> ProviderUsage | None:
         async with client.app.state.session_factory() as session:

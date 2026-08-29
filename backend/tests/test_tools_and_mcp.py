@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -37,8 +38,8 @@ class _Connections:
     def __init__(self) -> None:
         self.sent: list[dict[str, object]] = []
 
-    async def send_json(self, serial: str, payload: dict[str, object]) -> bool:
-        del serial
+    async def send_json_for_lease(self, lease, payload: dict[str, object]) -> bool:
+        del lease
         self.sent.append(payload)
         return True
 
@@ -46,7 +47,8 @@ class _Connections:
 @pytest.mark.asyncio
 async def test_device_mcp_initializes_lists_and_calls_tools() -> None:
     connections = _Connections()
-    client = DeviceMcpClient("SOAK-1", connections)  # type: ignore[arg-type]
+    lease = SimpleNamespace(serial_number="SOAK-1")
+    client = DeviceMcpClient(lease, connections)  # type: ignore[arg-type]
     task = asyncio.create_task(client.initialize())
     await asyncio.sleep(0)
     first = connections.sent[0]["payload"]

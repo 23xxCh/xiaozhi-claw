@@ -6,7 +6,7 @@ import asyncio
 import itertools
 from typing import Any
 
-from backend.app.device_connections import DeviceConnectionManager
+from backend.app.device_connections import ConnectionLease, DeviceConnectionManager
 
 
 class DeviceMcpError(RuntimeError):
@@ -19,8 +19,11 @@ class DeviceMcpClient:
         "device_set_brightness": "self.screen.set_brightness",
     }
 
-    def __init__(self, serial: str, connections: DeviceConnectionManager) -> None:
-        self.serial = serial
+    def __init__(
+        self, lease: ConnectionLease, connections: DeviceConnectionManager
+    ) -> None:
+        self.lease = lease
+        self.serial = lease.serial_number
         self.connections = connections
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
@@ -33,8 +36,8 @@ class DeviceMcpClient:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[request_id] = future
-        sent = await self.connections.send_json(
-            self.serial,
+        sent = await self.connections.send_json_for_lease(
+            self.lease,
             {
                 "type": "mcp",
                 "payload": {

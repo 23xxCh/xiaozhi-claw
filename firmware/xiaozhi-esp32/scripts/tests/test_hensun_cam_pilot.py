@@ -228,6 +228,10 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn('cJSON_AddStringToObject(root, "type", "ping")', protocol_source)
         self.assertIn('strcmp(type->valuestring, "pong") == 0', self.application_source)
         self.assertIn('cJSON_GetObjectItem(features, "heartbeat")', websocket_source)
+        self.assertIn(
+            'cJSON_AddBoolToObject(features, "strict_playback_ack", true)',
+            websocket_source,
+        )
         self.assertRegex(
             self.application_source,
             r"kHeartbeatIntervalTicks\s*=\s*15",
