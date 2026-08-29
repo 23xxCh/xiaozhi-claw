@@ -59,6 +59,7 @@ from .emotion import EmotionRouter
 from .face_control import SUPPORTED_FACE_EMOTIONS, FaceControlEvent, FaceControlParser
 from .mcp import DeviceMcpClient, DeviceMcpError
 from .media import OpusPacketPacer, StreamingPcmToOpus
+from .playback import PlaybackCoordinator
 from .providers import (
     RealtimeAsrSession,
     RealtimeProviderBundle,
@@ -208,115 +209,6 @@ class SentenceBuffer:
         return sentence or None
 
 
-class PlaybackHandshake:
-    def __init__(self, *, drain_timeout_seconds: float = 1.0) -> None:
-        self.reply_id: str | None = None
-        self.turn_id: str | None = None
-        self.ready = asyncio.Event()
-        self.drained = asyncio.Event()
-        self._drain_timeout_seconds = drain_timeout_seconds
-        self.strict_ack = False
-        self.last_drain_acknowledged = False
-
-    def configure(self, *, strict_ack: bool) -> None:
-        self.strict_ack = strict_ack
-
-    def begin(self, turn_id: str) -> str:
-        self.reply_id = str(uuid.uuid4())
-        self.turn_id = turn_id
-        self.ready = asyncio.Event()
-        self.drained = asyncio.Event()
-        self.last_drain_acknowledged = False
-        return self.reply_id
-
-    def acknowledge(self, state: str, reply_id: str, turn_id: str = "") -> bool:
-        if not reply_id or reply_id != self.reply_id:
-            return False
-        if turn_id and self.turn_id and turn_id != self.turn_id:
-            return False
-        if state == "ready":
-            self.ready.set()
-            return True
-        if state == "drained":
-            self.drained.set()
-            return True
-        return False
-
-    async def wait_ready(self, reply_id: str) -> bool:
-        if reply_id != self.reply_id:
-            return False
-        try:
-            await asyncio.wait_for(self.ready.wait(), timeout=2.0)
-            return True
-        except TimeoutError:
-            return False
-
-    async def wait_drained(self, reply_id: str) -> bool:
-        if reply_id != self.reply_id:
-            return False
-        try:
-            await asyncio.wait_for(self.drained.wait(), timeout=self._drain_timeout_seconds)
-            return True
-        except TimeoutError:
-            return False
-
-    def clear(self, reply_id: str | None = None) -> None:
-        if reply_id is None or reply_id == self.reply_id:
-            self.reply_id = None
-            self.turn_id = None
-            self.ready.set()
-            self.drained.set()
-
-
-async def _start_playback(
-    websocket: WebSocket,
-    lease: ConnectionLease,
-    playback: PlaybackHandshake,
-    turn_id: str,
-) -> str:
-    reply_id = playback.begin(turn_id)
-    delivered = await websocket.app.state.device_connections.send_json_for_lease(
-        lease,
-        {"type": "tts", "state": "start", "turn_id": turn_id, "reply_id": reply_id},
-    )
-    if not delivered:
-        playback.clear(reply_id)
-        raise ConnectionError("device connection lease expired before TTS start")
-    if not await playback.wait_ready(reply_id):
-        if playback.strict_ack:
-            playback.clear(reply_id)
-            raise TimeoutError("tts-ready-timeout")
-        logger.warning(
-            "legacy device %s did not acknowledge TTS ready; using paced compatibility mode",
-            lease.serial_number,
-        )
-    return reply_id
-
-
-async def _stop_playback(
-    websocket: WebSocket,
-    lease: ConnectionLease,
-    playback: PlaybackHandshake,
-    reply_id: str,
-    turn_id: str,
-    *,
-    wait_for_drain: bool,
-) -> bool:
-    delivered = await websocket.app.state.device_connections.send_json_for_lease(
-        lease,
-        {"type": "tts", "state": "stop", "turn_id": turn_id, "reply_id": reply_id},
-    )
-    if not delivered:
-        playback.clear(reply_id)
-        return False
-    drained = not wait_for_drain or await playback.wait_drained(reply_id)
-    playback.last_drain_acknowledged = drained
-    if not drained:
-        logger.warning("device %s did not acknowledge TTS drained", lease.serial_number)
-    playback.clear(reply_id)
-    return drained or not playback.strict_ack
-
-
 async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot:
     if device.active_agent_id is None:
         user = await session.get(User, device.owner_user_id)
@@ -461,18 +353,17 @@ async def _send_error(
 async def _send_turn_error_and_reset(
     websocket: WebSocket,
     lease: ConnectionLease,
-    playback: PlaybackHandshake,
+    playback: PlaybackCoordinator,
     turn_id: str,
     code: str,
     message: str,
 ) -> None:
     """End a failed turn through the same handshake as a zero-audio reply."""
     await _send_error(websocket, lease, code, message)
-    reply_id = await _start_playback(websocket, lease, playback, turn_id)
-    await _stop_playback(
+    reply_id = await playback.start(websocket, lease, turn_id)
+    await playback.stop(
         websocket,
         lease,
-        playback,
         reply_id,
         turn_id,
         wait_for_drain=True,
@@ -649,7 +540,7 @@ async def _speak_fixed_message(
     voice: str,
     speech_rate: float,
     message: str,
-    playback: PlaybackHandshake,
+    playback: PlaybackCoordinator,
 ) -> bool:
     """Speak a product-owned policy message without invoking the LLM."""
     serial = lease.serial_number
@@ -681,7 +572,7 @@ async def _speak_fixed_message(
             if fallback is None:
                 raise
             logger.warning("realtime TTS failed for policy prompt on %s; using fallback", serial)
-            reply_id = await _start_playback(websocket, lease, playback, turn_id)
+            reply_id = await playback.start(websocket, lease, turn_id)
             await websocket.app.state.device_connections.send_json_for_lease(
                 lease,
                 {"type": "tts", "state": "sentence_start", "turn_id": turn_id, "text": message},
@@ -691,7 +582,7 @@ async def _speak_fixed_message(
                     break
             return False
 
-        reply_id = await _start_playback(websocket, lease, playback, turn_id)
+        reply_id = await playback.start(websocket, lease, turn_id)
         if not providers.mock:
             encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
             await encoder.start()
@@ -716,10 +607,9 @@ async def _speak_fixed_message(
                 await encoder.cancel()
             packet_task.cancel()
         if reply_id is not None:
-            await _stop_playback(
+            await playback.stop(
                 websocket,
                 lease,
-                playback,
                 reply_id,
                 turn_id,
                 wait_for_drain=not interrupted,
@@ -740,7 +630,7 @@ async def _process_turn(
     audio_duration_ms: int,
     history: list[dict[str, str]],
     turn_started: float,
-    playback: PlaybackHandshake,
+    playback: PlaybackCoordinator,
     noise_turn_budget: _NoiseTurnBudget,
     user_exit_event: asyncio.Event,
     telemetry_tasks: set[asyncio.Task[None]],
@@ -990,7 +880,7 @@ async def _process_turn(
                     logger.warning("realtime TTS failed for %s; using batch fallback", serial)
                     fallback_operations.add("tts")
                     batch_tts = True
-                reply_id = await _start_playback(websocket, lease, playback, turn_id)
+                reply_id = await playback.start(websocket, lease, turn_id)
                 if tts is not None and not providers.mock:
                     encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
                     await encoder.start()
@@ -1092,10 +982,9 @@ async def _process_turn(
             first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
 
         assert reply_id is not None
-        drained = await _stop_playback(
+        drained = await playback.stop(
             websocket,
             lease,
-            playback,
             reply_id,
             turn_id,
             wait_for_drain=True,
@@ -1195,10 +1084,9 @@ async def _process_turn(
         return False
     finally:
         if tts_started and reply_id is not None and not playback_stopped:
-            await _stop_playback(
+            await playback.stop(
                 websocket,
                 lease,
-                playback,
                 reply_id,
                 turn_id,
                 wait_for_drain=not interrupted,
@@ -1447,7 +1335,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     cancelled = False
     heartbeat_timed_out = False
     continuous_reminder_sent = False
-    playback = PlaybackHandshake()
+    playback = PlaybackCoordinator()
     noise_turn_budget = _NoiseTurnBudget()
     user_exit_event = asyncio.Event()
     telemetry_tasks: set[asyncio.Task[None]] = set()
