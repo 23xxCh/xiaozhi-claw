@@ -68,6 +68,7 @@ class MultiFrameRealtimeProviders:
 class HistoryCapturingLlm(FixedStreamingLlm):
     def __init__(self) -> None:
         self.histories: list[list[dict[str, str]]] = []
+        self.contexts: list[list[dict[str, object]]] = []
 
     async def reply_stream(
         self,
@@ -76,6 +77,7 @@ class HistoryCapturingLlm(FixedStreamingLlm):
         tool_executor=None,
     ) -> AsyncIterator[str]:
         del tool_executor
+        self.contexts.append([dict(message) for message in request.context.messages])
         self.histories.append(
             [
                 dict(message)
@@ -145,13 +147,23 @@ async def _latest_runtime_pair(client: TestClient, device_id: str):
             .order_by(ConversationSession.started_at.desc())
         )
         assert device_session is not None
-        assert conversation is not None
         return (
             device_session.heartbeat_at,
             device_session.status,
             device_session.disconnected_at,
-            conversation.ended_at,
-            conversation.end_reason,
+            conversation.ended_at if conversation is not None else None,
+            conversation.end_reason if conversation is not None else None,
+        )
+
+
+async def _conversation_records(client: TestClient, device_id: str):
+    async with client.app.state.session_factory() as session:
+        return list(
+            await session.scalars(
+                select(ConversationSession)
+                .where(ConversationSession.device_id == device_id)
+                .order_by(ConversationSession.started_at)
+            )
         )
 
 
@@ -374,6 +386,7 @@ def test_device_receives_each_streamed_audio_frame(
         websocket.send_json(
             {"type": "tts", "state": "drained", "reply_id": start["reply_id"]}
         )
+        assert websocket.receive_json()["state"] == "completed"
 
 
 def test_same_websocket_accepts_a_followup_turn_with_history(
@@ -403,6 +416,82 @@ def test_same_websocket_accepts_a_followup_turn_with_history(
     ]
 
 
+def test_idle_timeout_ends_logical_conversation_without_closing_websocket(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    client.app.state.realtime_providers = MultiTurnProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-LOGICAL-SESSIONS")
+
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"first-session")
+        websocket.send_json({"type": "listen", "state": "stop"})
+        _receive_mock_turn(websocket)
+        websocket.send_json({"type": "abort", "reason": "idle_timeout"})
+        assert websocket.receive_json()["state"] == "aborted"
+
+        websocket.send_json({"type": "listen", "state": "start"})
+        websocket.send_bytes(b"second-session")
+        websocket.send_json({"type": "listen", "state": "stop"})
+        _receive_mock_turn(websocket)
+        websocket.send_json({"type": "abort", "reason": "test-complete"})
+        assert websocket.receive_json()["state"] == "aborted"
+
+    deadline = time.monotonic() + 1.0
+    while True:
+        records = asyncio.run(_conversation_records(client, owned["device_id"]))
+        complete = len(records) == 2 and records[1].ended_at is not None
+        if complete or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    assert len(records) == 2
+    assert records[0].ended_at is not None
+    assert records[0].end_reason == "idle_timeout"
+    assert records[1].ended_at is not None
+    assert records[1].end_reason == "test-complete"
+
+
+def test_new_logical_conversation_loads_summary_without_reconnecting_websocket(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    providers = MultiTurnProviders()
+    client.app.state.realtime_providers = providers
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-SUMMARY-RELOAD")
+    user_headers = {"Authorization": f"Bearer {owned['user_token']}"}
+    agent = client.get("/v1/agents", headers=user_headers).json()[0]
+    assert client.patch(
+        f"/v1/agents/{agent['id']}",
+        headers=user_headers,
+        json={"memory_consent": True},
+    ).status_code == 200
+
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        websocket.send_json({"type": "hello", "version": 1})
+        assert websocket.receive_json()["type"] == "hello"
+
+        for reason in ("idle_timeout", "test-complete"):
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.send_bytes(b"remember-this")
+            websocket.send_json({"type": "listen", "state": "stop"})
+            _receive_mock_turn(websocket)
+            websocket.send_json({"type": "abort", "reason": reason})
+            assert websocket.receive_json()["state"] == "aborted"
+            if reason != "idle_timeout":
+                assert websocket.receive_json()["emotion"] == "interrupted"
+
+    main_contexts = [
+        context
+        for context in providers.llm.contexts
+        if context[-1].get("content") == "测试多帧语音"
+    ]
+    assert len(main_contexts) == 2
+    assert not any("最近会话摘要" in str(message.get("content")) for message in main_contexts[0])
+    assert any("最近会话摘要" in str(message.get("content")) for message in main_contexts[1])
+
+
 def test_server_vad_finishes_turn_without_device_listen_stop(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
@@ -429,6 +518,7 @@ def test_server_vad_finishes_turn_without_device_listen_stop(
         websocket.send_json(
             {"type": "tts", "state": "drained", "reply_id": stop["reply_id"]}
         )
+        assert websocket.receive_json()["state"] == "completed"
 
     assert providers.opened_asr_sessions == 1
 
@@ -542,8 +632,8 @@ def test_silent_device_timeout_closes_runtime_records(
     _, status, disconnected_at, ended_at, end_reason = runtime
     assert status == "offline"
     assert disconnected_at is not None
-    assert ended_at is not None
-    assert end_reason == "heartbeat-timeout"
+    assert ended_at is None
+    assert end_reason is None
 
 
 def test_xiaozhi_bootstrap_returns_six_digit_claim_code_for_unclaimed_device(
@@ -591,9 +681,12 @@ def test_xiaocan_shut_up_enters_standby_without_goodbye(
             "turn_id": stt["turn_id"],
         }
 
-        with pytest.raises(WebSocketDisconnect) as excinfo:
-            websocket.receive_json()
-        assert excinfo.value.code == 1000
+        websocket.send_json({"type": "ping", "sequence": 1})
+        assert websocket.receive_json() == {
+            "session_id": ANY,
+            "type": "pong",
+            "sequence": 1,
+        }
 
     deadline = time.monotonic() + 1.0
     while True:

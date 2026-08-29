@@ -9,6 +9,7 @@ from backend.ai.context import LlmRequest
 from .audio_formats import FfmpegOpusNormalizer, opus_packets_to_ogg
 from .config import Settings
 
+
 class SpeechProvider(Protocol):
     async def transcribe(self, audio_frames: list[bytes]) -> str: ...
 

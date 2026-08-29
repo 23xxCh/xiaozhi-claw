@@ -1239,6 +1239,25 @@ async def _save_session_summary(
         if not summary:
             return
         async with websocket.app.state.session_factory() as session:
+            conversation = await session.get(ConversationSession, conversation_id)
+            agent = await session.get(Agent, snapshot.agent_id)
+            profile = await session.get(UsageProfile, snapshot.usage_profile_id)
+            profile_memory_allowed = bool(
+                profile
+                and (profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent)
+            )
+            if (
+                conversation is None
+                or agent is None
+                or not agent.memory_consent
+                or not profile_memory_allowed
+            ):
+                logger.info(
+                    "discarded completed summary after consent change conversation=%s "
+                    "code=memory-consent-revoked",
+                    conversation_id,
+                )
+                return
             session.add(
                 EncryptedSessionSummary(
                     session_id=conversation_id,
@@ -1393,25 +1412,17 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         snapshot = await _load_snapshot(session, device)
         await session.flush()
         connection_id = str(uuid.uuid4())
-        conversation = ConversationSession(
-            user_id=device.owner_user_id,
-            agent_id=snapshot.agent_id,
-            device_id=device.id,
-            usage_profile_id=snapshot.usage_profile_id,
-        )
         device_session = DeviceSession(
             device_id=device.id,
             gateway_id=settings.gateway_id,
             connection_id=connection_id,
             firmware_version=device.firmware_version,
         )
-        session.add_all([conversation, device_session])
+        session.add(device_session)
         device.last_seen_at = datetime.now(UTC)
         await session.commit()
         device_id = device.id
         user_id = device.owner_user_id
-        conversation_id = conversation.id
-        conversation_started_at = conversation.started_at
         device_session_id = device_session.id
 
     await websocket.accept()
@@ -1429,8 +1440,9 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     audio_bytes = 0
     audio_frames = 0
     audio_buffer: list[bytes] = []
+    conversation_id: str | None = None
+    conversation_started_at: datetime | None = None
     history: list[dict[str, str]] = []
-    end_reason = "disconnected"
     connected_at = time.perf_counter()
     cancelled = False
     heartbeat_timed_out = False
@@ -1439,6 +1451,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     noise_turn_budget = _NoiseTurnBudget()
     user_exit_event = asyncio.Event()
     telemetry_tasks: set[asyncio.Task[None]] = set()
+    summary_tasks: set[asyncio.Task[None]] = set()
+    last_summary_task: asyncio.Task[None] | None = None
     mcp_client: DeviceMcpClient | None = None
     mcp_initialize_task: asyncio.Task[None] | None = None
     # A warm device WebSocket can span multiple sleep/wake sessions. Only a
@@ -1460,11 +1474,76 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             )
             return _UnavailableRealtimeAsrSession(exc)
 
-    def start_active_turn() -> bool:
+    async def ensure_logical_conversation() -> str:
+        nonlocal conversation_id, conversation_started_at
+        nonlocal continuous_reminder_sent, last_summary_task
+        if conversation_id is not None:
+            return conversation_id
+        if last_summary_task is not None and not last_summary_task.done():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(last_summary_task), timeout=0.5)
+        async with session_factory() as session:
+            conversation = ConversationSession(
+                user_id=user_id,
+                agent_id=snapshot.agent_id,
+                device_id=device_id,
+                usage_profile_id=snapshot.usage_profile_id,
+            )
+            session.add(conversation)
+            await session.commit()
+            conversation_id = conversation.id
+            conversation_started_at = conversation.started_at
+        history.clear()
+        continuous_reminder_sent = False
+        return conversation_id
+
+    async def finalize_logical_conversation(reason: str) -> None:
+        nonlocal conversation_id, conversation_started_at
+        nonlocal continuous_reminder_sent, last_summary_task
+        if conversation_id is None:
+            return
+        finalized_id = conversation_id
+        finalized_history = history.copy()
+        finalized_snapshot = snapshot
+        conversation_id = None
+        conversation_started_at = None
+        history.clear()
+        continuous_reminder_sent = False
+        async with session_factory() as session:
+            conversation = await session.get(ConversationSession, finalized_id)
+            if conversation is not None and conversation.ended_at is None:
+                conversation.ended_at = datetime.now(UTC)
+                conversation.end_reason = reason[:64]
+            await session.commit()
+        if not finalized_snapshot.memory_consent or not finalized_history:
+            return
+        summary_task = asyncio.create_task(
+            _save_session_summary(
+                websocket,
+                finalized_id,
+                user_id,
+                finalized_snapshot,
+                finalized_history,
+            )
+        )
+        last_summary_task = summary_task
+        summary_tasks.add(summary_task)
+
+        def observe_summary(task: asyncio.Task[None]) -> None:
+            summary_tasks.discard(task)
+            try:
+                task.result()
+            except Exception:
+                logger.exception("background summary failed for conversation %s", finalized_id)
+
+        summary_task.add_done_callback(observe_summary)
+
+    async def start_active_turn() -> bool:
         nonlocal active_asr, active_task, audio_bytes, audio_frames, audio_buffer
         nonlocal first_turn_pending
         if active_asr is None or audio_bytes == 0:
             return False
+        active_conversation_id = await ensure_logical_conversation()
         turn_asr = active_asr
         turn_audio_duration_ms = audio_frames * 60
         turn_audio_frames = audio_buffer.copy()
@@ -1481,7 +1560,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 connection_lease,
                 device_id,
                 user_id,
-                conversation_id,
+                active_conversation_id,
                 turn_id,
                 snapshot,
                 turn_asr,
@@ -1507,22 +1586,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 stop_event=user_exit_event,
             )
             if user_exit_event.is_set():
-                end_reason = "user-exit"
-                # Persist the intentional reason before sending the close
-                # frame. Some WebSocket clients stop driving the ASGI task as
-                # soon as they receive that frame; the final cleanup will also
-                # set ended_at and idempotently retain this reason.
-                async with session_factory() as session:
-                    stored_conversation = await session.get(
-                        ConversationSession, conversation_id
-                    )
-                    if stored_conversation is not None:
-                        stored_conversation.end_reason = end_reason
-                        await session.commit()
-                await websocket.close(code=1000, reason="user requested exit")
-                break
+                await finalize_logical_conversation("user-exit")
+                user_exit_event.clear()
+                first_turn_pending = False
+                continue
             if incoming is None:
-                end_reason = "heartbeat-timeout"
                 heartbeat_timed_out = True
                 logger.warning("device websocket heartbeat timeout serial=%s", serial)
                 break
@@ -1594,7 +1662,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 audio_frames += 1
                 audio_buffer.append(bytes(chunk))
                 if asr_endpoint_detected(active_asr):
-                    start_active_turn()
+                    await start_active_turn()
                 continue
 
             text_frame = incoming.get("text")
@@ -1659,6 +1727,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 )
                 continue
             if message_type == "abort":
+                abort_reason = str(message.get("reason") or "aborted")
                 first_turn_pending = False
                 if active_asr is not None:
                     await active_asr.cancel()
@@ -1667,14 +1736,16 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     active_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await active_task
+                active_task = None
                 audio_bytes = 0
                 audio_frames = 0
                 audio_buffer.clear()
                 playback.clear()
+                await finalize_logical_conversation(abort_reason)
                 await websocket.app.state.device_connections.send_json_for_lease(
                     connection_lease, {"type": "system", "state": "aborted"}
                 )
-                if str(message.get("reason") or "") != "idle_timeout":
+                if abort_reason != "idle_timeout":
                     await websocket.app.state.device_connections.send_json_for_lease(
                         connection_lease, {"type": "llm", "emotion": "interrupted"}
                     )
@@ -1702,7 +1773,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         },
                     )
                     if end_session:
-                        user_exit_event.set()
+                        await finalize_logical_conversation("user-exit")
+                        user_exit_event.clear()
                 continue
             if message_type == "mcp":
                 if mcp_client is not None and mcp_client.handle_message(message):
@@ -1743,6 +1815,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             if state == "detect":
                 first_turn_pending = True
                 noise_turn_budget.reset()
+                await ensure_logical_conversation()
                 continue
             if state == "start":
                 if active_task is not None and not active_task.done():
@@ -1761,19 +1834,26 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         end_session = False
                     active_task = None
                     if end_session:
-                        end_reason = "user-exit"
-                        await websocket.close(code=1000, reason="user requested exit")
-                        break
+                        await finalize_logical_conversation("user-exit")
+                        user_exit_event.clear()
                 async with session_factory() as session:
                     current_device = await session.get(Device, device_id)
                     if current_device is None:
                         await websocket.close(code=4404, reason="device removed")
                         break
-                    snapshot = await _load_snapshot(session, current_device)
+                    next_snapshot = await _load_snapshot(session, current_device)
+                    if conversation_id is not None and (
+                        next_snapshot.agent_id != snapshot.agent_id
+                        or next_snapshot.usage_profile_id != snapshot.usage_profile_id
+                    ):
+                        await finalize_logical_conversation("configuration-changed")
+                    snapshot = next_snapshot
                     profile = await session.get(UsageProfile, snapshot.usage_profile_id)
                     if profile is None:
                         await websocket.close(code=4404, reason="usage profile removed")
                         break
+                    await ensure_logical_conversation()
+                    assert conversation_started_at is not None
                     policy = await evaluate_profile_policy(
                         session,
                         profile,
@@ -1836,6 +1916,23 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     audio_frames = 0
                     audio_buffer.clear()
                 continue
+            if state == "standby":
+                if active_asr is not None:
+                    await active_asr.cancel()
+                    active_asr = None
+                if active_task is not None and not active_task.done():
+                    active_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await active_task
+                active_task = None
+                audio_bytes = 0
+                audio_frames = 0
+                audio_buffer.clear()
+                playback.clear()
+                await finalize_logical_conversation(
+                    str(message.get("reason") or "standby")
+                )
+                continue
             if state != "stop":
                 await _send_error(
                     websocket,
@@ -1853,7 +1950,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     websocket, connection_lease, "empty-audio", "no audio received"
                 )
                 continue
-            start_active_turn()
+            await start_active_turn()
 
             if time.perf_counter() - connected_at >= 7200:
                 await websocket.app.state.device_connections.send_json_for_lease(
@@ -1869,49 +1966,68 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         logger.info("device websocket disconnected serial=%s", serial)
     except asyncio.CancelledError:
         cancelled = True
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            while current_task.cancelling():
+                current_task.uncancel()
     except Exception:
         logger.exception("device websocket failed serial=%s", serial)
     finally:
-        if user_exit_event.is_set():
-            end_reason = "user-exit"
-        if active_asr is not None:
-            await active_asr.cancel()
-        if active_task is not None and not active_task.done():
-            active_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await active_task
-        if telemetry_tasks:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.gather(*telemetry_tasks, return_exceptions=True), timeout=2.0
-                )
-        await websocket.app.state.device_connections.disconnect(connection_lease)
-        now = datetime.now(UTC)
-        async with session_factory() as session:
-            stored_device_session = await session.get(DeviceSession, device_session_id)
-            if stored_device_session is not None:
-                stored_device_session.status = DeviceSessionStatus.OFFLINE.value
-                stored_device_session.disconnected_at = now
-                stored_device_session.heartbeat_at = now
-            stored_conversation = await session.get(ConversationSession, conversation_id)
-            if stored_conversation is not None:
-                stored_conversation.ended_at = now
-                stored_conversation.end_reason = end_reason
-            await session.commit()
-        if heartbeat_timed_out:
-            with contextlib.suppress(RuntimeError):
-                await websocket.close(code=1001, reason="device heartbeat timeout")
-        if mcp_initialize_task is not None:
-            if not mcp_initialize_task.done():
-                mcp_initialize_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, DeviceMcpError):
-                await mcp_initialize_task
-        if mcp_client is not None:
-            await mcp_client.close()
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(
-                _save_session_summary(websocket, conversation_id, user_id, snapshot, history),
-                timeout=5.0,
-            )
-    if cancelled:
-        raise asyncio.CancelledError
+        async def cleanup_connection() -> None:
+            if active_asr is not None:
+                await active_asr.cancel()
+            if active_task is not None and not active_task.done():
+                active_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await active_task
+            if telemetry_tasks:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.gather(*telemetry_tasks, return_exceptions=True), timeout=2.0
+                    )
+            disconnect_reason = "cancelled" if cancelled else "disconnected"
+            if heartbeat_timed_out:
+                disconnect_reason = "heartbeat-timeout"
+            elif user_exit_event.is_set():
+                disconnect_reason = "user-exit"
+            if active_task is not None and active_task.done():
+                with contextlib.suppress(Exception):
+                    if active_task.result():
+                        disconnect_reason = "user-exit"
+            await finalize_logical_conversation(disconnect_reason)
+            await websocket.app.state.device_connections.disconnect(connection_lease)
+            now = datetime.now(UTC)
+            async with session_factory() as session:
+                stored_device_session = await session.get(DeviceSession, device_session_id)
+                if stored_device_session is not None:
+                    stored_device_session.status = DeviceSessionStatus.OFFLINE.value
+                    stored_device_session.disconnected_at = now
+                    stored_device_session.heartbeat_at = now
+                await session.commit()
+            if heartbeat_timed_out:
+                with contextlib.suppress(RuntimeError):
+                    await websocket.close(code=1001, reason="device heartbeat timeout")
+            if mcp_initialize_task is not None:
+                if not mcp_initialize_task.done():
+                    mcp_initialize_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, DeviceMcpError):
+                    await mcp_initialize_task
+            if mcp_client is not None:
+                await mcp_client.close()
+            if summary_tasks:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.gather(*tuple(summary_tasks), return_exceptions=True),
+                        timeout=5.0,
+                    )
+
+        cleanup_task = asyncio.create_task(cleanup_connection())
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                current_task = asyncio.current_task()
+                if current_task is not None:
+                    while current_task.cancelling():
+                        current_task.uncancel()
+        await cleanup_task
