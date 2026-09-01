@@ -15,9 +15,8 @@ type Dashboard = { onboarding: OnboardingStatus; agents: Agent[]; devices: Devic
 
 const journey = [
   ["bind_device", "绑定设备", "输入设备屏幕上的 6 位代码"],
-  ["configure_assistant", "设置助手", "选择名称、性格、声音和记忆"],
-  ["bring_device_online", "确认设备在线", "确保电脑服务与设备连接同一网络"],
-  ["start_conversation", "开始第一次对话", "对设备说“你好小智”"],
+  ["bring_device_online", "确认设备在线", "设备会自动连接云端服务，离线时请重启设备"],
+  ["start_conversation", "开始第一次对话", "对设备说“你好小灿”"],
 ] as const;
 
 export default function DashboardPage() {
@@ -73,7 +72,7 @@ export default function DashboardPage() {
             {journey.map(([key, title, description], index) => {
               const done = currentIndex === -1 || index < currentIndex;
               const current = key === data.onboarding.next_action;
-              const href = key === "bind_device" ? "/console/devices" : key === "configure_assistant" ? "/console/agents" : "/console/devices";
+              const href = "/console/devices";
               return (
                 <div className={`checklist-item${done ? " done" : ""}${current ? " current" : ""}`} key={key}>
                   <div className="checklist-number">{done ? <CheckIcon size={17} weight="bold" /> : index + 1}</div>
@@ -88,7 +87,7 @@ export default function DashboardPage() {
           <div className="stack">
             <span className={`status ${currentDevice?.online ? "online" : "warning"}`}>{currentDevice?.online ? "可以聊天" : "设备离线"}</span>
             <h2>{currentDevice?.online ? `“${currentAgent?.name ?? "助手"}”正在等你` : "先让设备重新连上网络"}</h2>
-            <p className="muted" style={{ margin: 0 }}>{currentDevice?.online ? "说“你好小智”开始对话。角色和声音调整会从下一轮生效。" : "保持本机控制面和实时网关运行，然后重启设备。"}</p>
+            <p className="muted" style={{ margin: 0 }}>{currentDevice?.online ? "说“你好小灿”开始对话。助手名称、性格和声音都可以稍后再调整。" : "请重启设备；仍无法联网时，长按 BOOT 两秒重新配网。"}</p>
             <div><Link className="button" href={currentDevice?.online ? "/console/agents" : "/console/devices"}>{currentDevice?.online ? "调整助手" : "查看恢复步骤"}</Link></div>
           </div>
           <BrandFace />

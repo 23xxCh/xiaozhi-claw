@@ -46,7 +46,7 @@ export default function DevicesPage() {
     setSubmitting(true);
     try {
       await api("/v1/claims/confirm", { method: "POST", body: JSON.stringify({ claim_code: claimCode }) });
-      setClaimCode(""); setMessage("设备绑定成功，现在可以设置助手。\n"); await load();
+      setClaimCode(""); setMessage("设备绑定成功，现在即可聊天。助手个性化可以稍后设置。\n"); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "绑定失败"); }
     finally { setSubmitting(false); }
   }
@@ -75,6 +75,20 @@ export default function DevicesPage() {
     finally { setSubmitting(false); }
   }
 
+  async function unbind(device: Device) {
+    const confirmed = window.confirm(
+      `确认解除“${device.name}”的绑定吗？解除后本账户将无法管理设备，设备可由新用户重新绑定。`,
+    );
+    if (!confirmed) return;
+    setError(null); setMessage(null); setSubmitting(true);
+    try {
+      await api(`/v1/devices/${device.id}/unbind`, { method: "POST" });
+      setMessage("设备已恢复为待新用户绑定。寄出前还需清除设备保存的 Wi‑Fi。");
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "解除绑定失败"); }
+    finally { setSubmitting(false); }
+  }
+
   if (!ready) return <Loading cards={2} />;
   return (
     <>
@@ -96,7 +110,7 @@ export default function DevicesPage() {
           return (
             <section className="card stack" key={device.id}>
               <div className="split"><h2>{device.name}</h2><span className={`status ${device.online ? "online" : "warning"}`}>{device.online ? "在线，可以聊天" : "离线"}</span></div>
-              {!device.online ? <InlineResult tone="warning">请确认本机服务正在运行、设备与电脑连接同一 Wi‑Fi，然后重启设备。</InlineResult> : null}
+              {!device.online ? <InlineResult tone="warning">请先重启设备；仍无法联网时，长按 BOOT 两秒重新配网。</InlineResult> : null}
               <div className="field"><label htmlFor={`agent-${device.id}`}>当前助手</label><select id={`agent-${device.id}`} value={device.active_agent_id ?? ""} disabled={submitting} onChange={(event) => void update(device, { active_agent_id: event.target.value })}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></div>
               <div><span className="label">当前使用者</span><p style={{ margin: "5px 0 0" }}>{profile?.display_name ?? "本人"} <span className="hint">· {profile?.kind === "youth" ? "家庭档案" : "成人档案"}</span></p></div>
               {configuration ? <form className="card soft stack" key={configuration.desired_version} onSubmit={(event) => void saveConfiguration(event, device)}>
@@ -108,6 +122,10 @@ export default function DevicesPage() {
                 <button className="button secondary" type="submit" disabled={submitting}>{submitting ? "正在保存…" : "保存并下发"}</button>
               </form> : null}
               <details className="details"><summary>设备信息</summary><div className="stack hint"><div className="mono">SN {device.serial_number}</div><div>固件 {device.firmware_version} · 硬件 {device.hardware_version}</div><label className="check"><input type="checkbox" checked={device.ota_auto_update} disabled={submitting} onChange={(event) => void update(device, { ota_auto_update: event.target.checked })} />自动接收灰度更新</label></div></details>
+              <div className="card soft stack">
+                <div><strong>交给其他用户</strong><p className="hint" style={{ marginBottom: 0 }}>解除绑定会清除本账户对设备的归属和记忆授权，新用户可用自己的邮箱重新绑定。</p></div>
+                <button className="button danger" type="button" disabled={submitting} onClick={() => void unbind(device)}>{submitting ? "正在处理…" : "解除绑定"}</button>
+              </div>
             </section>
           );
         })}
