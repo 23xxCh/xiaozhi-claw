@@ -58,9 +58,7 @@ async def onboarding_status(
         )
     )
     completed = first_conversation is not None
-    if not configured:
-        next_action = "configure_assistant"
-    elif not online:
+    if not online:
         next_action = "bring_device_online"
     elif not completed:
         next_action = "start_conversation"

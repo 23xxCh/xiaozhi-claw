@@ -29,7 +29,8 @@ def test_onboarding_reports_one_real_next_action_at_each_stage(
     )
     headers = {"Authorization": f"Bearer {owned['user_token']}"}
     configured = client.get("/v1/onboarding/status", headers=headers)
-    assert configured.json()["next_action"] == "configure_assistant"
+    assert configured.json()["assistant_configured"] is False
+    assert configured.json()["next_action"] == "bring_device_online"
     agent_id = configured.json()["active_agent_id"]
 
     updated = client.patch(f"/v1/agents/{agent_id}", headers=headers, json={"name": "小恒"})
