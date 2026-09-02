@@ -1,0 +1,22 @@
+# Standard emotes for the Hensun No-CAM portrait display
+
+These GIFs were derived from the user-supplied `标准版表情包.zip` with SHA-256
+`250C7456CE1456F6B72CF0CE2263BABA8F9F896380DA11B968DCFEDCCE74A93B`.
+The source files are 384x288 animations. The tracked runtime assets preserve the
+4:3 composition while scaling each animation to 240x180 at 10 FPS for the
+240x320 portrait TFT.
+
+| Runtime asset | Source label |
+|---|---|
+| `neutral.gif` | 默认 |
+| `shy.gif` | 害羞 |
+| `sad.gif` | 难过 |
+| `angry.gif` | 生气 |
+| `surprised.gif` | 惊讶 |
+| `sleepy.gif` | 困倦 |
+| `confused.gif` | 疑惑 |
+| `caring.gif` | 关爱 |
+| `silly.gif` | 调皮 |
+
+The board-specific display adapter maps cloud emotion aliases onto these nine
+runtime names. Unknown values fall back to `neutral`.

@@ -250,6 +250,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_HENSUN_DESK_V1
         bool "Hensun Desk V1 (ESP32-S3-BOX-3 pilot hardware)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+        bool "Hensun No-CAM Pilot V1 (seller XZ-AI_KZB V1.7/V1.8 hardware)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_HU_087
         bool "HU-087"
         depends on IDF_TARGET_ESP32S3

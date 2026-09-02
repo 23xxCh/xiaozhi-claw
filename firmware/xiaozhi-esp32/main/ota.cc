@@ -28,7 +28,7 @@
 
 #define TAG "Ota"
 
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
 static std::string GetHensunDeviceSecret() {
     auto err = nvs_flash_init_partition("hensun_keys");
     if (err != ESP_OK) {
@@ -103,7 +103,7 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     http->SetHeader("Accept-Language", Lang::CODE);
     http->SetHeader("Content-Type", "application/json");
 
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
     auto device_secret = GetHensunDeviceSecret();
     if (!device_secret.empty()) {
         http->SetHeader("Authorization", "Bearer " + device_secret);

@@ -14,6 +14,17 @@ SPEC.loader.exec_module(BUILD)
 
 
 class BuildDefaultAssetsTest(unittest.TestCase):
+    def test_explicit_emoji_collection_directory_is_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            collection = Path(directory) / "standard_emotes"
+            collection.mkdir()
+
+            resolved = BUILD.get_emoji_collection_path(
+                str(collection), str(Path(directory) / "noto-fonts")
+            )
+
+            self.assertEqual(Path(resolved), collection)
+
     def test_text_font_metadata_uses_bundle_charset_size_and_bpp(self):
         with tempfile.TemporaryDirectory() as directory:
             assets = Path(directory)
