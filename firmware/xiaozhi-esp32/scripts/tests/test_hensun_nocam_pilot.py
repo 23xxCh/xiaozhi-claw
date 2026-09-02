@@ -109,8 +109,11 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
 
         self.assertIn("#define AUDIO_I2S_METHOD_SIMPLEX", pins)
         self.assertIn("#define LCD_TYPE_ST7789_SERIAL", pins)
-        self.assertRegex(pins, r"#define\s+DISPLAY_WIDTH\s+240\b")
-        self.assertRegex(pins, r"#define\s+DISPLAY_HEIGHT\s+320\b")
+        self.assertRegex(pins, r"#define\s+DISPLAY_WIDTH\s+320\b")
+        self.assertRegex(pins, r"#define\s+DISPLAY_HEIGHT\s+240\b")
+        self.assertRegex(pins, r"#define\s+DISPLAY_MIRROR_X\s+true\b")
+        self.assertRegex(pins, r"#define\s+DISPLAY_MIRROR_Y\s+false\b")
+        self.assertRegex(pins, r"#define\s+DISPLAY_SWAP_XY\s+true\b")
 
     def test_uses_simplex_audio_and_has_no_camera_runtime(self):
         source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
@@ -138,7 +141,7 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
             cmake,
         )
 
-    def test_standard_emotes_are_animated_240_by_180_gifs(self):
+    def test_standard_emotes_are_animated_full_screen_landscape_gifs(self):
         expected = {
             "neutral.gif",
             "shy.gif",
@@ -157,7 +160,7 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
             payload = path.read_bytes()
             self.assertIn(payload[:6], {b"GIF87a", b"GIF89a"})
             self.assertGreater(payload.count(b"\x2c"), 1, path.name)
-            self.assertEqual(struct.unpack("<HH", payload[6:10]), (240, 180))
+            self.assertEqual(struct.unpack("<HH", payload[6:10]), (320, 240))
 
     def test_maps_cloud_emotions_to_the_nine_standard_assets(self):
         source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")

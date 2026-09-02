@@ -1,10 +1,10 @@
-# Standard emotes for the Hensun No-CAM portrait display
+# Standard emotes for the Hensun No-CAM landscape display
 
 These GIFs were derived from the user-supplied `标准版表情包.zip` with SHA-256
 `250C7456CE1456F6B72CF0CE2263BABA8F9F896380DA11B968DCFEDCCE74A93B`.
 The source files are 384x288 animations. The tracked runtime assets preserve the
-4:3 composition while scaling each animation to 240x180 at 10 FPS for the
-240x320 portrait TFT.
+4:3 composition while scaling each animation to 320x240 at 10 FPS, filling the
+320x240 landscape TFT without margins.
 
 | Runtime asset | Source label |
 |---|---|
