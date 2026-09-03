@@ -399,21 +399,28 @@ async def admin_users(
     if query:
         statement = statement.where(User.display_name.contains(query))
     users = list(await session.scalars(statement))
-    responses: list[AdminUserResponse] = []
-    for user in users:
-        device_count = await session.scalar(
-            select(func.count()).select_from(Device).where(Device.owner_user_id == user.id)
-        )
-        responses.append(
-            AdminUserResponse(
-                id=user.id,
-                display_name=user.display_name,
-                adult_confirmed=user.adult_confirmed,
-                device_count=int(device_count or 0),
-                created_at=user.created_at,
+    if not users:
+        return []
+    device_counts = {
+        owner_user_id: int(device_count)
+        for owner_user_id, device_count in (
+            await session.execute(
+                select(Device.owner_user_id, func.count())
+                .where(Device.owner_user_id.in_([user.id for user in users]))
+                .group_by(Device.owner_user_id)
             )
+        ).all()
+    }
+    return [
+        AdminUserResponse(
+            id=user.id,
+            display_name=user.display_name,
+            adult_confirmed=user.adult_confirmed,
+            device_count=device_counts.get(user.id, 0),
+            created_at=user.created_at,
         )
-    return responses
+        for user in users
+    ]
 
 
 @router.get("/audit", response_model=list[AdminAuditResponse])

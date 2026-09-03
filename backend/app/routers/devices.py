@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
@@ -59,8 +59,16 @@ async def _device_detail_response(
     latest = await session.scalar(
         select(DeviceSession)
         .where(DeviceSession.device_id == device.id)
-        .order_by(DeviceSession.connected_at.desc())
+        .order_by(DeviceSession.connected_at.desc(), DeviceSession.id.desc())
     )
+    return _device_detail_from_session(device, latest, offline_after_seconds)
+
+
+def _device_detail_from_session(
+    device: Device,
+    latest: DeviceSession | None,
+    offline_after_seconds: int,
+) -> DeviceDetailResponse:
     online = False
     if latest is not None and latest.status == "online":
         heartbeat = latest.heartbeat_at
@@ -281,9 +289,34 @@ async def list_devices(
     session: AsyncSession = Depends(get_session),
 ) -> list[DeviceDetailResponse]:
     devices = list(await session.scalars(select(Device).where(Device.owner_user_id == user.id)))
+    if not devices:
+        return []
+    ranked_sessions = (
+        select(
+            DeviceSession.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=DeviceSession.device_id,
+                order_by=(DeviceSession.connected_at.desc(), DeviceSession.id.desc()),
+            )
+            .label("session_rank"),
+        )
+        .where(DeviceSession.device_id.in_([device.id for device in devices]))
+        .subquery()
+    )
+    latest_sessions = list(
+        await session.scalars(
+            select(DeviceSession)
+            .join(ranked_sessions, DeviceSession.id == ranked_sessions.c.id)
+            .where(ranked_sessions.c.session_rank == 1)
+        )
+    )
+    sessions_by_device = {item.device_id: item for item in latest_sessions}
     return [
-        await _device_detail_response(
-            session, device, request.app.state.settings.device_offline_after_seconds
+        _device_detail_from_session(
+            device,
+            sessions_by_device.get(device.id),
+            request.app.state.settings.device_offline_after_seconds,
         )
         for device in devices
     ]

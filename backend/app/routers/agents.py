@@ -31,10 +31,19 @@ async def owned_agent(session: AsyncSession, user: User, agent_id: str) -> Agent
     return agent
 
 
-async def _response(session: AsyncSession, agent: Agent) -> AgentResponse:
-    device_count = await session.scalar(
-        select(func.count()).select_from(Device).where(Device.active_agent_id == agent.id)
-    )
+async def _response(
+    session: AsyncSession,
+    agent: Agent,
+    *,
+    device_count: int | None = None,
+) -> AgentResponse:
+    if device_count is None:
+        device_count = int(
+            await session.scalar(
+                select(func.count()).select_from(Device).where(Device.active_agent_id == agent.id)
+            )
+            or 0
+        )
     return AgentResponse(
         id=agent.id,
         usage_profile_id=agent.usage_profile_id,
@@ -48,7 +57,7 @@ async def _response(session: AsyncSession, agent: Agent) -> AgentResponse:
         llm_temperature=agent.llm_temperature,
         tts_speech_rate=agent.tts_speech_rate,
         config_version=agent.config_version,
-        device_count=int(device_count or 0),
+        device_count=device_count,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -81,7 +90,22 @@ async def list_agents(
             select(Agent).where(Agent.owner_user_id == user.id).order_by(Agent.created_at)
         )
     )
-    return [await _response(session, agent) for agent in agents]
+    if not agents:
+        return []
+    device_counts = {
+        agent_id: int(device_count)
+        for agent_id, device_count in (
+            await session.execute(
+                select(Device.active_agent_id, func.count())
+                .where(Device.active_agent_id.in_([agent.id for agent in agents]))
+                .group_by(Device.active_agent_id)
+            )
+        ).all()
+    }
+    return [
+        await _response(session, agent, device_count=device_counts.get(agent.id, 0))
+        for agent in agents
+    ]
 
 
 @router.post("", response_model=AgentResponse)

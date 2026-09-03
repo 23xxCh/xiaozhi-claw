@@ -25,6 +25,8 @@ async def list_conversations(
             .limit(100)
         )
     )
+    if not conversations:
+        return []
     consented_agents = set(
         await session.scalars(
             select(Agent.id).where(
@@ -40,6 +42,7 @@ async def list_conversations(
                 select(EncryptedSessionSummary).where(
                     EncryptedSessionSummary.user_id == user.id,
                     EncryptedSessionSummary.agent_id.in_(consented_agents),
+                    EncryptedSessionSummary.session_id.in_([item.id for item in conversations]),
                 )
             )
         )

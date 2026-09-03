@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -295,6 +296,10 @@ class Entitlement(Base):
 
 class UsageEvent(Base):
     __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("ix_usage_events_user_kind_created_at", "user_id", "kind", "created_at"),
+        Index("ix_usage_events_kind_created_at", "kind", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
@@ -366,6 +371,7 @@ class AgentMemory(Base):
 
 class ConversationSession(Base):
     __tablename__ = "conversation_sessions"
+    __table_args__ = (Index("ix_conversation_sessions_user_started_at", "user_id", "started_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
@@ -395,6 +401,7 @@ class EncryptedSessionSummary(Base):
 
 class ProviderUsage(Base):
     __tablename__ = "provider_usage"
+    __table_args__ = (Index("ix_provider_usage_created_at_operation", "created_at", "operation"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     session_id: Mapped[str | None] = mapped_column(
@@ -415,6 +422,10 @@ class ProviderUsage(Base):
 
 class DeviceSession(Base):
     __tablename__ = "device_sessions"
+    __table_args__ = (
+        Index("ix_device_sessions_device_connected_at", "device_id", "connected_at"),
+        Index("ix_device_sessions_status_heartbeat_at", "status", "heartbeat_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
@@ -429,6 +440,7 @@ class DeviceSession(Base):
 
 class DeviceCommand(Base):
     __tablename__ = "device_commands"
+    __table_args__ = (Index("ix_device_commands_status_created_at", "status", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)

@@ -8,6 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260813_05"
 CONTRACT_REVISION = "20260829_07"
+CURRENT_HEAD = "20260903_08"
 
 
 def _alembic(database: Path, *args: str) -> None:
@@ -83,7 +84,7 @@ def test_device_config_contract_migration_backfills_and_round_trips_sqlite(
     _alembic(database, "upgrade", "head")
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            CONTRACT_REVISION,
+            CURRENT_HEAD,
         )
         assert {
             "hardware_profile_id",
@@ -128,7 +129,7 @@ def test_device_config_contract_migration_backfills_and_round_trips_sqlite(
     _alembic(database, "upgrade", "head")
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            CONTRACT_REVISION,
+            CURRENT_HEAD,
         )
 
 
@@ -156,7 +157,7 @@ def test_device_config_contract_migration_recovers_from_partial_mysql_style_ddl(
     _alembic(database, "upgrade", "head")
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            CONTRACT_REVISION,
+            CURRENT_HEAD,
         )
         assert {"schema_version", "desired_values", "applied_values"} <= _columns(
             connection, "device_configurations"
