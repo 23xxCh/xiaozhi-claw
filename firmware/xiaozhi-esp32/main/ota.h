@@ -29,11 +29,13 @@ public:
     const std::string& GetFirmwareUrl() const { return firmware_url_; }
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
+    const std::string& GetActivationClaimUrl() const { return activation_claim_url_; }
     std::string GetCheckVersionUrl();
 
 private:
     std::string activation_message_;
     std::string activation_code_;
+    std::string activation_claim_url_;
     bool has_new_version_ = false;
     bool has_mqtt_config_ = false;
     bool has_websocket_config_ = false;

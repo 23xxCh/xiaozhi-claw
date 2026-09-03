@@ -92,6 +92,7 @@ async def xiaozhi_bootstrap(
                 "activation": {
                     "code": code,
                     "message": "请在 Hensun AI 网页输入 6 位绑定码",
+                    "claim_url": f"{settings.web_app_url.rstrip('/')}/claim#code={code}",
                     "timeout_ms": settings.claim_ttl_seconds * 1000,
                 },
                 "server_time": {

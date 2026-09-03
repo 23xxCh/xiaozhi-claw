@@ -39,6 +39,10 @@ public:
     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
     virtual void SetEmotion(const char* emotion);
+    virtual void ShowActivationCode(const char* code, const char* claim_url) {
+        (void)code;
+        (void)claim_url;
+    }
     // Called only after a reply's final audio frame has actually left the
     // playback queue. Displays that do not provide a reply animation can keep
     // the existing idle transition by ignoring this optional lifecycle hook.

@@ -13,6 +13,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <src/libs/qrcode/lv_qrcode.h>
 
 #include <cstring>
 #include <vector>
@@ -21,7 +22,7 @@
 
 namespace {
 
-constexpr int kHensunNoCamMicInputGain = 1;
+constexpr int kHensunNoCamMicInputGain = 4;
 
 class HensunNoCamAudioCodecSimplex final : public NoAudioCodecSimplex {
 public:
@@ -43,8 +44,8 @@ protected:
         int32_t peak = 0;
         for (int index = 0; index < samples; ++index) {
             // The board's 24-bit I2S microphone is left-aligned in its 32-bit
-            // slot. The generic >>12 path amplifies it by 16x and clips the
-            // samples that MultiNet needs for command recognition.
+            // slot. Apply a bounded 4x board-local gain so quiet speech reaches
+            // MultiNet without returning to the clipping-prone generic 16x path.
             int32_t value = (bit32_buffer[index] >> 16) * kHensunNoCamMicInputGain;
             if (value > INT16_MAX) {
                 value = INT16_MAX;
@@ -79,7 +80,11 @@ struct EmotionRoute {
 constexpr EmotionRoute kEmotionRoutes[] = {
     {"neutral", "neutral"},
     {"robot_2", "neutral"},
-    {"idle", "neutral"},
+    {"idle", "sleepy"},
+    {"link", "neutral"},
+    {"listening", "neutral"},
+    {"speaking", "neutral"},
+    {"relaxed", "neutral"},
     {"happy", "silly"},
     {"laughing", "silly"},
     {"silly", "silly"},
@@ -88,8 +93,13 @@ constexpr EmotionRoute kEmotionRoutes[] = {
     {"affectionate", "caring"},
     {"curious", "confused"},
     {"confused", "confused"},
+    {"thinking", "confused"},
     {"surprised", "surprised"},
+    {"wake", "surprised"},
     {"concerned", "sad"},
+    {"worried", "sad"},
+    {"apology", "sad"},
+    {"safe_block", "sad"},
     {"apologetic", "sad"},
     {"sad", "sad"},
     {"crying", "sad"},
@@ -113,6 +123,16 @@ const char* StandardAssetForEmotion(const char* emotion) {
 
 class HensunNoCamDisplay final : public SpiLcdDisplay {
 private:
+    lv_obj_t* activation_overlay_ = nullptr;
+
+    void ClearActivationOverlay() {
+        DisplayLockGuard lock(this);
+        if (activation_overlay_ != nullptr && lv_obj_is_valid(activation_overlay_)) {
+            lv_obj_del(activation_overlay_);
+        }
+        activation_overlay_ = nullptr;
+    }
+
     void ApplyFullScreenOverlayStyle() {
         lv_obj_set_style_bg_opa(top_bar_, LV_OPA_TRANSP, 0);
         lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_TRANSP, 0);
@@ -141,7 +161,62 @@ public:
     }
 
     void SetEmotion(const char* emotion) override {
-        SpiLcdDisplay::SetEmotion(StandardAssetForEmotion(emotion));
+        ClearActivationOverlay();
+        const char* asset = StandardAssetForEmotion(emotion);
+        ESP_LOGI(TAG, "Display emotion route: requested=%s asset=%s",
+                 emotion == nullptr ? "" : emotion, asset);
+        SpiLcdDisplay::SetEmotion(asset);
+    }
+
+    void CompleteReplySettle() override {
+        SetEmotion("idle");
+    }
+
+    void ShowActivationCode(const char* code, const char* claim_url) override {
+        if (code == nullptr || std::strlen(code) != 6) {
+            return;
+        }
+        std::string qr_url = claim_url == nullptr ? "" : claim_url;
+        if (qr_url.empty()) {
+            qr_url = "https://staging.hensun-desk.top/claim#code=";
+            qr_url += code;
+        }
+
+        DisplayLockGuard lock(this);
+        if (activation_overlay_ != nullptr && lv_obj_is_valid(activation_overlay_)) {
+            lv_obj_del(activation_overlay_);
+        }
+        activation_overlay_ = lv_obj_create(lv_screen_active());
+        lv_obj_remove_style_all(activation_overlay_);
+        lv_obj_set_size(activation_overlay_, LV_HOR_RES, LV_VER_RES);
+        lv_obj_set_style_bg_color(activation_overlay_, lv_color_hex(0x101318), 0);
+        lv_obj_set_style_bg_opa(activation_overlay_, LV_OPA_COVER, 0);
+        lv_obj_set_scrollbar_mode(activation_overlay_, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_move_foreground(activation_overlay_);
+
+        lv_obj_t* qr = lv_qrcode_create(activation_overlay_);
+        lv_qrcode_set_size(qr, 172);
+        lv_qrcode_set_dark_color(qr, lv_color_black());
+        lv_qrcode_set_light_color(qr, lv_color_white());
+        lv_qrcode_set_quiet_zone(qr, true);
+        lv_qrcode_set_data(qr, qr_url.c_str());
+        lv_obj_align(qr, LV_ALIGN_LEFT_MID, 10, 0);
+
+        lv_obj_t* title = lv_label_create(activation_overlay_);
+        lv_label_set_text(title, "扫码绑定");
+        lv_obj_set_style_text_color(title, lv_color_white(), 0);
+        lv_obj_align(title, LV_ALIGN_TOP_RIGHT, -19, 49);
+
+        lv_obj_t* code_label = lv_label_create(activation_overlay_);
+        lv_label_set_text(code_label, code);
+        lv_obj_set_style_text_color(code_label, lv_color_hex(0x31DDE7), 0);
+        lv_obj_set_style_text_letter_space(code_label, 2, 0);
+        lv_obj_align(code_label, LV_ALIGN_RIGHT_MID, -15, 0);
+
+        lv_obj_t* hint = lv_label_create(activation_overlay_);
+        lv_label_set_text(hint, "备用码");
+        lv_obj_set_style_text_color(hint, lv_color_hex(0xB7BEC9), 0);
+        lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, -35, -53);
     }
 };
 

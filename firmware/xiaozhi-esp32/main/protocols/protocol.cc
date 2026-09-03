@@ -91,9 +91,12 @@ void Protocol::SendStopListening() {
     SendText(message);
 }
 
-void Protocol::SendTtsState(const std::string& state, const std::string& reply_id,
+bool Protocol::SendTtsState(const std::string& state, const std::string& reply_id,
                             const std::string& turn_id) {
     cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return false;
+    }
     cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
     cJSON_AddStringToObject(root, "type", "tts");
     cJSON_AddStringToObject(root, "state", state.c_str());
@@ -102,11 +105,13 @@ void Protocol::SendTtsState(const std::string& state, const std::string& reply_i
         cJSON_AddStringToObject(root, "turn_id", turn_id.c_str());
     }
     char* json = cJSON_PrintUnformatted(root);
+    bool sent = false;
     if (json != nullptr) {
-        SendText(json);
+        sent = SendText(json);
         cJSON_free(json);
     }
     cJSON_Delete(root);
+    return sent;
 }
 
 void Protocol::SendDeviceStage(const std::string& stage, const std::string& turn_id,

@@ -1,5 +1,6 @@
 import csv
 import json
+import re
 import struct
 import unittest
 from io import StringIO
@@ -155,6 +156,11 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
             source,
         )
         self.assertIn("bit32_buffer[index] >> 16", source)
+        self.assertIn("constexpr int kHensunNoCamMicInputGain = 4", source)
+        self.assertIn(
+            "(bit32_buffer[index] >> 16) * kHensunNoCamMicInputGain",
+            source,
+        )
         self.assertNotIn("bit32_buffer[index] >> 12", source)
         self.assertIn("Mic input level: avg_abs=", source)
         self.assertIn("static HensunNoCamAudioCodecSimplex audio_codec", source)
@@ -202,14 +208,23 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         self.assertIn("class HensunNoCamDisplay", source)
         expected_routes = {
             '"neutral", "neutral"',
+            '"link", "neutral"',
+            '"listening", "neutral"',
+            '"speaking", "neutral"',
+            '"relaxed", "neutral"',
             '"happy", "silly"',
             '"laughing", "silly"',
             '"caring", "caring"',
             '"affectionate", "caring"',
             '"curious", "confused"',
+            '"thinking", "confused"',
             '"surprised", "surprised"',
+            '"wake", "surprised"',
             '"confused", "confused"',
             '"concerned", "sad"',
+            '"worried", "sad"',
+            '"apology", "sad"',
+            '"safe_block", "sad"',
             '"apologetic", "sad"',
             '"shy", "shy"',
             '"sad", "sad"',
@@ -217,6 +232,56 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         for route in expected_routes:
             self.assertIn(route, source)
         self.assertIn('return "neutral";', source)
+
+    def test_standby_uses_sleepy_face_after_reply_settle(self):
+        source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
+        application = self.read_required(ROOT / "main/application.cc")
+
+        self.assertIn('{"idle", "sleepy"}', source)
+        self.assertIn("void CompleteReplySettle() override", source)
+        self.assertRegex(
+            source,
+            r"void CompleteReplySettle\(\) override \{\s*SetEmotion\(\"idle\"\);\s*\}",
+        )
+        self.assertRegex(
+            application,
+            r"CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1\s+"
+            r"display->SetEmotion\(\"idle\"\);\s+#else\s+"
+            r"display->SetEmotion\(\"neutral\"\);",
+        )
+
+    def test_standby_face_is_refreshed_even_when_state_is_already_idle(self):
+        application = self.read_required(ROOT / "main/application.cc")
+        abort_body = re.search(
+            r"void Application::AbortDialogueToStandby\(.*?\) \{(.*?)\n\}",
+            application,
+            re.DOTALL,
+        )
+
+        self.assertIsNotNone(abort_body)
+        self.assertRegex(
+            abort_body.group(1),
+            r"SetDeviceState\(kDeviceStateIdle\);\s*"
+            r"#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1\s*"
+            r"display->SetEmotion\(\"idle\"\);",
+        )
+
+    def test_completed_turn_emotion_cannot_overwrite_standby_face(self):
+        application = self.read_required(ROOT / "main/application.cc")
+
+        self.assertRegex(
+            application,
+            r"const bool stale_turn = !turn_id\.empty\(\) &&\s*"
+            r"turn_id != active_turn_id_;",
+        )
+        self.assertRegex(
+            application,
+            r"const bool standby_without_reply =\s*"
+            r"GetDeviceState\(\) == kDeviceStateIdle &&\s*"
+            r"!reply_pending_ && !tts_playback_prepared_\.load\(\) &&\s*"
+            r"active_tts_reply_id_\.empty\(\);",
+        )
+        self.assertIn("if (stale_turn || standby_without_reply)", application)
 
     def test_keeps_status_text_but_removes_ui_bar_backgrounds(self):
         source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
@@ -240,6 +305,39 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         )
         self.assertNotIn(
             "lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)", source
+        )
+
+    def test_activation_screen_shows_qr_fragment_and_six_digit_fallback(self):
+        source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
+        config = self.read_required(BOARD / "config.json")
+        ota_header = self.read_required(ROOT / "main/ota.h")
+        ota_source = self.read_required(ROOT / "main/ota.cc")
+        app_source = self.read_required(ROOT / "main/application.cc")
+
+        self.assertIn('"CONFIG_LV_USE_QRCODE=y"', config)
+        self.assertIn("void ShowActivationCode", source)
+        self.assertIn("lv_qrcode_create", source)
+        self.assertIn("/claim#code=", source)
+        self.assertIn("GetActivationClaimUrl", ota_header)
+        self.assertIn('cJSON_GetObjectItem(activation, "claim_url")', ota_source)
+        self.assertIn("display->ShowActivationCode", app_source)
+        self.assertIn('SetEmotion("surprised")', app_source)
+
+    def test_lvgl_claim_qr_uses_only_one_qrcodegen_implementation(self):
+        cmake = (
+            ROOT
+            / "managed_components"
+            / "espressif2022__esp_emote_gfx"
+            / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1 AND CONFIG_LV_USE_QRCODE",
+            cmake,
+        )
+        self.assertIn(
+            'EXCLUDE REGEX ".*/lib/qrcode/qrcodegen\\\\.c$"',
+            cmake,
         )
 
     def test_is_registered_as_an_esp32s3_board(self):

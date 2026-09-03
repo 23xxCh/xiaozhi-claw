@@ -158,12 +158,18 @@ class HensunDialogueFaceTests(unittest.TestCase):
         self.assertIn("target_pose_", header)
         self.assertIn("render_pose_", header)
         self.assertIn("kPoseStepIntervalUs", header)
+        self.assertIn("EraseSourceMouthPixels", header)
+        self.assertIn("kSourceMouthLeft = 140", header)
+        self.assertIn("kSourceMouthTop = 154", header)
+        self.assertIn("kSourceMouthRight = 180", header)
+        self.assertIn("kSourceMouthBottom = 176", header)
+        self.assertIn("EraseSourceMouthPixels", source)
         self.assertIn("y_start == 0", source)
         self.assertNotIn("ClearMouthRegion", source)
         self.assertNotIn("std::fill", source)
         self.assertNotIn("DrawFilledEllipse", source)
 
-    def test_pcm_mouth_overlay_never_uses_shy_or_sad_gifs_with_baked_mouths(self):
+    def test_pcm_mouth_overlay_uses_normal_idle_base_instead_of_baked_talk_assets(self):
         display = DISPLAY_SOURCE.read_text(encoding="utf-8")
         conversation_animation = re.search(
             r"const char\* HensunEmoteLabDisplay::ConversationAnimation\(\) const \{"
@@ -173,9 +179,10 @@ class HensunDialogueFaceTests(unittest.TestCase):
         )
         self.assertIsNotNone(conversation_animation)
         body = conversation_animation.group(1)
-        self.assertNotIn('return "shy"', body)
-        self.assertNotIn('return "sad"', body)
-        self.assertGreaterEqual(body.count('return "talk_base"'), 3)
+        self.assertNotIn('return "talk_base"', body)
+        self.assertNotIn('return "talk_happy"', body)
+        self.assertNotIn('return "talk_caring"', body)
+        self.assertGreaterEqual(body.count('return "idle"'), 1)
 
 
 if __name__ == "__main__":

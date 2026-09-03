@@ -66,6 +66,19 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("api.hensun.invalid", selfhosted)
         self.assertNotIn("api.tenclass.net", selfhosted)
 
+    def test_boot_long_press_enters_wifi_config_and_double_click_keeps_showcase(self):
+        button_block = self.source.split("void InitializeButtons()", 1)[1].split(
+            "void InitializeCamera()", 1
+        )[0]
+        long_press = button_block.split("boot_button_.OnLongPress", 1)[1].split(
+            "boot_button_.OnDoubleClick", 1
+        )[0]
+        double_click = button_block.split("boot_button_.OnDoubleClick", 1)[1]
+
+        self.assertIn("EnterWifiConfigMode();", long_press)
+        self.assertNotIn("StartShowcase", long_press)
+        self.assertIn("display_->StartShowcase();", double_click)
+
     def test_audio_channel_reuses_a_valid_token_before_refreshing_bootstrap(self):
         method = re.search(
             r"bool Application::OpenAudioChannelWithConfigRefresh\(\) \{(.*?)\n\}",
@@ -109,6 +122,35 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             body.index("xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);"),
         )
 
+    def test_connecting_audio_is_retained_until_listen_start(self):
+        audio_header = (ROOT / "main/audio/audio_service.h").read_text(
+            encoding="utf-8"
+        )
+        send_event = self.application_source.split(
+            "if (bits & MAIN_EVENT_SEND_AUDIO)", 1
+        )[1].split("if (bits & MAIN_EVENT_WAKE_WORD_DETECTED)", 1)[0]
+
+        self.assertIn("5000 / OPUS_FRAME_DURATION_MS", audio_header)
+        self.assertIn("state != kDeviceStateConnecting", send_event)
+        self.assertIn("listening_capture_ready_", send_event)
+        self.assertLess(
+            send_event.index("IsAudioChannelOpened()"),
+            send_event.index("PopPacketFromSendQueue()"),
+        )
+
+    def test_connecting_audio_overflow_discards_the_entire_turn(self):
+        audio_header = (ROOT / "main/audio/audio_service.h").read_text(
+            encoding="utf-8"
+        )
+        audio_source = (ROOT / "main/audio/audio_service.cc").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ConsumeSendQueueOverflow", audio_header)
+        self.assertIn("send_queue_overflowed_.store(true", audio_source)
+        self.assertIn("wake-buffer-overflow", self.application_source)
+        self.assertIn("DiscardSendQueue", self.application_source)
+
     def test_device_serial_logs_do_not_emit_conversation_transcripts(self):
         self.assertNotIn('ESP_LOGI(TAG, "<< %s", text->valuestring);', self.application_source)
         self.assertNotIn('ESP_LOGI(TAG, ">> %s", text->valuestring);', self.application_source)
@@ -124,7 +166,10 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIsNotNone(method)
         body = method.group(1)
-        self.assertIn("if (!protocol_->IsAudioChannelOpened())", body)
+        self.assertIn(
+            "control_channel_connecting || !protocol_->IsAudioChannelOpened()",
+            body,
+        )
         self.assertIn("audio_service_.EnableVoiceProcessing(true)", body)
         self.assertLess(
             body.index("audio_service_.EnableVoiceProcessing(true)"),
@@ -212,6 +257,22 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("GetDecodeDropCount", self.application_source)
         self.assertIn('cJSON_AddStringToObject(root, "reply_id"', protocol_source)
 
+    def test_drained_send_failure_is_not_reported_as_success(self):
+        protocol_header = (ROOT / "main/protocols/protocol.h").read_text(
+            encoding="utf-8"
+        )
+        protocol_source = (ROOT / "main/protocols/protocol.cc").read_text(
+            encoding="utf-8"
+        )
+        finish = self.application_source.split(
+            "void Application::FinishTtsPlayback", 1
+        )[1].split("void Application::RecoverFailedTurnToStandby", 1)[0]
+
+        self.assertIn("virtual bool SendTtsState", protocol_header)
+        self.assertIn("return sent;", protocol_source)
+        self.assertIn("tts-drained-send-failed", finish)
+        self.assertIn('SendTtsState("drained"', finish)
+
     def test_selfhosted_websocket_uses_real_device_heartbeat(self):
         protocol_header = (ROOT / "main/protocols/protocol.h").read_text(
             encoding="utf-8"
@@ -241,7 +302,24 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             r"kHeartbeatMissLimit\s*=\s*3",
         )
         self.assertIn("protocol_->SendHeartbeat", self.application_source)
-        self.assertIn('RecoverFailedTurnToStandby("heartbeat-timeout", true)', self.application_source)
+        self.assertIn('AbortDialogueToStandby("heartbeat-timeout", true)', self.application_source)
+
+    def test_hensun_keeps_a_control_channel_ready_while_idle(self):
+        activation = self.application_source.split(
+            "void Application::HandleActivationDoneEvent()", 1
+        )[1].split("void Application::ActivationTask()", 1)[0]
+        continue_wake = self.application_source.split(
+            "void Application::ContinueWakeWordInvoke", 1
+        )[1].split("void Application::StartListeningAudio", 1)[0]
+
+        self.assertIn("EnsureControlChannelReady();", activation)
+        self.assertIn("control_channel_task_handle_", continue_wake)
+        self.assertIn("void Application::EnsureControlChannelReady()", self.application_source)
+        self.assertIn('"control_channel"', self.application_source)
+        self.assertRegex(
+            self.application_source,
+            r"kStandbyReconnectIntervalTicks\s*=\s*15",
+        )
 
     def test_asr_noise_resume_reopens_listening_without_fake_tts(self):
         self.assertIn('strcmp(type->valuestring, "listen") == 0', self.application_source)
@@ -337,6 +415,20 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIn(
             "audio_service_.EnableWakeWordDetection(false)", pending_branch.group(1)
+        )
+
+        settle_branch = re.search(
+            r"if \(reply_settle_active_\) \{(.*?)\}\s*if \(reply_pending_\)",
+            idle_state.group(1),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(settle_branch)
+        self.assertNotIn("SetStatus", settle_branch.group(1))
+        self.assertIn(
+            "audio_service_.EnableVoiceProcessing(false)", settle_branch.group(1)
+        )
+        self.assertIn(
+            "audio_service_.EnableWakeWordDetection(false)", settle_branch.group(1)
         )
 
         playback_started = re.search(
@@ -467,7 +559,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
 
     def test_failed_cloud_turn_recovers_standby_and_wake_detection(self):
-        self.assertIn("RecoverFailedTurnToStandby", self.application_header)
+        self.assertIn("AbortDialogueToStandby", self.application_header)
         self.assertRegex(
             self.application_source,
             r"kReplyPendingTimeoutTicks\s*=\s*12",
@@ -478,7 +570,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )
 
         recovery = re.search(
-            r"void Application::RecoverFailedTurnToStandby\("
+            r"void Application::AbortDialogueToStandby\("
             r"const char\* reason, bool close_audio_channel\) \{(.*?)\n\}",
             self.application_source,
             re.DOTALL,
@@ -487,33 +579,95 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         body = recovery.group(1)
         self.assertIn("reply_pending_ = false", body)
         self.assertIn("audio_service_.ResetDecoder()", body)
+        self.assertIn("audio_service_.DiscardSendQueue()", body)
+        self.assertIn("CancelTtsFirstPcmWatchdog()", body)
         self.assertIn("SetDeviceState(kDeviceStateIdle)", body)
         self.assertIn("display->SetStatus(Lang::Strings::STANDBY)", body)
         self.assertIn("audio_service_.EnableVoiceProcessing(false)", body)
         self.assertIn("audio_service_.EnableWakeWordDetection(true)", body)
 
-        # A socket closure after real PCM must keep the bounded reply settle
-        # instead of jumping straight from the speaking face to sleep.
-        self.assertIn("const bool had_audio = tts_audio_started_", body)
-        self.assertIn("if (had_audio)", body)
-        self.assertIn("BeginReplySettle(false)", body)
-        self.assertLess(
-            body.index("BeginReplySettle(false)"),
-            body.index("SetDeviceState(kDeviceStateIdle)"),
-        )
-
         self.assertIsNotNone(
             re.search(
                 r'else if \(strcmp\(type->valuestring, "error"\) == 0\).*?'
-                r'RecoverFailedTurnToStandby',
+                r'AbortDialogueToStandby',
                 self.application_source,
                 re.DOTALL,
             )
         )
         self.assertIn(
-            'RecoverFailedTurnToStandby("audio-channel-closed", false)',
+            'AbortDialogueToStandby("audio-channel-closed", false)',
             self.application_source,
         )
+
+    def test_tts_ready_send_and_first_pcm_watchdog_event_trace(self):
+        self.assertIn("MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT", self.application_source)
+        start = self.application_source.split(
+            'if (strcmp(state->valuestring, "start") == 0)', 1
+        )[1].split('} else if (strcmp(state->valuestring, "stop") == 0)', 1)[0]
+        playback_started = self.application_source.split(
+            "if (bits & MAIN_EVENT_PLAYBACK_STARTED)", 1
+        )[1].split("if (bits & MAIN_EVENT_POST_PLAYBACK_GUARD)", 1)[0]
+        timeout = self.application_source.split(
+            "if (bits & MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT)", 1
+        )[1].split("if (bits & MAIN_EVENT_TOGGLE_CHAT)", 1)[0]
+        stop = self.application_source.split(
+            '} else if (strcmp(state->valuestring, "stop") == 0)', 1
+        )[1].split('} else if (strcmp(state->valuestring, "sentence_start") == 0)', 1)[0]
+
+        self.assertRegex(
+            self.application_source,
+            r"kTtsFirstPcmTimeoutUs\s*=\s*6\s*\*\s*1000\s*\*\s*1000",
+        )
+        self.assertIn("MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT", self.application_header)
+        all_events = self.application_source.split(
+            "const EventBits_t ALL_EVENTS", 1
+        )[1].split("while (true)", 1)[0]
+        self.assertIn("MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT", all_events)
+        self.assertIn("tts_first_pcm_timer_handle_", self.application_header)
+        self.assertRegex(start, r'SendTtsState\(\s*"ready"')
+        self.assertIn('AbortDialogueToStandby("tts-ready-send-failed", true)', start)
+        self.assertIn("StartTtsFirstPcmWatchdog()", start)
+        self.assertLess(
+            start.index("SendTtsState("),
+            start.index("StartTtsFirstPcmWatchdog()"),
+        )
+        self.assertIn("CancelTtsFirstPcmWatchdog()", playback_started)
+        self.assertIn("CancelTtsFirstPcmWatchdog()", stop)
+        self.assertIn('AbortDialogueToStandby("tts-first-pcm-timeout", true)', timeout)
+        self.assertIn("tts_playback_prepared_.load()", timeout)
+        self.assertIn("!tts_audio_started_", timeout)
+
+    def test_boot_single_click_aborts_all_dialogue_states(self):
+        toggle = re.search(
+            r"void Application::HandleToggleChatEvent\(\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(toggle)
+        body = toggle.group(1)
+        for marker in (
+            "kDeviceStateConnecting",
+            "kDeviceStateListening",
+            "kDeviceStateSpeaking",
+            "reply_pending_",
+            "tts_playback_prepared_",
+            "active_turn_id_",
+            "active_tts_reply_id_",
+            "reply_settle_active_",
+        ):
+            self.assertIn(marker, body)
+        self.assertIn('AbortDialogueToStandby("boot-stop", true)', body)
+
+    def test_all_failed_turn_paths_use_one_dialogue_abort_owner(self):
+        self.assertNotIn("RecoverFailedTurnToStandby", self.application_header)
+        self.assertNotIn("RecoverFailedTurnToStandby", self.application_source)
+        abort_speaking = re.search(
+            r"void Application::AbortSpeaking\(AbortReason reason\) \{(.*?)\n\}",
+            self.application_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(abort_speaking)
+        self.assertIn("AbortDialogueToStandby", abort_speaking.group(1))
 
     def test_selfhosted_emote_state_is_not_overwritten_by_neutral(self):
         display_source = (BOARD / "hensun_emote_lab_display.cc").read_text(

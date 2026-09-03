@@ -475,6 +475,7 @@ void AudioService::OpusCodecTask() {
                              * audio is useless to the server, so drop the oldest packet. */
                             if (audio_send_queue_.size() >= MAX_SEND_PACKETS_IN_QUEUE) {
                                 audio_send_queue_.pop_front();
+                                send_queue_overflowed_.store(true, std::memory_order_release);
                             }
                             audio_send_queue_.push_back(std::move(packet));
                         }
@@ -614,6 +615,20 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     audio_send_queue_.pop_front();
     audio_queue_cv_.notify_all();
     return packet;
+}
+
+void AudioService::DiscardSendQueue() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    audio_send_queue_.clear();
+    audio_queue_cv_.notify_all();
+}
+
+bool AudioService::ConsumeSendQueueOverflow() {
+    return send_queue_overflowed_.exchange(false, std::memory_order_acq_rel);
+}
+
+void AudioService::ResetSendQueueOverflow() {
+    send_queue_overflowed_.store(false, std::memory_order_release);
 }
 
 void AudioService::EncodeWakeWord() {

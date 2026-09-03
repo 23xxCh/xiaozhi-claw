@@ -169,8 +169,13 @@ class HensunEmoteLabTests(unittest.TestCase):
         self.assertIn("new HensunEmoteLabDisplay", board)
         self.assertRegex(
             board,
-            r"OnLongPress\(\[this\]\(\) \{\s*#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE\s*"
-            r"display_->StartShowcase\(\);",
+            r"OnLongPress\(\[this\]\(\) \{\s*"
+            r'ESP_LOGI\(TAG, "BOOT long press: entering Wi-Fi configuration"\);\s*'
+            r"EnterWifiConfigMode\(\);",
+        )
+        self.assertRegex(
+            board,
+            r"OnDoubleClick\(\[this\]\(\) \{\s*display_->StartShowcase\(\);",
         )
         self.assertIn("BOARD_TYPE_HENSUN_CAM_PILOT_V1", kconfig)
         self.assertIn("config USE_EMOTE_MESSAGE_STYLE", kconfig)

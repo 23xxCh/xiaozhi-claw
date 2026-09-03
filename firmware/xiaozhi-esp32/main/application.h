@@ -36,6 +36,7 @@
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
 #define MAIN_EVENT_POST_PLAYBACK_GUARD  (1 << 14)
 #define MAIN_EVENT_PLAYBACK_STARTED     (1 << 15)
+#define MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT (1 << 16)
 
 
 enum AecMode {
@@ -136,6 +137,7 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     esp_timer_handle_t post_playback_listen_timer_handle_ = nullptr;
+    esp_timer_handle_t tts_first_pcm_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
@@ -164,9 +166,12 @@ private:
     int clock_ticks_ = 0;
     int heartbeat_ticks_ = 0;
     int heartbeat_missed_ = 0;
+    int standby_reconnect_ticks_ = 0;
     uint32_t heartbeat_sequence_ = 0;
     uint32_t heartbeat_awaiting_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    TaskHandle_t control_channel_task_handle_ = nullptr;
+    std::string pending_connect_wake_word_;
 
 
     // Event handlers
@@ -185,8 +190,11 @@ private:
     void ConfigureWakeWordForListening();
     void BeginReplySettle(bool resume_listening);
     void CancelReplySettle();
+    void StartTtsFirstPcmWatchdog();
+    void CancelTtsFirstPcmWatchdog();
     void FinishTtsPlayback(std::string reply_id);
-    void RecoverFailedTurnToStandby(const char* reason, bool close_audio_channel);
+    void AbortDialogueToStandby(const char* reason, bool close_audio_channel);
+    void EnsureControlChannelReady();
 
     // Activation task (runs in background)
     void ActivationTask();

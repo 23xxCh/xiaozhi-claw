@@ -64,7 +64,7 @@ public:
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
-    virtual void SendTtsState(const std::string& state, const std::string& reply_id,
+    virtual bool SendTtsState(const std::string& state, const std::string& reply_id,
                               const std::string& turn_id = "");
     virtual void SendDeviceStage(const std::string& stage, const std::string& turn_id = "",
                                  const std::string& reply_id = "");

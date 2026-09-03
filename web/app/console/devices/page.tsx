@@ -99,11 +99,11 @@ export default function DevicesPage() {
       <div className="grid two" style={{ marginTop: 18 }}>
         <form className="card stack" onSubmit={claim}>
           <h2>绑定新设备</h2>
-          <p className="muted">设备联网后会显示一个 10 分钟有效的代码。Wi‑Fi 密码只保存在设备里。</p>
-          <div className="field"><label htmlFor="claim">6 位绑定码</label><input id="claim" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" value={claimCode} onChange={(event) => setClaimCode(event.target.value.replace(/\D/g, ""))} /></div>
+          <p className="muted">设备联网后会显示一个 10 分钟有效的绑定二维码。请优先用手机扫码；Wi‑Fi 密码只保存在设备里。</p>
+          <div className="field"><label htmlFor="claim">扫码失败时，输入 6 位备用码</label><input id="claim" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" value={claimCode} onChange={(event) => setClaimCode(event.target.value.replace(/\D/g, ""))} /></div>
           <button className="button" type="submit" disabled={submitting}>{submitting ? "正在绑定…" : "确认绑定"}</button>
         </form>
-        {devices.length === 0 ? <section className="card soft"><h2>还没有设备</h2><p className="muted">先完成设备配网，再输入屏幕上的绑定码。</p></section> : null}
+        {devices.length === 0 ? <section className="card soft"><h2>还没有设备</h2><p className="muted">先完成设备配网，再扫描屏幕上的二维码；备用码仅用于扫码失败。</p></section> : null}
         {devices.map((device) => {
           const profile = profiles.find((item) => item.id === device.active_profile_id);
           const configuration = configurations[device.id];

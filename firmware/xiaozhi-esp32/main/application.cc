@@ -28,8 +28,10 @@ constexpr int kWaitForSpeechTimeoutTicks = 10;
 constexpr int kMaximumSpeechDurationTicks = 20;
 constexpr int kReplyPendingTimeoutTicks = 12;
 constexpr int64_t kReplySettleDurationUs = 800 * 1000;
+constexpr int64_t kTtsFirstPcmTimeoutUs = 6 * 1000 * 1000;
 constexpr int kHeartbeatIntervalTicks = 15;
 constexpr int kHeartbeatMissLimit = 3;
+constexpr int kStandbyReconnectIntervalTicks = 15;
 }
 
 Application::Application() {
@@ -68,6 +70,18 @@ Application::Application() {
         .skip_unhandled_events = true,
     };
     esp_timer_create(&post_playback_listen_timer_args, &post_playback_listen_timer_handle_);
+
+    esp_timer_create_args_t tts_first_pcm_timer_args = {
+        .callback = [](void* arg) {
+            Application* app = static_cast<Application*>(arg);
+            xEventGroupSetBits(app->event_group_, MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT);
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "tts_first_pcm_watchdog",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_create(&tts_first_pcm_timer_args, &tts_first_pcm_timer_handle_);
 }
 
 Application::~Application() {
@@ -78,6 +92,10 @@ Application::~Application() {
     if (post_playback_listen_timer_handle_ != nullptr) {
         esp_timer_stop(post_playback_listen_timer_handle_);
         esp_timer_delete(post_playback_listen_timer_handle_);
+    }
+    if (tts_first_pcm_timer_handle_ != nullptr) {
+        esp_timer_stop(tts_first_pcm_timer_handle_);
+        esp_timer_delete(tts_first_pcm_timer_handle_);
     }
     vEventGroupDelete(event_group_);
 }
@@ -229,14 +247,14 @@ void Application::Run() {
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
         MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED |
-        MAIN_EVENT_POST_PLAYBACK_GUARD | MAIN_EVENT_PLAYBACK_STARTED;
+        MAIN_EVENT_POST_PLAYBACK_GUARD | MAIN_EVENT_PLAYBACK_STARTED |
+        MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
 
         if (bits & MAIN_EVENT_ERROR) {
-            reply_pending_ = false;
-            SetDeviceState(kDeviceStateIdle);
+            AbortDialogueToStandby("network-error", true);
             Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "cancel",
                   Lang::Sounds::OGG_EXCLAMATION);
         }
@@ -272,6 +290,7 @@ void Application::Run() {
         if (bits & MAIN_EVENT_PLAYBACK_STARTED) {
             if (tts_playback_prepared_.load() && !tts_audio_started_ &&
                 !active_tts_reply_id_.empty()) {
+                CancelTtsFirstPcmWatchdog();
                 tts_audio_started_ = true;
                 reply_pending_ = false;
                 SetDeviceState(kDeviceStateSpeaking);
@@ -281,6 +300,14 @@ void Application::Run() {
                         "speaker_pcm_started", active_turn_id_, active_tts_reply_id_);
                 }
 #endif
+            }
+        }
+
+        if (bits & MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT) {
+            if (tts_playback_prepared_.load() && !tts_audio_started_ &&
+                !active_tts_reply_id_.empty()) {
+                ESP_LOGE(TAG, "tts-first-pcm-timeout");
+                AbortDialogueToStandby("tts-first-pcm-timeout", true);
             }
         }
 
@@ -316,15 +343,25 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
-                    // Drop the remaining packets. Leaving them in the queue would
-                    // stall the Opus codec task (it waits for queue space), which in
-                    // turn deadlocks the whole audio input pipeline, as no new
-                    // MAIN_EVENT_SEND_AUDIO event would ever be triggered again.
-                    while (audio_service_.PopPacketFromSendQueue())
-                        ;
-                    break;
+            // While Bootstrap/WSS is connecting, keep the encoded utterance in
+            // order. StartListeningAudio() sends listen.start before it re-arms
+            // this event, so no audio can reach the server prematurely.
+            const auto state = GetDeviceState();
+            const bool upload_ready = protocol_ && protocol_->IsAudioChannelOpened() &&
+                                      listening_capture_ready_;
+            if (!upload_ready && state != kDeviceStateConnecting &&
+                state != kDeviceStateListening) {
+                audio_service_.DiscardSendQueue();
+            } else if (upload_ready) {
+                while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+                    if (!protocol_->SendAudio(std::move(packet))) {
+                        // Drop the remaining packets. Leaving them in the queue would
+                        // stall the Opus codec task (it waits for queue space), which in
+                        // turn deadlocks the whole audio input pipeline, as no new
+                        // MAIN_EVENT_SEND_AUDIO event would ever be triggered again.
+                        audio_service_.DiscardSendQueue();
+                        break;
+                    }
                 }
             }
         }
@@ -365,7 +402,7 @@ void Application::Run() {
                     if (heartbeat_missed_ >= kHeartbeatMissLimit) {
                         ESP_LOGW(TAG, "Device heartbeat timed out after %d missed replies",
                                  heartbeat_missed_);
-                        RecoverFailedTurnToStandby("heartbeat-timeout", true);
+                        AbortDialogueToStandby("heartbeat-timeout", true);
                     } else {
                         heartbeat_sequence_++;
                         if (heartbeat_sequence_ == 0) {
@@ -373,7 +410,7 @@ void Application::Run() {
                         }
                         heartbeat_awaiting_ = heartbeat_sequence_;
                         if (!protocol_->SendHeartbeat(heartbeat_sequence_)) {
-                            RecoverFailedTurnToStandby("heartbeat-send-failed", true);
+                            AbortDialogueToStandby("heartbeat-send-failed", true);
                         }
                     }
                 }
@@ -382,6 +419,19 @@ void Application::Run() {
                 heartbeat_missed_ = 0;
                 heartbeat_awaiting_ = 0;
             }
+
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+            if (GetDeviceState() == kDeviceStateIdle && protocol_ &&
+                !protocol_->IsAudioChannelOpened()) {
+                standby_reconnect_ticks_++;
+                if (standby_reconnect_ticks_ >= kStandbyReconnectIntervalTicks) {
+                    standby_reconnect_ticks_ = 0;
+                    EnsureControlChannelReady();
+                }
+            } else {
+                standby_reconnect_ticks_ = 0;
+            }
+#endif
 
             // Waiting for speech and recording an active utterance use separate
             // deadlines. A quiet follow-up window is cancelled without asking
@@ -405,7 +455,7 @@ void Application::Run() {
 
             if (GetDeviceState() == kDeviceStateIdle &&
                 reply_pending_ && clock_ticks_ >= kReplyPendingTimeoutTicks) {
-                RecoverFailedTurnToStandby("reply-timeout", true);
+                AbortDialogueToStandby("reply-timeout", true);
             }
 
             // Print debug info every 10 seconds
@@ -439,6 +489,11 @@ void Application::HandleNetworkConnectedEvent() {
             },
             "activation", 4096 * 2, this, 2, &activation_task_handle_);
     }
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+    else if (state == kDeviceStateIdle) {
+        EnsureControlChannelReady();
+    }
+#endif
 
     // Update the status bar immediately to show the network state
     auto display = Board::GetInstance().GetDisplay();
@@ -449,9 +504,10 @@ void Application::HandleNetworkDisconnectedEvent() {
     // Close current conversation when network disconnected
     auto state = GetDeviceState();
     if (state == kDeviceStateConnecting || state == kDeviceStateListening ||
-        state == kDeviceStateSpeaking) {
-        ESP_LOGI(TAG, "Closing audio channel due to network disconnection");
-        protocol_->CloseAudioChannel();
+        state == kDeviceStateSpeaking || reply_pending_ ||
+        tts_playback_prepared_.load() || !active_turn_id_.empty() ||
+        !active_tts_reply_id_.empty()) {
+        AbortDialogueToStandby("network-disconnected", false);
     }
 
     // Update the status bar immediately to show the network state
@@ -481,6 +537,9 @@ void Application::HandleActivationDoneEvent() {
         // Play the success sound to indicate the device is ready
         audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
     });
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+    EnsureControlChannelReady();
+#endif
 #if CONFIG_HENSUN_DIAGNOSTIC_AUTO_LISTEN_ON_BOOT
     xTaskCreate(
         [](void* arg) {
@@ -496,6 +555,44 @@ void Application::HandleActivationDoneEvent() {
         },
         "diag_auto_listen", 4096, this, 1, nullptr);
 #endif
+}
+
+void Application::EnsureControlChannelReady() {
+    if (!protocol_ || protocol_->IsAudioChannelOpened() ||
+        control_channel_task_handle_ != nullptr) {
+        return;
+    }
+
+    BaseType_t created = xTaskCreate(
+        [](void* arg) {
+            auto* app = static_cast<Application*>(arg);
+            // Idle preconnect only reuses the already provisioned WSS config.
+            // A token refresh can replace the Protocol object, so it remains a
+            // main-loop operation on the next real wake instead of racing this
+            // background task.
+            const bool opened = app->protocol_->OpenAudioChannel();
+            app->control_channel_task_handle_ = nullptr;
+            app->Schedule([app, opened]() {
+                if (!opened) {
+                    ESP_LOGW(TAG, "Idle control channel preconnect failed");
+                }
+                if (app->GetDeviceState() != kDeviceStateConnecting) {
+                    return;
+                }
+                if (!app->pending_connect_wake_word_.empty()) {
+                    const std::string wake_word = app->pending_connect_wake_word_;
+                    app->ContinueWakeWordInvoke(wake_word);
+                } else {
+                    app->ContinueOpenAudioChannel(kListeningModeManualStop);
+                }
+            });
+            vTaskDelete(nullptr);
+        },
+        "control_channel", 4096 * 2, this, 2, &control_channel_task_handle_);
+    if (created != pdPASS) {
+        control_channel_task_handle_ = nullptr;
+        ESP_LOGE(TAG, "Failed to create idle control channel task");
+    }
 }
 
 void Application::ActivationTask() {
@@ -709,7 +806,7 @@ void Application::InitializeProtocol() {
                 ESP_LOGI(TAG, "Ignoring audio channel close after standby");
                 return;
             }
-            RecoverFailedTurnToStandby("audio-channel-closed", false);
+            AbortDialogueToStandby("audio-channel-closed", false);
         });
     });
 
@@ -766,7 +863,13 @@ void Application::InitializeProtocol() {
                     audio_service_.ResetDecoder();
                     tts_playback_prepared_.store(true);
                     if (!active_tts_reply_id_.empty() && protocol_) {
-                        protocol_->SendTtsState("ready", active_tts_reply_id_, active_turn_id_);
+                        if (!protocol_->SendTtsState(
+                                "ready", active_tts_reply_id_, active_turn_id_)) {
+                            ESP_LOGE(TAG, "tts-ready-send-failed");
+                            AbortDialogueToStandby("tts-ready-send-failed", true);
+                            return;
+                        }
+                        StartTtsFirstPcmWatchdog();
                     } else {
                         // Official servers do not use the ready handshake. Keep
                         // their legacy start-immediately behavior.
@@ -791,6 +894,7 @@ void Application::InitializeProtocol() {
                             ESP_LOGW(TAG, "Ignoring stale TTS stop acknowledgement request");
                             return;
                         }
+                        CancelTtsFirstPcmWatchdog();
                         pending_tts_stop_reply_id_ = playback_reply_id;
                         if (audio_service_.IsPlaybackIdle()) {
                             FinishTtsPlayback(playback_reply_id);
@@ -800,6 +904,7 @@ void Application::InitializeProtocol() {
                     // Official xiaozhi servers do not provide reply_id; retain
                     // their immediate-stop behavior for protocol compatibility.
                     Schedule([this]() {
+                        CancelTtsFirstPcmWatchdog();
                         tts_playback_prepared_.store(false);
                         tts_audio_started_ = false;
                         if (GetDeviceState() == kDeviceStateSpeaking) {
@@ -860,8 +965,13 @@ void Application::InitializeProtocol() {
             if (cJSON_IsString(emotion)) {
                 Schedule([this, display, emotion_str = std::string(emotion->valuestring),
                           turn_id = cJSON_IsString(turn_id) ? std::string(turn_id->valuestring) : ""]() {
-                    if (!turn_id.empty() && !active_turn_id_.empty() &&
-                        turn_id != active_turn_id_) {
+                    const bool stale_turn = !turn_id.empty() &&
+                                            turn_id != active_turn_id_;
+                    const bool standby_without_reply =
+                        GetDeviceState() == kDeviceStateIdle &&
+                        !reply_pending_ && !tts_playback_prepared_.load() &&
+                        active_tts_reply_id_.empty();
+                    if (stale_turn || standby_without_reply) {
                         ESP_LOGW(TAG, "Ignoring stale LLM emotion for completed turn");
                         return;
                     }
@@ -872,7 +982,7 @@ void Application::InitializeProtocol() {
             auto code = cJSON_GetObjectItem(root, "code");
             std::string reason = cJSON_IsString(code) ? code->valuestring : "gateway-error";
             Schedule([this, reason]() {
-                RecoverFailedTurnToStandby(reason.c_str(), true);
+                AbortDialogueToStandby(reason.c_str(), true);
             });
         } else if (strcmp(type->valuestring, "listen") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
@@ -908,7 +1018,7 @@ void Application::InitializeProtocol() {
                     cJSON_IsString(reason) ? reason->valuestring : "asr-no-speech";
                 Schedule([this, reason_str]() {
                     const bool user_exit = reason_str == "user-exit";
-                    RecoverFailedTurnToStandby(
+                    AbortDialogueToStandby(
                         user_exit ? "user-exit" : "asr-no-speech", true);
                 });
             }
@@ -1068,6 +1178,9 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
     Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
+    auto display = Board::GetInstance().GetDisplay();
+    display->ShowActivationCode(
+        code.c_str(), ota_ == nullptr ? "" : ota_->GetActivationClaimUrl().c_str());
 
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
@@ -1110,6 +1223,10 @@ void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
 
+    if (state == kDeviceStateStarting || state == kDeviceStateUpgrading ||
+        state == kDeviceStateFatalError) {
+        return;
+    }
     if (state == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
         return;
@@ -1128,15 +1245,20 @@ void Application::HandleToggleChatEvent() {
         return;
     }
 
-    if (state == kDeviceStateIdle) {
-        if (reply_pending_) {
-            reply_pending_ = false;
-            if (protocol_->IsAudioChannelOpened()) {
-                protocol_->CloseAudioChannel();
-            }
-            Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::STANDBY);
-            return;
+    const bool dialogue_active = state == kDeviceStateConnecting ||
+        state == kDeviceStateListening || state == kDeviceStateSpeaking ||
+        reply_pending_ || tts_playback_prepared_.load() ||
+        !active_turn_id_.empty() || !active_tts_reply_id_.empty() ||
+        reply_settle_active_;
+    if (dialogue_active) {
+        if (protocol_->IsAudioChannelOpened()) {
+            protocol_->SendAbortSpeaking(kAbortReasonNone);
         }
+        AbortDialogueToStandby("boot-stop", true);
+        return;
+    }
+
+    if (state == kDeviceStateIdle) {
         ListeningMode mode = GetDefaultListeningMode();
         if (!protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
@@ -1145,10 +1267,6 @@ void Application::HandleToggleChatEvent() {
             return;
         }
         SetListeningMode(mode);
-    } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonNone);
-    } else if (state == kDeviceStateListening) {
-        protocol_->CloseAudioChannel();
     }
 }
 
@@ -1166,6 +1284,11 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
     // Switch to performance mode before connecting to reduce latency
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+
+    if (control_channel_task_handle_ != nullptr) {
+        ESP_LOGI(TAG, "Waiting for idle control channel preconnect");
+        return;
+    }
 
     bool opened_channel = false;
     if (!protocol_->IsAudioChannelOpened()) {
@@ -1212,7 +1335,9 @@ void Application::HandleStartListeningEvent() {
     }
 
     if (state == kDeviceStateIdle) {
-        if (!protocol_->IsAudioChannelOpened()) {
+        pending_connect_wake_word_.clear();
+        if (control_channel_task_handle_ != nullptr ||
+            !protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
             Schedule([this]() { ContinueOpenAudioChannel(kListeningModeManualStop); });
@@ -1250,6 +1375,7 @@ void Application::HandleWakeWordDetectedEvent() {
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
     if (state == kDeviceStateIdle) {
+        Board::GetInstance().GetDisplay()->SetEmotion("surprised");
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
@@ -1277,9 +1403,12 @@ void Application::HandleWakeWordDetectedEvent() {
 void Application::BeginWakeWordInvoke(const std::string& wake_word) {
     // Must run in the main task with the device in idle state
     reply_pending_ = false;
+    pending_connect_wake_word_ = wake_word;
+    audio_service_.ResetSendQueueOverflow();
     audio_service_.EncodeWakeWord();
 
-    if (!protocol_->IsAudioChannelOpened()) {
+    const bool control_channel_connecting = control_channel_task_handle_ != nullptr;
+    if (control_channel_connecting || !protocol_->IsAudioChannelOpened()) {
         // Start local capture before publishing the connecting state.  The
         // state update schedules the WSS bootstrap onto the next main-loop
         // turn, so waiting until ContinueWakeWordInvoke() loses the opening
@@ -1297,10 +1426,11 @@ void Application::BeginWakeWordInvoke(const std::string& wake_word) {
         // Wake word detection was stopped by the detection itself; restore it
         // so the device does not become unresponsive to wake words.
         audio_service_.EnableWakeWordDetection(true);
+        pending_connect_wake_word_.clear();
         return;
     }
 
-    if (!protocol_->IsAudioChannelOpened()) {
+    if (control_channel_connecting || !protocol_->IsAudioChannelOpened()) {
         // Schedule to let the state change be processed first (UI update),
         // then continue with OpenAudioChannel which may block for ~1 second
         Schedule([this, wake_word]() { ContinueWakeWordInvoke(wake_word); });
@@ -1320,6 +1450,11 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
+    if (control_channel_task_handle_ != nullptr) {
+        ESP_LOGI(TAG, "Waiting for idle control channel preconnect");
+        return;
+    }
+
     if (!protocol_->IsAudioChannelOpened()) {
         // Capture began in BeginWakeWordInvoke(). Keep its buffered frames
         // intact while Bootstrap/WSS connects; re-enabling here would reset
@@ -1332,11 +1467,13 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
             // state (not every failure path reports a network error), and
             // wake word detection is re-enabled by the idle state handler.
             SetDeviceState(kDeviceStateIdle);
+            pending_connect_wake_word_.clear();
             return;
         }
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    pending_connect_wake_word_.clear();
 #if CONFIG_SEND_WAKE_WORD_DATA
     // Encode and send the wake word data to the server
     while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -1370,6 +1507,15 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            if (reply_settle_active_) {
+                // FinishTtsPlayback deliberately passes through the idle
+                // operational state during the bounded reply settle. Preserve
+                // the selected finish face until the dialogue controller opens
+                // the follow-up listening window instead of flashing sleep.
+                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(false);
+                break;
+            }
             if (reply_pending_) {
                 // VAD has ended a real utterance, but the cloud has not produced
                 // speaker PCM yet. Preserve the current open-eyed listening face;
@@ -1381,7 +1527,11 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
 #if !CONFIG_USE_EMOTE_MESSAGE_STYLE
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+            display->SetEmotion("idle");
+#else
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
+#endif
 #endif
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
@@ -1456,6 +1606,15 @@ void Application::StartListeningAudio() {
         return;
     }
 
+    if (audio_service_.ConsumeSendQueueOverflow()) {
+        ESP_LOGE(TAG, "wake-buffer-overflow: discarding incomplete utterance");
+        audio_service_.DiscardSendQueue();
+        audio_service_.EnableVoiceProcessing(false);
+        Board::GetInstance().GetDisplay()->ShowNotification(Lang::Strings::SERVER_TIMEOUT);
+        AbortDialogueToStandby("wake-buffer-overflow", false);
+        return;
+    }
+
     // Register the new turn before releasing the pre-connect audio buffer.
     protocol_->SendStartListening(listening_mode_);
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
@@ -1500,6 +1659,30 @@ void Application::CancelReplySettle() {
     }
 }
 
+void Application::StartTtsFirstPcmWatchdog() {
+    CancelTtsFirstPcmWatchdog();
+    if (tts_first_pcm_timer_handle_ == nullptr) {
+        ESP_LOGE(TAG, "tts-first-pcm-watchdog-unavailable");
+        AbortDialogueToStandby("tts-first-pcm-timeout", true);
+        return;
+    }
+    const esp_err_t status = esp_timer_start_once(
+        tts_first_pcm_timer_handle_, kTtsFirstPcmTimeoutUs);
+    if (status != ESP_OK) {
+        ESP_LOGE(TAG, "Unable to start first PCM watchdog: %s", esp_err_to_name(status));
+        AbortDialogueToStandby("tts-first-pcm-timeout", true);
+    }
+}
+
+void Application::CancelTtsFirstPcmWatchdog() {
+    if (tts_first_pcm_timer_handle_ != nullptr) {
+        esp_timer_stop(tts_first_pcm_timer_handle_);
+    }
+    if (event_group_ != nullptr) {
+        xEventGroupClearBits(event_group_, MAIN_EVENT_TTS_FIRST_PCM_TIMEOUT);
+    }
+}
+
 void Application::BeginReplySettle(bool resume_listening) {
     auto display = Board::GetInstance().GetDisplay();
     display->BeginReplySettle();
@@ -1527,15 +1710,20 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     if (reply_id.empty() || reply_id != active_tts_reply_id_) {
         return;
     }
+    CancelTtsFirstPcmWatchdog();
     const bool had_audio = tts_audio_started_;
     const std::string turn_id = active_turn_id_;
+    if (!protocol_ || !protocol_->SendTtsState("drained", reply_id, turn_id)) {
+        ESP_LOGE(TAG, "tts-drained-send-failed");
+        AbortDialogueToStandby("tts-drained-send-failed", true);
+        return;
+    }
     reply_pending_ = false;
     pending_tts_stop_reply_id_.clear();
     active_tts_reply_id_.clear();
     tts_playback_prepared_.store(false);
     tts_audio_started_ = false;
     if (protocol_) {
-        protocol_->SendTtsState("drained", reply_id, turn_id);
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
         protocol_->SendDeviceStage("playback_drained", turn_id, reply_id);
 #endif
@@ -1568,35 +1756,37 @@ void Application::FinishTtsPlayback(std::string reply_id) {
 #endif
 }
 
-void Application::RecoverFailedTurnToStandby(const char* reason, bool close_audio_channel) {
-    ESP_LOGW(TAG, "Recovering failed turn to standby: %s", reason ? reason : "unknown");
-    const bool had_audio = tts_audio_started_;
+void Application::AbortDialogueToStandby(const char* reason, bool close_audio_channel) {
+    ESP_LOGW(TAG, "Aborting dialogue to standby: %s", reason ? reason : "unknown");
+    CancelTtsFirstPcmWatchdog();
     reply_pending_ = false;
     CancelReplySettle();
     pending_listening_start_ = false;
+    listening_capture_ready_ = false;
+    vad_speech_detected_ = false;
+    vad_speech_edge_pending_.store(false, std::memory_order_release);
     tts_playback_prepared_.store(false);
     tts_audio_started_ = false;
     active_tts_reply_id_.clear();
     pending_tts_stop_reply_id_.clear();
     active_turn_id_.clear();
-    if (post_playback_listen_timer_handle_ != nullptr) {
-        esp_timer_stop(post_playback_listen_timer_handle_);
-    }
+    pending_connect_wake_word_.clear();
+    clock_ticks_ = 0;
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.DiscardSendQueue();
+    audio_service_.ResetSendQueueOverflow();
     audio_service_.ResetDecoder();
 
     auto display = Board::GetInstance().GetDisplay();
-    if (had_audio) {
-        // A transport close may race the final drained acknowledgement. Keep
-        // the same bounded visual finish as the normal playback path instead
-        // of jumping directly from a speaking face to sleep.
-        BeginReplySettle(false);
-    }
+    // TransitionTo is intentionally a no-op when the state is already idle.
+    // Refresh the board-specific sleep face here so every abort path has the
+    // same visible standby result even without a state-change callback.
     SetDeviceState(kDeviceStateIdle);
-    if (!had_audio) {
-        display->SetStatus(Lang::Strings::STANDBY);
-    }
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+    display->SetEmotion("idle");
+#endif
+    display->SetStatus(Lang::Strings::STANDBY);
     display->ClearChatMessages();
-    audio_service_.EnableVoiceProcessing(false);
     audio_service_.EnableWakeWordDetection(true);
 
     if (close_audio_channel && protocol_) {
@@ -1615,16 +1805,10 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
-    reply_pending_ = false;
-    tts_playback_prepared_.store(false);
-    tts_audio_started_ = false;
-    active_tts_reply_id_.clear();
-    pending_tts_stop_reply_id_.clear();
-    active_turn_id_.clear();
-    audio_service_.ResetDecoder();
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
+    AbortDialogueToStandby("abort-speaking", true);
 }
 
 void Application::SetListeningMode(ListeningMode mode) {

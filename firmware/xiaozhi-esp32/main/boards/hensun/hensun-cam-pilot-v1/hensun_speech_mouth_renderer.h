@@ -25,8 +25,15 @@ public:
 private:
     static constexpr int64_t kSilenceCloseDelayUs = 300 * 1000;
     static constexpr int64_t kPoseStepIntervalUs = 50 * 1000;
+    static constexpr int kSourceMouthLeft = 140;
+    static constexpr int kSourceMouthTop = 154;
+    static constexpr int kSourceMouthRight = 180;
+    static constexpr int kSourceMouthBottom = 176;
     static constexpr uint16_t kFaceWhiteRgb565 = 0xf7be;
+    static constexpr uint16_t kFaceBlackRgb565 = 0x0000;
 
+    static void EraseSourceMouthPixels(uint16_t* pixels, int stripe_width,
+                                      int stripe_height, int x_start, int y_start);
     void DrawPose(uint16_t* pixels, int stripe_width, int stripe_height,
                   int x_start, int y_start, uint8_t pose) const;
     static void Plot(uint16_t* pixels, int stripe_width, int stripe_height,

@@ -497,24 +497,10 @@ uint8_t HensunEmoteLabDisplay::QuantizeSpeechLevel(uint8_t level, uint8_t curren
 }
 
 const char* HensunEmoteLabDisplay::ConversationAnimation() const {
-    switch (reply_emotion_.load()) {
-        case ReplyEmotion::kHappy:
-            return "talk_happy";
-        case ReplyEmotion::kCaring:
-            return "talk_caring";
-        case ReplyEmotion::kShy:
-            // The current shy asset has its own baked mouth. Use the shared
-            // mouthless speech base while PCM overlay is active; the dedicated
-            // shy animation is still shown during the reply settle.
-            return "talk_base";
-        case ReplyEmotion::kSad:
-            // The current sad asset also has a baked mouth and would otherwise
-            // render two mouths on top of each other during speech.
-            return "talk_base";
-        case ReplyEmotion::kNeutral:
-        default:
-            return "talk_base";
-    }
+    // The V3 talk assets contain a baked 96x83 black mouth-clear rectangle.
+    // Keep the proven V3 pack mounted, use its normal idle face while speaking,
+    // and let the PCM renderer remove only the source mouth pixels at runtime.
+    return "idle";
 }
 
 void HensunEmoteLabDisplay::RotateRgb565Clockwise(

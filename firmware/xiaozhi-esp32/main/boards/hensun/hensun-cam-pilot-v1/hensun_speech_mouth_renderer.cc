@@ -84,9 +84,31 @@ const void* HensunSpeechMouthRenderer::ComposeStripe(
             last_pose_step_us_.store(now_us);
         }
     }
+    EraseSourceMouthPixels(destination, stripe_width, stripe_height, x_start, y_start);
     DrawPose(destination, stripe_width, stripe_height, x_start, y_start,
              render_pose_.load());
     return destination;
+}
+
+void HensunSpeechMouthRenderer::EraseSourceMouthPixels(
+        uint16_t* pixels, int stripe_width, int stripe_height,
+        int x_start, int y_start) {
+    const int left = std::max(x_start, kSourceMouthLeft);
+    const int top = std::max(y_start, kSourceMouthTop);
+    const int right = std::min(x_start + stripe_width, kSourceMouthRight);
+    const int bottom = std::min(y_start + stripe_height, kSourceMouthBottom);
+    for (int y = top; y < bottom; ++y) {
+        for (int x = left; x < right; ++x) {
+            auto& pixel = pixels[static_cast<size_t>(y - y_start) * stripe_width +
+                                 (x - x_start)];
+            const int red = (pixel >> 11) & 0x1f;
+            const int green = (pixel >> 5) & 0x3f;
+            const int blue = pixel & 0x1f;
+            if (red * 2 + green + blue * 2 >= 20) {
+                pixel = kFaceBlackRgb565;
+            }
+        }
+    }
 }
 
 void HensunSpeechMouthRenderer::DrawPose(

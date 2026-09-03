@@ -14,6 +14,7 @@ expansion board. It is derived from the upstream
 - OV3660 camera using the seller-confirmed pin map
 - boot/chat button on GPIO 0
 - phone-friendly `Xiaozhi-XXXX` hotspot Wi-Fi provisioning
+- long-press BOOT for about two seconds to enter Wi-Fi provisioning; double-click keeps the internal expression showcase
 
 ## Company expression runtime
 

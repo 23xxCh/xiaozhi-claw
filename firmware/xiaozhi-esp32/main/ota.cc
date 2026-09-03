@@ -165,6 +165,7 @@ esp_err_t Ota::CheckVersion() {
 
     has_activation_code_ = false;
     has_activation_challenge_ = false;
+    activation_claim_url_.clear();
     cJSON *activation = cJSON_GetObjectItem(root, "activation");
     if (cJSON_IsObject(activation)) {
         cJSON* message = cJSON_GetObjectItem(activation, "message");
@@ -175,6 +176,10 @@ esp_err_t Ota::CheckVersion() {
         if (cJSON_IsString(code)) {
             activation_code_ = code->valuestring;
             has_activation_code_ = true;
+        }
+        cJSON* claim_url = cJSON_GetObjectItem(activation, "claim_url");
+        if (cJSON_IsString(claim_url)) {
+            activation_claim_url_ = claim_url->valuestring;
         }
         cJSON* challenge = cJSON_GetObjectItem(activation, "challenge");
         if (cJSON_IsString(challenge)) {

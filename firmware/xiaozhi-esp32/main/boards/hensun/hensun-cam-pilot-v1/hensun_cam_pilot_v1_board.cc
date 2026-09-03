@@ -263,11 +263,8 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnLongPress([this]() {
-#ifdef CONFIG_USE_EMOTE_MESSAGE_STYLE
-            display_->StartShowcase();
-#else
+            ESP_LOGI(TAG, "BOOT long press: entering Wi-Fi configuration");
             EnterWifiConfigMode();
-#endif
         });
         boot_button_.OnDoubleClick([this]() {
             display_->StartShowcase();
