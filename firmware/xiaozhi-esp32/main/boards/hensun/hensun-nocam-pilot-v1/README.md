@@ -24,9 +24,13 @@ Use ESP-IDF 6.0.2:
 ```bash
 python scripts/build.py hensun/hensun-nocam-pilot-v1 \
   --name hensun-nocam-selfhosted-v1 \
-  --language zh-CN \
-  --wake-word nihaoxiaozhi
+  --language zh-CN
 ```
+
+This variant compiles the offline MultiNet commands `ni hao xiao can`
+(`你好小灿`) and `xiao can` (`小灿`) from `config.json`. Do not pass
+`--wake-word`: that option selects a WakeNet model and overrides the custom
+command configuration.
 
 The tracked OTA URL uses the reserved `.invalid` domain. A reviewed local or
 staging bootstrap URL must be injected by the repository build wrapper before

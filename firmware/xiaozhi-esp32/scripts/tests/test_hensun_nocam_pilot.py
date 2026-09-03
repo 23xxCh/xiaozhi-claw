@@ -41,6 +41,28 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         )
         self.assertIn("https://api.hensun.invalid/v1/ota/", sdkconfig)
 
+    def test_selfhosted_build_uses_offline_xiaocan_custom_wake_words(self):
+        config = json.loads(self.read_required(BOARD / "config.json"))
+        sdkconfig = "\n".join(config["builds"][0]["sdkconfig_append"])
+
+        self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", sdkconfig)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD="ni hao xiao can"', sdkconfig)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD_DISPLAY="你好小灿"', sdkconfig)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD_SECONDARY="xiao can"', sdkconfig)
+        self.assertIn('CONFIG_CUSTOM_WAKE_WORD_SECONDARY_DISPLAY="小灿"', sdkconfig)
+        self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15", sdkconfig)
+        self.assertIn("CONFIG_SR_MN_CN_MULTINET5_RECOGNITION_QUANT8=y", sdkconfig)
+        self.assertNotIn("CONFIG_USE_AFE_WAKE_WORD=y", sdkconfig)
+        self.assertNotIn("CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y", sdkconfig)
+
+    def test_build_instructions_keep_compiled_custom_wake_configuration(self):
+        readme = self.read_required(BOARD / "README.md")
+        build_command = readme.split("```bash", 1)[1].split("```", 1)[0]
+
+        self.assertNotIn("--wake-word", build_command)
+        self.assertIn("你好小灿", readme)
+        self.assertIn("小灿", readme)
+
     def test_reserves_identity_without_overlapping_assets(self):
         partition = self.read_required(PARTITION)
 
