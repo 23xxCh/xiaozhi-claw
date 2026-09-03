@@ -1,5 +1,5 @@
 export const API_BASE =
-  process.env.NEXT_PUBLIC_CONTROL_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_CONTROL_API_URL?.replace(/\/$/, "") ?? "";
 
 type ErrorPayload = { code?: string; message?: string; request_id?: string; detail?: string };
 

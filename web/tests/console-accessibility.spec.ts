@@ -13,15 +13,19 @@ async function authenticatePilot(page: Page) {
 }
 
 test("unauthenticated customer route returns to the same page after login", async ({ page }) => {
+  let requestCodeUrl = "";
   await page.goto("/console/devices");
   await expect(page).toHaveURL(/\/login\?next=%2Fconsole%2Fdevices/);
   await expect(page.getByRole("button", { name: /微信|扫码/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "获取验证码" })).toBeVisible();
-  await page.route("**/v1/auth/email/request-code", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ expires_in: 600, resend_after: 60, debug_code: "123456" }),
-  }));
+  await page.route("**/v1/auth/email/request-code", (route) => {
+    requestCodeUrl = route.request().url();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ expires_in: 600, resend_after: 60, debug_code: "123456" }),
+    });
+  });
   await page.route("**/v1/auth/email/verify-code", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -32,6 +36,8 @@ test("unauthenticated customer route returns to the same page after login", asyn
   await page.route("**/v1/profiles", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
   await page.getByLabel("邮箱地址").fill("owner@example.com");
   await page.getByRole("button", { name: "获取验证码" }).click();
+  expect(new URL(requestCodeUrl).origin).toBe(new URL(page.url()).origin);
+  expect(new URL(requestCodeUrl).pathname).toBe("/v1/auth/email/request-code");
   await expect(page.getByLabel("6 位验证码")).toHaveValue("123456");
   await page.getByRole("button", { name: "验证并登录" }).click();
   await expect(page).toHaveURL(/\/console\/devices$/);

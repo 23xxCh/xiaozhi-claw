@@ -116,9 +116,9 @@ services:
       labels:
         com.hensun.project: hensun-desk
       args:
-        # Empty means same-origin /v1 routes. The exact same image can be
-        # verified on staging and later promoted to the formal hostname.
-        NEXT_PUBLIC_CONTROL_API_URL: ""
+        # A non-empty slash is inlined by Next.js, then normalized to the empty
+        # prefix by the API client so browser /v1 requests stay same-origin.
+        NEXT_PUBLIC_CONTROL_API_URL: "/"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
