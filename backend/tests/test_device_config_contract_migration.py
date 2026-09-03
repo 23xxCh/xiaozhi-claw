@@ -130,3 +130,34 @@ def test_device_config_contract_migration_backfills_and_round_trips_sqlite(
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             CONTRACT_REVISION,
         )
+
+
+def test_device_config_contract_migration_recovers_from_partial_mysql_style_ddl(
+    tmp_path: Path,
+) -> None:
+    """MySQL DDL is non-transactional, so a failed migration can leave columns behind."""
+    database = tmp_path / "device-config-contract-partial.db"
+    _alembic(database, "upgrade", PREVIOUS_REVISION)
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE devices ADD COLUMN hardware_profile_id VARCHAR(80)")
+        connection.execute("ALTER TABLE devices ADD COLUMN display_profile_id VARCHAR(80)")
+        connection.execute("ALTER TABLE devices ADD COLUMN profile_schema_version INTEGER")
+        connection.execute("ALTER TABLE devices ADD COLUMN profile_sha256 VARCHAR(64)")
+        connection.execute(
+            "ALTER TABLE devices ADD COLUMN device_config_schema_version INTEGER "
+            "NOT NULL DEFAULT 1"
+        )
+        connection.execute(
+            "ALTER TABLE device_configurations ADD COLUMN schema_version INTEGER "
+            "NOT NULL DEFAULT 1"
+        )
+        connection.commit()
+
+    _alembic(database, "upgrade", "head")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            CONTRACT_REVISION,
+        )
+        assert {"schema_version", "desired_values", "applied_values"} <= _columns(
+            connection, "device_configurations"
+        )

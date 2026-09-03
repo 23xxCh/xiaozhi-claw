@@ -16,29 +16,52 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _column_names(table_name: str) -> set[str]:
+    return {
+        str(column["name"])
+        for column in sa.inspect(op.get_bind()).get_columns(table_name)
+    }
+
+
+def _add_missing_columns(table_name: str, columns: Sequence[sa.Column]) -> None:
+    existing = _column_names(table_name)
+    missing = [column for column in columns if column.name not in existing]
+    if not missing:
+        return
+    with op.batch_alter_table(table_name) as batch:
+        for column in missing:
+            batch.add_column(column)
+
+
 def upgrade() -> None:
-    with op.batch_alter_table("devices") as batch:
-        batch.add_column(sa.Column("hardware_profile_id", sa.String(80), nullable=True))
-        batch.add_column(sa.Column("display_profile_id", sa.String(80), nullable=True))
-        batch.add_column(sa.Column("profile_schema_version", sa.Integer(), nullable=True))
-        batch.add_column(sa.Column("profile_sha256", sa.String(64), nullable=True))
-        batch.add_column(
+    # MySQL DDL is non-transactional. Keep additions idempotent so a release can
+    # resume safely if an earlier ALTER TABLE succeeded before a later one failed.
+    _add_missing_columns(
+        "devices",
+        (
+            sa.Column("hardware_profile_id", sa.String(80), nullable=True),
+            sa.Column("display_profile_id", sa.String(80), nullable=True),
+            sa.Column("profile_schema_version", sa.Integer(), nullable=True),
+            sa.Column("profile_sha256", sa.String(64), nullable=True),
             sa.Column(
                 "device_config_schema_version",
                 sa.Integer(),
                 nullable=False,
                 server_default="1",
-            )
-        )
+            ),
+        ),
+    )
 
-    with op.batch_alter_table("device_configurations") as batch:
-        batch.add_column(
-            sa.Column("schema_version", sa.Integer(), nullable=False, server_default="1")
-        )
-        batch.add_column(
-            sa.Column("desired_values", sa.JSON(), nullable=False, server_default="{}")
-        )
-        batch.add_column(sa.Column("applied_values", sa.JSON(), nullable=True))
+    _add_missing_columns(
+        "device_configurations",
+        (
+            sa.Column("schema_version", sa.Integer(), nullable=False, server_default="1"),
+            # MySQL rejects defaults on JSON columns. Add nullable, backfill,
+            # then enforce NOT NULL after every existing row has a value.
+            sa.Column("desired_values", sa.JSON(), nullable=True),
+            sa.Column("applied_values", sa.JSON(), nullable=True),
+        ),
+    )
 
     configurations = sa.table(
         "device_configurations",
@@ -82,15 +105,28 @@ def upgrade() -> None:
             .values(desired_values=desired, applied_values=applied)
         )
 
+    with op.batch_alter_table("device_configurations") as batch:
+        batch.alter_column(
+            "desired_values",
+            existing_type=sa.JSON(),
+            nullable=False,
+        )
+
 
 def downgrade() -> None:
+    configuration_columns = _column_names("device_configurations")
     with op.batch_alter_table("device_configurations") as batch:
-        batch.drop_column("applied_values")
-        batch.drop_column("desired_values")
-        batch.drop_column("schema_version")
+        for column_name in ("applied_values", "desired_values", "schema_version"):
+            if column_name in configuration_columns:
+                batch.drop_column(column_name)
+    device_columns = _column_names("devices")
     with op.batch_alter_table("devices") as batch:
-        batch.drop_column("device_config_schema_version")
-        batch.drop_column("profile_sha256")
-        batch.drop_column("profile_schema_version")
-        batch.drop_column("display_profile_id")
-        batch.drop_column("hardware_profile_id")
+        for column_name in (
+            "device_config_schema_version",
+            "profile_sha256",
+            "profile_schema_version",
+            "display_profile_id",
+            "hardware_profile_id",
+        ):
+            if column_name in device_columns:
+                batch.drop_column(column_name)

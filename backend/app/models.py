@@ -254,7 +254,7 @@ class DeviceConfiguration(Base):
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), primary_key=True)
     schema_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     desired_values: Mapped[dict[str, object]] = mapped_column(
-        JSON, default=dict, server_default="{}"
+        JSON, default=dict
     )
     applied_values: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     desired_version: Mapped[int] = mapped_column(Integer, default=0)
