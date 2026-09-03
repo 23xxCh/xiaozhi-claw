@@ -279,8 +279,9 @@ def test_device_stage_events_are_bounded_diagnostics(
 
 
 def test_strict_playback_ready_timeout_aborts_before_audio(
-    client: TestClient, admin_headers: dict[str, str]
+    client: TestClient, admin_headers: dict[str, str], caplog
 ) -> None:
+    caplog.set_level("INFO")
     providers = MultiFrameRealtimeProviders()
     client.app.state.realtime_providers = providers
     owned = provision_owned_device(client, admin_headers, serial="HENSUN-STRICT-READY")
@@ -311,6 +312,16 @@ def test_strict_playback_ready_timeout_aborts_before_audio(
     assert not client.app.state.device_connections._connections
     assert len(providers.tts_sessions) == 1
     assert providers.tts_sessions[0].cancelled
+    outcome_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "voice turn outcome " in record.getMessage()
+    ]
+    assert len(outcome_messages) == 1
+    outcome = json.loads(outcome_messages[0].split("voice turn outcome ", 1)[1])
+    assert outcome["outcome"] == "failed"
+    assert outcome["error_code"] == "tts-ready-timeout"
+    assert outcome["device_speaker_started_ms"] is None
 
 
 def test_strict_playback_drained_timeout_reports_stable_error(

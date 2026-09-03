@@ -31,6 +31,24 @@
 - 数据库、日志和 OSS 抽检不到原始音频、逐句 STT、逐句回复或密钥。
 - 研发、客服、工厂角色越权测试全部失败。
 
+## 真实设备首响验收
+
+- 口径固定为服务端确认语音结束，到同一 `turn_id/reply_id` 的
+  `speaker_pcm_started`；这是设备开始消费 PCM 的代理指标，不等于声学仪器测得的物理出声时刻。
+- 连续采集两轮，每轮恰好 50 次、至少 5 个独立会话；失败、超时和降级均保留在日志中，禁止只挑成功样本。
+- 每轮分别要求成功率不低于 98%、P50 不超过 2000ms、P90 不超过 2500ms。
+- 网关日志只记录阶段耗时、结果码和降级类别，不记录原始音频、转写文本或回复正文。
+- 将每轮网关日志分别保存后执行：
+
+```powershell
+python scripts\voice_stability_acceptance.py `
+  --round-log .\run\voice-acceptance\round-1.log `
+  --round-log .\run\voice-acceptance\round-2.log `
+  --output .\run\voice-acceptance\report.json
+```
+
+- 只有脚本输出 `"pass": true` 且真机无沉默、断音、串轮、表情卡死、爆音或重启，才可标记本轮语音稳定性通过；自动测试和 mock provider 不能替代这两轮真机记录。
+
 ## 真实用户门禁
 
 - 5 台内部验证通过后，才切换 20 台免费内测。

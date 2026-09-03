@@ -122,6 +122,34 @@ def test_voice_turn_timeline_keeps_first_mark_and_rejects_stale_device_stage() -
     assert timeline.elapsed_ms("llm_first_token") == 400
     assert timeline.elapsed_ms("device_speaker_started") == 800
 
+    record = timeline.as_record(
+        serial="HENSUN-TIMELINE",
+        conversation_id="conversation-current",
+        outcome="completed",
+        error_code=None,
+        fallback_operations={"tts"},
+    )
+    assert record == {
+        "event": "voice_turn_outcome",
+        "schema_version": 1,
+        "serial": "HENSUN-TIMELINE",
+        "conversation_id": "conversation-current",
+        "turn_id": "turn-current",
+        "reply_id": "reply-current",
+        "outcome": "completed",
+        "error_code": None,
+        "fallback_operations": ["tts"],
+        "asr_transcription_completed_ms": None,
+        "asr_session_finished_ms": None,
+        "llm_first_token_ms": 400,
+        "first_speakable_text_ms": None,
+        "tts_connected_ms": None,
+        "device_playback_ready_ms": None,
+        "tts_first_pcm_ms": None,
+        "gateway_first_packet_ms": None,
+        "device_speaker_started_ms": 800,
+    }
+
 
 def test_app_lifespan_closes_realtime_provider_bundle(tmp_path) -> None:
     class _ClosableProviders:
@@ -579,6 +607,18 @@ def test_tts_provider_connection_is_prewarmed_while_llm_builds_first_sentence(
     assert len(first_packet_messages) == 1
     assert "lease_generation=" in first_packet_messages[0]
     assert "用于验证并行建连" not in first_packet_messages[0]
+    outcome_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "voice turn outcome " in record.getMessage()
+    ]
+    assert len(outcome_messages) == 1
+    outcome = json.loads(outcome_messages[0].split("voice turn outcome ", 1)[1])
+    assert outcome["outcome"] == "completed"
+    assert outcome["error_code"] is None
+    assert outcome["device_speaker_started_ms"] is not None
+    assert "transcript" not in outcome
+    assert "reply" not in outcome
 
 
 def test_abort_cancels_an_inflight_llm_turn(

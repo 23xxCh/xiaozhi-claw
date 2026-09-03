@@ -127,6 +127,41 @@ class VoiceTurnTimeline:
         if marked_at is None:
             return None
         return round((marked_at - self.started_at) * 1000)
+
+    def as_record(
+        self,
+        *,
+        serial: str,
+        conversation_id: str,
+        outcome: str,
+        error_code: str | None,
+        fallback_operations: set[str],
+    ) -> dict[str, object]:
+        stages = (
+            "asr_transcription_completed",
+            "asr_session_finished",
+            "llm_first_token",
+            "first_speakable_text",
+            "tts_connected",
+            "device_playback_ready",
+            "tts_first_pcm",
+            "gateway_first_packet",
+            "device_speaker_started",
+        )
+        return {
+            "event": "voice_turn_outcome",
+            "schema_version": 1,
+            "serial": serial,
+            "conversation_id": conversation_id,
+            "turn_id": self.turn_id,
+            "reply_id": self.reply_id,
+            "outcome": outcome,
+            "error_code": error_code,
+            "fallback_operations": sorted(fallback_operations),
+            **{f"{stage}_ms": self.elapsed_ms(stage) for stage in stages},
+        }
+
+
 _NON_SPEECH_FILLER_CHARS = frozenset("嗯啊呃额唔哼哦")
 
 
@@ -752,6 +787,8 @@ async def _process_turn(
     playback_stopped = False
     pending_reply_emotion: str | None = None
     sent_reply_emotion: str | None = None
+    turn_outcome = "failed"
+    turn_error_code: str | None = "turn-incomplete"
 
     def on_first_audio_packet() -> None:
         nonlocal first_audio_latency_ms
@@ -852,6 +889,7 @@ async def _process_turn(
                     )
             if asr_error is not None:
                 if fallback is None:
+                    turn_error_code = "asr-realtime-invalid"
                     await _send_turn_error_and_reset(
                         websocket,
                         lease,
@@ -877,6 +915,7 @@ async def _process_turn(
                         serial,
                         fallback_error_code,
                     )
+                    turn_error_code = "asr-fallback-failed"
                     await _send_turn_error_and_reset(
                         websocket,
                         lease,
@@ -905,6 +944,8 @@ async def _process_turn(
             # The device owns the bounded follow-up deadline. ASR filler can be
             # caused by speaker tail or room noise and must never shorten that
             # window by forcing the device directly into standby.
+            turn_outcome = "ignored"
+            turn_error_code = "asr-no-speech"
             await websocket.app.state.device_connections.send_json_for_lease(
                 lease,
                 {"type": "listen", "state": "resume", "turn_id": turn_id},
@@ -923,6 +964,7 @@ async def _process_turn(
         async with websocket.app.state.session_factory() as session:
             quota = await quota_for_user(session, user_id, websocket.app.state.settings)
         if quota.remaining <= 0:
+            turn_error_code = "quota-exhausted"
             await _send_turn_error_and_reset(
                 websocket,
                 lease,
@@ -938,6 +980,8 @@ async def _process_turn(
             # "小灿闭嘴" is a control command, not another assistant reply.
             # Tell the device to enter standby before closing the transport so
             # it does not interpret a normal exit as a failed audio channel.
+            turn_outcome = "control"
+            turn_error_code = "user-exit"
             await websocket.app.state.device_connections.send_json_for_lease(
                 lease,
                 {
@@ -984,6 +1028,7 @@ async def _process_turn(
                 tools=tool_schemas or None,
             )
         except ContextOverflowError:
+            turn_error_code = "llm-context-overflow"
             await _send_turn_error_and_reset(
                 websocket,
                 lease,
@@ -1196,6 +1241,7 @@ async def _process_turn(
                 await speak(trailing)
 
         if not tts_started or not reply_parts:
+            turn_error_code = "empty-reply"
             if reply_id is not None and playback.reply_id == reply_id:
                 await playback.stop(
                     websocket,
@@ -1274,6 +1320,7 @@ async def _process_turn(
             len(fallback_operations),
         )
         if not drain_outcome:
+            turn_error_code = "tts-drained-timeout"
             await _send_error(
                 websocket,
                 lease,
@@ -1331,13 +1378,18 @@ async def _process_turn(
                     "reply_id": reply_id,
                 },
             )
+        turn_outcome = "completed"
+        turn_error_code = None
         return safety.end_session
     except asyncio.CancelledError:
         interrupted = True
+        turn_outcome = "interrupted"
+        turn_error_code = "turn-cancelled"
         await asr.cancel()
         raise
     except PlaybackReadyTimeout:
         code = "tts-ready-timeout"
+        turn_error_code = code
         logger.warning(
             "voice turn timed out for device %s lease_generation=%d code=%s",
             serial,
@@ -1352,6 +1404,7 @@ async def _process_turn(
         )
         return False
     except Exception:
+        turn_error_code = "ai-unavailable"
         logger.exception("voice turn failed for device %s", serial)
         if reply_id is not None or tts_started:
             await _send_error(websocket, lease, "ai-unavailable", "AI response unavailable")
@@ -1366,6 +1419,20 @@ async def _process_turn(
             )
         return False
     finally:
+        telemetry_logger.info(
+            "voice turn outcome %s",
+            json.dumps(
+                timeline.as_record(
+                    serial=serial,
+                    conversation_id=conversation_id,
+                    outcome=turn_outcome,
+                    error_code=turn_error_code,
+                    fallback_operations=fallback_operations,
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
         if reply_id is not None and not playback_stopped and playback.reply_id == reply_id:
             with contextlib.suppress(Exception):
                 await playback.stop(
