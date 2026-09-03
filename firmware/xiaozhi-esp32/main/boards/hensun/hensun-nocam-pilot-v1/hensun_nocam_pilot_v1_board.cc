@@ -12,12 +12,64 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <cstring>
+#include <vector>
 
 #define TAG "HensunNoCamPilotV1Board"
 
 namespace {
+
+constexpr int kHensunNoCamMicInputGain = 1;
+
+class HensunNoCamAudioCodecSimplex final : public NoAudioCodecSimplex {
+public:
+    using NoAudioCodecSimplex::NoAudioCodecSimplex;
+
+protected:
+    int Read(int16_t* dest, int samples) override {
+        size_t bytes_read = 0;
+        constexpr uint32_t kReadTimeoutMs = 200;
+        std::vector<int32_t> bit32_buffer(samples);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(),
+                             samples * sizeof(int32_t), &bytes_read,
+                             kReadTimeoutMs) != ESP_OK) {
+            return 0;
+        }
+
+        samples = bytes_read / sizeof(int32_t);
+        uint64_t abs_sum = 0;
+        int32_t peak = 0;
+        for (int index = 0; index < samples; ++index) {
+            // The board's 24-bit I2S microphone is left-aligned in its 32-bit
+            // slot. The generic >>12 path amplifies it by 16x and clips the
+            // samples that MultiNet needs for command recognition.
+            int32_t value = (bit32_buffer[index] >> 16) * kHensunNoCamMicInputGain;
+            if (value > INT16_MAX) {
+                value = INT16_MAX;
+            } else if (value < -INT16_MAX) {
+                value = -INT16_MAX;
+            }
+            dest[index] = static_cast<int16_t>(value);
+            const int32_t abs_value = value < 0 ? -value : value;
+            abs_sum += static_cast<uint32_t>(abs_value);
+            if (abs_value > peak) {
+                peak = abs_value;
+            }
+        }
+
+        static int64_t last_level_log_us = 0;
+        const int64_t now_us = esp_timer_get_time();
+        if (samples > 0 && now_us - last_level_log_us >= 2 * 1000 * 1000) {
+            last_level_log_us = now_us;
+            ESP_LOGI(TAG, "Mic input level: avg_abs=%lu peak=%ld samples=%d gain=%d",
+                     static_cast<unsigned long>(abs_sum / samples),
+                     static_cast<long>(peak), samples, kHensunNoCamMicInputGain);
+        }
+        return samples;
+    }
+};
 
 struct EmotionRoute {
     const char* input;
@@ -211,7 +263,7 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
-        static NoAudioCodecSimplex audio_codec(
+        static HensunNoCamAudioCodecSimplex audio_codec(
             AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_SPK_GPIO_BCLK,

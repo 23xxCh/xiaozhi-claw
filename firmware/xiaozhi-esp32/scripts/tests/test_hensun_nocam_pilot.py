@@ -147,6 +147,18 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("Camera", source)
         self.assertNotIn("LAMP_GPIO", source)
 
+    def test_normalizes_left_aligned_i2s_mic_without_clipping(self):
+        source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
+
+        self.assertIn(
+            "class HensunNoCamAudioCodecSimplex final : public NoAudioCodecSimplex",
+            source,
+        )
+        self.assertIn("bit32_buffer[index] >> 16", source)
+        self.assertNotIn("bit32_buffer[index] >> 12", source)
+        self.assertIn("Mic input level: avg_abs=", source)
+        self.assertIn("static HensunNoCamAudioCodecSimplex audio_codec", source)
+
     def test_uses_board_specific_standard_emoji_collection(self):
         cmake = self.read_required(ROOT / "main/CMakeLists.txt")
 
