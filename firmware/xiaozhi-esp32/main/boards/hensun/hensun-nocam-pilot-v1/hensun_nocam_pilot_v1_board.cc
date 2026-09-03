@@ -60,8 +60,33 @@ const char* StandardAssetForEmotion(const char* emotion) {
 }
 
 class HensunNoCamDisplay final : public SpiLcdDisplay {
+private:
+    void ApplyFullScreenOverlayStyle() {
+        lv_obj_set_style_bg_opa(top_bar_, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_TRANSP, 0);
+
+        lv_obj_set_style_text_color(network_label_, lv_color_white(), 0);
+        lv_obj_set_style_text_color(status_label_, lv_color_white(), 0);
+        lv_obj_set_style_text_color(notification_label_, lv_color_white(), 0);
+        lv_obj_set_style_text_color(mute_label_, lv_color_white(), 0);
+        lv_obj_set_style_text_color(battery_label_, lv_color_white(), 0);
+        lv_obj_set_style_text_color(chat_message_label_, lv_color_white(), 0);
+    }
+
 public:
     using SpiLcdDisplay::SpiLcdDisplay;
+
+    void SetupUI() override {
+        SpiLcdDisplay::SetupUI();
+        DisplayLockGuard lock(this);
+        ApplyFullScreenOverlayStyle();
+    }
+
+    void SetTheme(Theme* theme) override {
+        SpiLcdDisplay::SetTheme(theme);
+        DisplayLockGuard lock(this);
+        ApplyFullScreenOverlayStyle();
+    }
 
     void SetEmotion(const char* emotion) override {
         SpiLcdDisplay::SetEmotion(StandardAssetForEmotion(emotion));

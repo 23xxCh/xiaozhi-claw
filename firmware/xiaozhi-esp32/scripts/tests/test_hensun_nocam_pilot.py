@@ -184,6 +184,30 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
             self.assertIn(route, source)
         self.assertIn('return "neutral";', source)
 
+    def test_keeps_status_text_but_removes_ui_bar_backgrounds(self):
+        source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
+
+        self.assertIn("void SetupUI() override", source)
+        self.assertIn("void SetTheme(Theme* theme) override", source)
+        self.assertIn("SpiLcdDisplay::SetupUI();", source)
+        self.assertIn("SpiLcdDisplay::SetTheme(theme);", source)
+        self.assertIn(
+            "lv_obj_set_style_bg_opa(top_bar_, LV_OPA_TRANSP, 0);", source
+        )
+        self.assertIn(
+            "lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_TRANSP, 0);", source
+        )
+        self.assertIn(
+            "lv_obj_set_style_text_color(status_label_, lv_color_white(), 0);",
+            source,
+        )
+        self.assertNotIn(
+            "lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN)", source
+        )
+        self.assertNotIn(
+            "lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)", source
+        )
+
     def test_is_registered_as_an_esp32s3_board(self):
         kconfig = self.read_required(ROOT / "main/Kconfig.projbuild")
         cmake = self.read_required(ROOT / "main/CMakeLists.txt")

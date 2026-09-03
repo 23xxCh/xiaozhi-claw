@@ -19,4 +19,6 @@ The source files are 384x288 animations. The tracked runtime assets preserve the
 | `silly.gif` | 调皮 |
 
 The board-specific display adapter maps cloud emotion aliases onto these nine
-runtime names. Unknown values fall back to `neutral`.
+runtime names. Unknown values fall back to `neutral`. Its status and subtitle
+bars keep their text and icons but use transparent backgrounds so the animation
+remains visible across the entire panel.
