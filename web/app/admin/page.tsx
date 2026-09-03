@@ -23,6 +23,7 @@ export default function AdminPage() {
   const [models, setModels] = useState<ModelRoute[]>([]);
   const [metrics, setMetrics] = useState<OperationsMetrics | null>(null);
   const [batchSerials, setBatchSerials] = useState("");
+  const [batchBoardType, setBatchBoardType] = useState("hensun-nocam-pilot-v1");
   const [oneTimeManifest, setOneTimeManifest] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
@@ -47,7 +48,30 @@ export default function AdminPage() {
   }
 
   async function login(event: FormEvent) { event.preventDefault(); setError(null); setLoading(true); try { await api("/v1/admin/auth/login", { method: "POST", headers: { "X-Admin-Key": bootstrapKey }, body: JSON.stringify({ username }) }); setBootstrapKey(""); await loadDashboard(); } catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败"); setLoading(false); } }
-  async function registerBatch(event: FormEvent) { event.preventDefault(); setError(null); setOneTimeManifest(null); const serials = batchSerials.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); if (!serials.length || !window.confirm(`确认注册 ${serials.length} 台设备并生成一次性密钥？`)) return; try { const result = await api<Array<{ serial_number: string; device_secret: string }>>("/v1/admin/devices/batches", { method: "POST", body: JSON.stringify({ devices: serials.map((serial_number) => ({ serial_number, board_type: "hensun-cam-pilot-v1" })), confirm: true }) }); setOneTimeManifest(["serial_number,device_secret", ...result.map((item) => `${item.serial_number},${item.device_secret}`)].join("\n")); setBatchSerials(""); await loadDashboard(); } catch (reason) { setError(reason instanceof Error ? reason.message : "批次注册失败"); } }
+  async function registerBatch(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    setOneTimeManifest(null);
+    const serials = batchSerials.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    if (!serials.length || !window.confirm(`确认注册 ${serials.length} 台设备并生成一次性密钥？`)) return;
+    try {
+      const result = await api<Array<{ serial_number: string; device_secret: string }>>("/v1/admin/devices/batches", {
+        method: "POST",
+        body: JSON.stringify({
+          devices: serials.map((serial_number) => ({ serial_number, board_type: batchBoardType })),
+          confirm: true,
+        }),
+      });
+      setOneTimeManifest([
+        "serial_number,board_type,device_secret",
+        ...result.map((item) => `${item.serial_number},${batchBoardType},${item.device_secret}`),
+      ].join("\n"));
+      setBatchSerials("");
+      await loadDashboard();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "批次注册失败");
+    }
+  }
   async function rma(device: AdminDevice) { const reason = window.prompt("输入 RMA 原因（此操作会解绑并隔离设备）"); if (!reason || !window.confirm(`确认隔离 ${device.serial_number}？`)) return; try { await api(`/v1/admin/devices/${device.id}/rma`, { method: "POST", body: JSON.stringify({ reason, confirm: true }) }); await loadDashboard(); } catch (failure) { setError(failure instanceof Error ? failure.message : "RMA 操作失败"); } }
   function downloadManifest() { if (!oneTimeManifest) return; const url = URL.createObjectURL(new Blob([oneTimeManifest], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `hensun-factory-${Date.now()}.csv`; link.click(); URL.revokeObjectURL(url); setOneTimeManifest(null); }
 
@@ -62,7 +86,7 @@ export default function AdminPage() {
     <div className="grid"><section className="card"><div className="muted">Provider 错误</div><div className="metric">{metrics?.provider_errors_30d ?? "—"}</div><div>近 30 天</div></section><section className="card"><div className="muted">旧在线记录 / 未结束会话</div><div className="metric">{metrics ? metrics.stale_online_sessions + metrics.unfinished_conversations : "—"}</div><div>需要自动回收或检查</div></section><section className="card"><div className="muted">离线设备</div><div className="metric">{metrics ? offlineDevices : "—"}</div><div>当前已认领设备</div></section></div>
     {metrics ? <><header className="page-head" style={{ marginTop: 16 }}><div><div className="eyebrow">Operations</div><h2 style={{ fontSize: "2rem" }}>运营健康</h2></div></header><div className="grid"><section className="card"><div className="muted">24 小时语音轮数</div><div className="metric">{metrics.voice_turns_24h}</div><div>7 日活跃用户 {metrics.active_users_7d}</div></section><section className="card"><div className="muted">首段回复 P50 / P95</div><div className="metric">{metrics.first_audio_p50_ms ?? "—"} / {metrics.first_audio_p95_ms ?? "—"}</div><div>毫秒</div></section><section className="card"><div className="muted">30 日模型成本</div><div className="metric">{yuan(metrics.provider_cost_micros_30d)}</div><div>每活跃用户 {yuan(metrics.cost_per_active_user_micros_30d)}</div></section></div></> : null}
     <section className="stack"><h2>设备明细</h2><div className="table-wrap"><table><thead><tr><th>SN</th><th>状态</th><th>板型</th><th>固件</th><th>操作</th></tr></thead><tbody>{devices.map((device) => <tr key={device.id}><td className="mono">{device.serial_number}</td><td>{device.lifecycle}</td><td>{device.board_type}</td><td>{device.firmware_version}</td><td>{canRma && device.lifecycle !== "rma-quarantine" ? <button className="button danger" type="button" onClick={() => void rma(device)}>RMA</button> : "—"}</td></tr>)}</tbody></table></div></section>
-    {canFactory ? <form className="card stack desktop-only" onSubmit={registerBatch}><h2>工厂批次注册</h2><div className="field"><label htmlFor="serials">每行一个 SN / MAC</label><textarea id="serials" value={batchSerials} onChange={(event) => setBatchSerials(event.target.value)} /></div><button className="button" type="submit">确认并生成一次性烧录清单</button>{oneTimeManifest ? <div className="stack"><InlineResult tone="warning">清单只显示一次，请立即转入受控烧录工位。</InlineResult><button className="button" type="button" onClick={downloadManifest}>下载并清除清单</button></div> : null}</form> : null}
+    {canFactory ? <form className="card stack desktop-only" onSubmit={registerBatch}><h2>工厂批次注册</h2><div className="field"><label htmlFor="factory-board-type">板型</label><select id="factory-board-type" value={batchBoardType} onChange={(event) => setBatchBoardType(event.target.value)}><option value="hensun-nocam-pilot-v1">非 CAM XZ-AI_KZB V1.7/V1.8</option><option value="hensun-cam-pilot-v1">CAM Pilot V1</option></select></div><div className="field"><label htmlFor="serials">每行一个 SN / MAC</label><textarea id="serials" value={batchSerials} onChange={(event) => setBatchSerials(event.target.value)} /></div><button className="button" type="submit">确认并生成一次性烧录清单</button>{oneTimeManifest ? <div className="stack"><InlineResult tone="warning">清单只显示一次，请立即导入受控出厂工具；工具会使用 Windows 当前账户加密保存。</InlineResult><button className="button" type="button" onClick={downloadManifest}>下载并清除清单</button></div> : null}</form> : null}
     {models.length ? <section className="card stack desktop-only"><h2>模型路由与目录价</h2>{models.map((model) => <div className="card soft" key={model.id}><strong>{model.display_name}</strong><div className="muted mono">{model.asr_model} → {model.llm_model} → {model.tts_model}</div><div className="muted">ASR {yuan(model.asr_cost_micros_per_minute)}/分钟 · LLM {yuan(model.llm_input_cost_micros_per_million_tokens)}/{yuan(model.llm_output_cost_micros_per_million_tokens)}/百万 Token · TTS {yuan(model.tts_cost_micros_per_10k_chars)}/万字</div></div>)}</section> : null}
     <section className="stack"><h2>最近审计</h2><div className="table-wrap"><table><thead><tr><th>时间</th><th>事件</th><th>操作者</th></tr></thead><tbody>{audit.slice(0, 20).map((event) => <tr key={event.id}><td>{new Date(event.created_at).toLocaleString()}</td><td>{event.action}</td><td>{event.actor_type}</td></tr>)}</tbody></table></div></section>
   </main></div>;

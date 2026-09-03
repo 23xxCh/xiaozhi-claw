@@ -3,14 +3,17 @@ param(
     [ValidateSet("official", "selfhosted", "local")]
     [string]$Variant,
 
-    [string]$BootstrapUrl = ""
+    [string]$BootstrapUrl = "",
+
+    [ValidateSet("hensun-cam-pilot-v1", "hensun-nocam-pilot-v1")]
+    [string]$BoardType = "hensun-cam-pilot-v1"
 )
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $firmwareRoot = Join-Path $projectRoot "firmware\xiaozhi-esp32"
-$boardRelativePath = "main\boards\hensun\hensun-cam-pilot-v1"
+$boardRelativePath = "main\boards\hensun\$BoardType"
 $boardRoot = Join-Path $firmwareRoot $boardRelativePath
 $baseConfigPath = Join-Path $boardRoot "config.json"
 $temporaryConfigName = "hensun-build-$PID.json"
@@ -34,10 +37,18 @@ if (-not (Get-Command idf.py -ErrorAction SilentlyContinue)) {
     . (Join-Path $idfRoot "export.ps1")
 }
 
-$buildName = switch ($Variant) {
-    "official" { "hensun-cam-official-v1" }
-    "selfhosted" { "hensun-cam-selfhosted-v1" }
-    "local" { "hensun-cam-selfhosted-landscape-local-v1" }
+$isNoCam = $BoardType -eq "hensun-nocam-pilot-v1"
+if ($isNoCam -and $Variant -eq "official") {
+    throw "The non-CAM golden profile only supports the reviewed self-hosted bootstrap."
+}
+$buildName = if ($isNoCam) {
+    "hensun-nocam-selfhosted-v1"
+} else {
+    switch ($Variant) {
+        "official" { "hensun-cam-official-v1" }
+        "selfhosted" { "hensun-cam-selfhosted-v1" }
+        "local" { "hensun-cam-selfhosted-landscape-local-v1" }
+    }
 }
 $usesCustomBootstrap = $Variant -ne "official"
 
@@ -75,7 +86,7 @@ try {
     }
     $firmwareBuildArgs = @(
         "scripts\build.py",
-        "hensun/hensun-cam-pilot-v1",
+        "hensun/$BoardType",
         "--config", $configName,
         "--name", $buildName,
         "--language", "zh-CN",
@@ -93,7 +104,11 @@ try {
     $resourceLimits = @(
         @{ Name = "application"; Path = $appPath; Limit = 0x3F0000 }
     )
-    if ($usesCustomBootstrap) {
+    if ($isNoCam) {
+        $resourceLimits += @(
+            @{ Name = "merged assets"; Path = (Join-Path $firmwareRoot "build\generated_assets.bin"); Limit = 0x7FC000 }
+        )
+    } elseif ($usesCustomBootstrap) {
         $resourceLimits += @(
             @{ Name = "speech model assets"; Path = (Join-Path $firmwareRoot "build\srmodels\srmodels.bin"); Limit = 0x2FC000 },
             @{ Name = "emote assets"; Path = (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin"); Limit = 5MB }
@@ -125,9 +140,11 @@ if (-not (Test-Path -LiteralPath $artifact)) {
 
 [pscustomobject]@{
     Variant = $Variant
+    BoardType = $BoardType
     FirmwareName = $buildName
     Artifact = $artifact
     AppBytes = (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\xiaozhi.bin")).Length
-    ModelAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
-    EmoteAssetsBytes = if ($usesCustomBootstrap) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
+    AssetsBytes = if ($isNoCam) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\generated_assets.bin")).Length } else { $null }
+    ModelAssetsBytes = if ($usesCustomBootstrap -and -not $isNoCam) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\srmodels\srmodels.bin")).Length } else { $null }
+    EmoteAssetsBytes = if ($usesCustomBootstrap -and -not $isNoCam) { (Get-Item -LiteralPath (Join-Path $firmwareRoot "build\mmap_build\emote_lab\emote_gen\emote_gen.bin")).Length } else { $null }
 }

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile_id": "hensun-nocam-pilot-v1",
+  "board_type": "hensun-nocam-pilot-v1",
+  "hardware_version": "XZ-AI_KZB-V1.7-V1.8-N16R8",
+  "target": {
+    "chip": "esp32s3",
+    "flash_size": "16MB"
+  },
+  "bootstrap_url": "https://staging.hensun-desk.top/v1/device/xiaozhi-bootstrap",
+  "wake_word_version": "xiaocan-nocam-v1",
+  "microphone_profile": "inmp441-left-24-to-s16-gain4-v2",
+  "display_profile": "st7789-320x240-landscape-standard9-v1",
+  "required_sdkconfig": [
+    "CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1=y",
+    "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
+    "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_hensun_nocam.csv\"",
+    "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+    "CONFIG_CUSTOM_WAKE_WORD=\"ni hao xiao can\"",
+    "CONFIG_CUSTOM_WAKE_WORD_SECONDARY=\"xiao can\"",
+    "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=15",
+    "CONFIG_LV_USE_QRCODE=y",
+    "CONFIG_OTA_URL=\"https://staging.hensun-desk.top/v1/device/xiaozhi-bootstrap\""
+  ],
+  "regions": {
+    "identity": {
+      "name": "hensun_keys",
+      "offset": "0x800000",
+      "size": "0x4000"
+    },
+    "wifi_nvs": {
+      "name": "nvs",
+      "offset": "0x9000",
+      "size": "0x4000"
+    }
+  },
+  "segments": [
+    {
+      "name": "bootloader",
+      "metadata_key": "bootloader",
+      "offset": "0x0",
+      "maximum_size": "0x8000"
+    },
+    {
+      "name": "partition-table",
+      "metadata_key": "partition-table",
+      "offset": "0x8000",
+      "maximum_size": "0x1000"
+    },
+    {
+      "name": "otadata",
+      "metadata_key": "otadata",
+      "offset": "0xd000",
+      "maximum_size": "0x2000"
+    },
+    {
+      "name": "app",
+      "metadata_key": "app",
+      "offset": "0x20000",
+      "maximum_size": "0x3f0000"
+    },
+    {
+      "name": "assets",
+      "metadata_key": "assets",
+      "offset": "0x804000",
+      "maximum_size": "0x7fc000"
+    }
+  ]
+}

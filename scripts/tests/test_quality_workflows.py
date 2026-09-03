@@ -11,6 +11,15 @@ def test_quality_workflow_checks_dialogue_assets_and_host_tests() -> None:
     assert "test_hensun_dialogue_faces.py" in source
 
 
+def test_staging_web_build_uses_explicit_same_origin_api_base() -> None:
+    compose = (ROOT / "deploy/docker-compose.server.yml").read_text(encoding="utf-8")
+    api_client = (ROOT / "web/lib/api.ts").read_text(encoding="utf-8")
+
+    assert 'NEXT_PUBLIC_CONTROL_API_URL: "/"' in compose
+    assert '?? ""' in api_client
+    assert '?? "http://127.0.0.1:8000"' not in api_client
+
+
 def test_firmware_matrix_compiles_local_variant_as_ci_only() -> None:
     source = (ROOT / ".github/workflows/firmware-release.yml").read_text(
         encoding="utf-8"

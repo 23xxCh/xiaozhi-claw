@@ -2,7 +2,15 @@ param(
     [Parameter(Mandatory = $true)]
     [SecureString]$DeviceSecret,
 
-    [string]$Port = "COM6"
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^COM\d+$')]
+    [string]$Port,
+
+    [Parameter(Mandatory = $true)]
+    [string]$IdentityOffset,
+
+    [Parameter(Mandatory = $true)]
+    [string]$IdentitySize
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,13 +60,17 @@ try {
         "device_secret,data,string,$plainSecret"
     )
     Set-Content -LiteralPath $csvPath -Value $csv -Encoding utf8NoBOM
-    & $idfPython $generator generate $csvPath $binaryPath 0x4000
+    & $idfPython $generator generate $csvPath $binaryPath $IdentitySize
     if ($LASTEXITCODE -ne 0) {
         throw "Generating the per-device NVS partition failed."
     }
-    & $idfPython -m esptool --port $Port write_flash 0x800000 $binaryPath
+    & $idfPython -m esptool --port $Port write_flash $IdentityOffset $binaryPath
     if ($LASTEXITCODE -ne 0) {
         throw "Writing the per-device NVS partition to $Port failed."
+    }
+    & $idfPython -m esptool --port $Port verify_flash $IdentityOffset $binaryPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Verifying the per-device NVS partition on $Port failed."
     }
     Write-Output "Device identity written to $Port. The temporary plaintext partition was removed."
 }
