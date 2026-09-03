@@ -22,11 +22,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant:
-          - hensun-cam-selfhosted-v1
-          - hensun-cam-selfhosted-landscape-local-v1
-          - hensun-cam-official-v1
-          - hensun-cam-emote-lab-v1
+        include:
+          - variant: hensun-cam-selfhosted-v1
+            board: hensun/hensun-cam-pilot-v1
+          - variant: hensun-cam-selfhosted-landscape-local-v1
+            board: hensun/hensun-cam-pilot-v1
+          - variant: hensun-cam-official-v1
+            board: hensun/hensun-cam-pilot-v1
+          - variant: hensun-cam-emote-lab-v1
+            board: hensun/hensun-cam-pilot-v1
+          - variant: hensun-nocam-selfhosted-v1
+            board: hensun/hensun-nocam-pilot-v1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,7 +51,24 @@ jobs:
         working-directory: firmware/xiaozhi-esp32
         run: |
           source "$IDF_PATH/export.sh"
-          python scripts/build.py hensun/hensun-cam-pilot-v1 --name "${{ matrix.variant }}"
+          python scripts/build.py "${{ matrix.board }}" --name "${{ matrix.variant }}"
+      - name: Check non-CAM application and asset capacity
+        if: matrix.variant == 'hensun-nocam-selfhosted-v1'
+        working-directory: firmware/xiaozhi-esp32
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          limits = {
+              Path("build/xiaozhi.bin"): 0x3f0000,
+              Path("build/generated_assets.bin"): 0x7fc000,
+          }
+          for path, limit in limits.items():
+              size = path.stat().st_size
+              if size > limit:
+                  raise SystemExit(f"{path} exceeds partition: {size} > {limit}")
+              print(f"{path}: {size}/{limit} bytes")
+          PY
       - name: Produce signed-input manifest (not a signing operation)
         working-directory: firmware/xiaozhi-esp32
         run: |
@@ -53,6 +76,11 @@ jobs:
           cp build/xiaozhi.bin ci-artifacts/${{ matrix.variant }}.bin
           sha256sum ci-artifacts/${{ matrix.variant }}.bin > ci-artifacts/${{ matrix.variant }}.sha256
           printf '0x20000 %s.bin\n' "${{ matrix.variant }}" > ci-artifacts/${{ matrix.variant }}.flash-addresses.txt
+          if [ "${{ matrix.variant }}" = "hensun-nocam-selfhosted-v1" ]; then
+            cp build/generated_assets.bin ci-artifacts/${{ matrix.variant }}-assets.bin
+            sha256sum ci-artifacts/${{ matrix.variant }}-assets.bin >> ci-artifacts/${{ matrix.variant }}.sha256
+            printf '0x804000 %s-assets.bin\n' "${{ matrix.variant }}" >> ci-artifacts/${{ matrix.variant }}.flash-addresses.txt
+          fi
           printf '%s\n' \
             'CI compile proof only.' \
             'Not signed, not configured for a real endpoint, and not approved for field flashing.' \

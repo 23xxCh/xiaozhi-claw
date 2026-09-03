@@ -31,6 +31,19 @@ def test_firmware_matrix_compiles_local_variant_as_ci_only() -> None:
     assert "ci-only-${{ matrix.variant }}" in source
 
 
+def test_firmware_matrix_compiles_no_cam_and_checks_partition_capacity() -> None:
+    source = (ROOT / ".github/workflows/firmware-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "hensun-nocam-selfhosted-v1" in source
+    assert "hensun/hensun-nocam-pilot-v1" in source
+    assert 'python scripts/build.py "${{ matrix.board }}"' in source
+    assert "build/generated_assets.bin" in source
+    assert "0x3f0000" in source
+    assert "0x7fc000" in source
+
+
 def test_local_landscape_variant_keeps_bounded_multiturn_enabled() -> None:
     config = json.loads(
         (
