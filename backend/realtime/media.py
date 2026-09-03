@@ -13,6 +13,7 @@ class OpusPacketPacer:
         *,
         frame_duration_ms: int = 60,
         startup_burst_packets: int = 1,
+        on_first_send: Callable[[], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -21,10 +22,12 @@ class OpusPacketPacer:
         self._send = send
         self._frame_seconds = frame_duration_ms / 1000
         self._startup_burst_packets = startup_burst_packets
+        self._on_first_send = on_first_send
         self._clock = clock
         self._sleep = sleep
         self._first_send_at: float | None = None
         self._sent_packets = 0
+        self._first_delivery_reported = False
 
     async def send(self, packet: bytes) -> bool:
         now = self._clock()
@@ -43,6 +46,9 @@ class OpusPacketPacer:
                 0, packet_index - self._startup_burst_packets
             ) * self._frame_seconds
         delivered = await self._send(packet)
+        if delivered and not self._first_delivery_reported and self._on_first_send is not None:
+            self._first_delivery_reported = True
+            self._on_first_send()
         self._sent_packets = packet_index
         return delivered
 
@@ -54,7 +60,7 @@ class StreamingPcmToOpus:
         self.ffmpeg_path = ffmpeg_path
         self.process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._packets: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
+        self._packets: asyncio.Queue[bytes | BaseException | None] = asyncio.Queue(maxsize=100)
         self._buffer = bytearray()
         self._pending_packet = bytearray()
 
@@ -64,6 +70,8 @@ class StreamingPcmToOpus:
             "-hide_banner",
             "-loglevel",
             "error",
+            "-probesize",
+            "32",
             "-f",
             "s16le",
             "-ar",
@@ -100,10 +108,15 @@ class StreamingPcmToOpus:
 
     async def _read_output(self) -> None:
         assert self.process is not None and self.process.stdout is not None
-        while chunk := await self.process.stdout.read(4096):
-            self._buffer.extend(chunk)
-            await self._extract_pages()
-        await self._packets.put(None)
+        try:
+            while chunk := await self.process.stdout.read(4096):
+                self._buffer.extend(chunk)
+                await self._extract_pages()
+        except Exception as exc:
+            await self._packets.put(exc)
+            raise
+        else:
+            await self._packets.put(None)
 
     async def _extract_pages(self) -> None:
         while len(self._buffer) >= 27:
@@ -137,6 +150,8 @@ class StreamingPcmToOpus:
                 for buffered_packet in buffered:
                     yield buffered_packet
                 return
+            if isinstance(packet, BaseException):
+                raise packet
             buffered.append(packet)
         for buffered_packet in buffered:
             yield buffered_packet
@@ -144,6 +159,8 @@ class StreamingPcmToOpus:
             packet = await self._packets.get()
             if packet is None:
                 return
+            if isinstance(packet, BaseException):
+                raise packet
             yield packet
 
     async def finish(self) -> None:

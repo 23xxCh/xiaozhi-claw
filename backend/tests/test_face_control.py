@@ -74,6 +74,17 @@ def test_plain_text_is_streamed_when_model_omits_marker() -> None:
     assert [(event.kind, event.value) for event in first + tail] == [("text", "普通回复")]
 
 
+def test_first_optional_marker_is_accepted_after_a_sentence_boundary() -> None:
+    text, emotions = collect(
+        FaceControlParser(),
+        "先说第一句。",
+        "[[face:curious]]再问一个问题？",
+    )
+
+    assert "".join(text) == "先说第一句。再问一个问题？"
+    assert emotions == ["curious"]
+
+
 def test_all_supported_conversation_emotions_are_accepted() -> None:
     supported = {
         "neutral",

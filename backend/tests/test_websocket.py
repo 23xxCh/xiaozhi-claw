@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from unittest.mock import ANY
@@ -39,6 +40,9 @@ class FixedStreamingLlm:
 
 
 class MultiFrameTtsSession:
+    def __init__(self) -> None:
+        self.cancelled = False
+
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         del text
         yield b"opus-frame-1"
@@ -48,12 +52,15 @@ class MultiFrameTtsSession:
         return None
 
     async def cancel(self) -> None:
-        return None
+        self.cancelled = True
 
 
 class MultiFrameRealtimeProviders:
     mock = True
     llm = FixedStreamingLlm()
+
+    def __init__(self) -> None:
+        self.tts_sessions: list[MultiFrameTtsSession] = []
 
     async def open_asr(self) -> FixedAsrSession:
         return FixedAsrSession()
@@ -62,7 +69,9 @@ class MultiFrameRealtimeProviders:
         self, voice: str, speech_rate: float = 1.0
     ) -> MultiFrameTtsSession:
         del voice, speech_rate
-        return MultiFrameTtsSession()
+        session = MultiFrameTtsSession()
+        self.tts_sessions.append(session)
+        return session
 
 
 class HistoryCapturingLlm(FixedStreamingLlm):
@@ -119,6 +128,7 @@ class ServerEndpointAsrSession(FixedAsrSession):
 
 class ServerEndpointProviders(MultiFrameRealtimeProviders):
     def __init__(self) -> None:
+        super().__init__()
         self.opened_asr_sessions = 0
 
     async def open_asr(self) -> ServerEndpointAsrSession:
@@ -167,23 +177,36 @@ async def _conversation_records(client: TestClient, device_id: str):
         )
 
 
+def _receive_audio_until_stop(websocket) -> tuple[bytes, dict[str, object]]:
+    audio_parts: list[bytes] = []
+    sentence_count = 0
+    while True:
+        message = websocket.receive()
+        if message.get("bytes") is not None:
+            audio_parts.append(message["bytes"])
+            continue
+        payload = json.loads(message["text"])
+        if payload.get("type") == "tts" and payload.get("state") == "sentence_start":
+            sentence_count += 1
+            continue
+        if payload.get("type") == "tts" and payload.get("state") == "stop":
+            assert sentence_count >= 1
+            assert audio_parts
+            return b"".join(audio_parts), payload
+
+
 def _receive_mock_turn(websocket) -> tuple[dict[str, object], bytes]:
     stt = websocket.receive_json()
     assert stt["type"] == "stt"
     thinking = websocket.receive_json()
     assert thinking["type"] == "llm"
-    reply_emotion = websocket.receive_json()
-    assert reply_emotion["type"] == "llm"
-    assert stt["turn_id"] == thinking["turn_id"] == reply_emotion["turn_id"]
     start = websocket.receive_json()
     assert start["state"] == "start"
     assert start["reply_id"]
     assert start["turn_id"] == stt["turn_id"]
+    assert stt["turn_id"] == thinking["turn_id"]
     websocket.send_json({"type": "tts", "state": "ready", "reply_id": start["reply_id"]})
-    sentence = websocket.receive_json()
-    assert sentence["state"] == "sentence_start"
-    audio = websocket.receive_bytes()
-    stop = websocket.receive_json()
+    audio, stop = _receive_audio_until_stop(websocket)
     assert stop["type"] == "tts"
     assert stop["state"] == "stop"
     assert stop["reply_id"] == start["reply_id"]
@@ -258,6 +281,8 @@ def test_device_stage_events_are_bounded_diagnostics(
 def test_strict_playback_ready_timeout_aborts_before_audio(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
+    providers = MultiFrameRealtimeProviders()
+    client.app.state.realtime_providers = providers
     owned = provision_owned_device(client, admin_headers, serial="HENSUN-STRICT-READY")
     with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
         websocket.send_json(
@@ -273,11 +298,19 @@ def test_strict_playback_ready_timeout_aborts_before_audio(
         websocket.send_json({"type": "listen", "state": "stop"})
         assert websocket.receive_json()["type"] == "stt"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["type"] == "llm"
         assert websocket.receive_json()["state"] == "start"
+        stop = websocket.receive_json()
+        assert stop["type"] == "tts"
+        assert stop["state"] == "stop"
+        assert stop["turn_id"]
+        assert stop["reply_id"]
         error = websocket.receive_json()
         assert error["type"] == "error"
         assert error["code"] == "tts-ready-timeout"
+
+    assert not client.app.state.device_connections._connections
+    assert len(providers.tts_sessions) == 1
+    assert providers.tts_sessions[0].cancelled
 
 
 def test_strict_playback_drained_timeout_reports_stable_error(
@@ -298,8 +331,8 @@ def test_strict_playback_drained_timeout_reports_stable_error(
         websocket.send_json({"type": "listen", "state": "stop"})
         assert websocket.receive_json()["type"] == "stt"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["type"] == "llm"
         start = websocket.receive_json()
+        assert start["state"] == "start"
         websocket.send_json(
             {
                 "type": "tts",
@@ -308,9 +341,8 @@ def test_strict_playback_drained_timeout_reports_stable_error(
                 "reply_id": start["reply_id"],
             }
         )
-        assert websocket.receive_json()["state"] == "sentence_start"
-        websocket.receive_bytes()
-        assert websocket.receive_json()["state"] == "stop"
+        _, stop = _receive_audio_until_stop(websocket)
+        assert stop["state"] == "stop"
         error = websocket.receive_json()
         assert error["type"] == "error"
         assert error["code"] == "tts-drained-timeout"
@@ -371,7 +403,6 @@ def test_device_receives_each_streamed_audio_frame(
 
         assert websocket.receive_json()["type"] == "stt"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["type"] == "llm"
         start = websocket.receive_json()
         assert start["state"] == "start"
         websocket.send_json(
@@ -379,6 +410,9 @@ def test_device_receives_each_streamed_audio_frame(
         )
         assert websocket.receive_json()["state"] == "sentence_start"
         assert websocket.receive_bytes() == b"opus-frame-1"
+        reply_emotion = websocket.receive_json()
+        assert reply_emotion["type"] == "llm"
+        assert reply_emotion["emotion"] == "happy"
         assert websocket.receive_bytes() == b"opus-frame-2"
         stop = websocket.receive_json()
         assert stop["state"] == "stop"
@@ -505,7 +539,6 @@ def test_server_vad_finishes_turn_without_device_listen_stop(
 
         assert websocket.receive_json()["type"] == "stt"
         assert websocket.receive_json()["type"] == "llm"
-        assert websocket.receive_json()["type"] == "llm"
         start = websocket.receive_json()
         assert start["state"] == "start"
         websocket.send_json(
@@ -513,6 +546,9 @@ def test_server_vad_finishes_turn_without_device_listen_stop(
         )
         assert websocket.receive_json()["state"] == "sentence_start"
         assert websocket.receive_bytes() == b"opus-frame-1"
+        reply_emotion = websocket.receive_json()
+        assert reply_emotion["type"] == "llm"
+        assert reply_emotion["emotion"] == "happy"
         assert websocket.receive_bytes() == b"opus-frame-2"
         stop = websocket.receive_json()
         websocket.send_json(
@@ -654,6 +690,10 @@ def test_xiaozhi_bootstrap_returns_six_digit_claim_code_for_unclaimed_device(
     assert bootstrap.json()["activation"]["code"].isdigit()
     assert len(bootstrap.json()["activation"]["code"]) == 6
     assert bootstrap.json()["activation"]["timeout_ms"] == 600_000
+    assert bootstrap.json()["activation"]["claim_url"] == (
+        client.app.state.settings.web_app_url.rstrip("/") + "/claim#code="
+        + bootstrap.json()["activation"]["code"]
+    )
 
 
 def test_xiaocan_shut_up_enters_standby_without_goodbye(

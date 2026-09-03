@@ -52,6 +52,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await dispatcher.stop()
         await reaper.stop()
+        close_realtime_providers = getattr(
+            app.state.realtime_providers, "aclose", None
+        )
+        if close_realtime_providers is not None:
+            await close_realtime_providers()
         await engine.dispose()
 
 

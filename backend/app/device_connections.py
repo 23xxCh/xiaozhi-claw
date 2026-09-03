@@ -48,6 +48,17 @@ class DeviceConnectionManager:
             if current is lease:
                 self._connections.pop(lease.serial_number, None)
 
+    async def retire(self, lease: ConnectionLease, *, code: int, reason: str) -> bool:
+        """Remove and close a lease only when it is still the active generation."""
+        async with self._lock:
+            current = self._connections.get(lease.serial_number)
+            if current is not lease:
+                return False
+            self._connections.pop(lease.serial_number, None)
+        with contextlib.suppress(RuntimeError):
+            await lease.websocket.close(code=code, reason=reason)
+        return True
+
     async def is_current(self, lease: ConnectionLease) -> bool:
         async with self._lock:
             return self._connections.get(lease.serial_number) is lease

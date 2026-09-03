@@ -5,7 +5,8 @@ import logging
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -59,7 +60,7 @@ from .emotion import EmotionRouter
 from .face_control import SUPPORTED_FACE_EMOTIONS, FaceControlEvent, FaceControlParser
 from .mcp import DeviceMcpClient, DeviceMcpError
 from .media import OpusPacketPacer, StreamingPcmToOpus
-from .playback import PlaybackCoordinator
+from .playback import PlaybackCoordinator, PlaybackReadyTimeout
 from .providers import (
     RealtimeAsrSession,
     RealtimeProviderBundle,
@@ -70,8 +71,9 @@ from .reply_policy import build_voice_reply_policy
 from .tools import ToolRegistry, create_search_provider
 
 logger = logging.getLogger(__name__)
+telemetry_logger = logging.getLogger("uvicorn.error")
 MAX_UTTERANCE_BYTES = 1024 * 1024
-MAX_CONSECUTIVE_NOISE_RETRIES = 1
+PLAYBACK_STARTUP_PACKETS = 5
 
 
 _SPOKEN_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
@@ -84,6 +86,47 @@ _SPOKEN_STAGE_DIRECTION_RE = re.compile(
 )
 _LEADING_WAKE_NAME_RE = re.compile(r"^(?:你好小灿|小灿)[，,\s]*")
 _NON_SPEECH_FILLER_STRIP_RE = re.compile(r"[\s，。！？!?、…,.~～]+")
+
+
+@dataclass
+class VoiceTurnTimeline:
+    """In-memory per-turn timing only; never stores transcript or audio."""
+
+    turn_id: str
+    started_at: float
+    clock: Callable[[], float] = time.perf_counter
+    reply_id: str | None = None
+    marks: dict[str, float] = field(default_factory=dict)
+
+    def mark(self, stage: str, *, at: float | None = None) -> None:
+        self.marks.setdefault(stage, self.clock() if at is None else at)
+
+    def bind_reply(self, reply_id: str) -> None:
+        self.reply_id = reply_id
+
+    def mark_device_stage(
+        self,
+        stage: str,
+        *,
+        turn_id: str,
+        reply_id: str,
+        at: float | None = None,
+    ) -> bool:
+        if (
+            stage != "speaker_pcm_started"
+            or turn_id != self.turn_id
+            or not self.reply_id
+            or reply_id != self.reply_id
+        ):
+            return False
+        self.mark("device_speaker_started", at=at)
+        return True
+
+    def elapsed_ms(self, stage: str) -> int | None:
+        marked_at = self.marks.get(stage)
+        if marked_at is None:
+            return None
+        return round((marked_at - self.started_at) * 1000)
 _NON_SPEECH_FILLER_CHARS = frozenset("嗯啊呃额唔哼哦")
 
 
@@ -104,18 +147,6 @@ def is_non_speech_filler(text: str) -> bool:
     return bool(normalized) and len(normalized) <= 6 and all(
         character in _NON_SPEECH_FILLER_CHARS for character in normalized
     )
-
-
-@dataclass
-class _NoiseTurnBudget:
-    consecutive_discards: int = 0
-
-    def consume_retry(self) -> bool:
-        self.consecutive_discards += 1
-        return self.consecutive_discards <= MAX_CONSECUTIVE_NOISE_RETRIES
-
-    def reset(self) -> None:
-        self.consecutive_discards = 0
 
 
 @dataclass(frozen=True)
@@ -165,8 +196,8 @@ class SentenceBuffer:
     def __init__(
         self,
         max_chars: int = 32,
-        min_clause_chars: int = 16,
-        first_chunk_chars: int = 16,
+        min_clause_chars: int = 8,
+        first_chunk_chars: int = 8,
     ) -> None:
         self._text = ""
         self._max_chars = max_chars
@@ -358,16 +389,9 @@ async def _send_turn_error_and_reset(
     code: str,
     message: str,
 ) -> None:
-    """End a failed turn through the same handshake as a zero-audio reply."""
+    """Report a pre-playback turn failure without inventing an empty reply."""
     await _send_error(websocket, lease, code, message)
-    reply_id = await playback.start(websocket, lease, turn_id)
-    await playback.stop(
-        websocket,
-        lease,
-        reply_id,
-        turn_id,
-        wait_for_drain=True,
-    )
+    playback.clear()
 
 
 async def _receive_device_message(
@@ -521,17 +545,67 @@ async def _speak_sentence(
     encoder: StreamingPcmToOpus | None,
     direct_pacer: OpusPacketPacer,
     turn_id: str,
+    on_first_pcm: Callable[[], None] | None = None,
+) -> None:
+    await _send_sentence_start(websocket, lease, sentence, turn_id)
+    await _synthesize_sentence_audio(
+        sentence,
+        tts,
+        encoder,
+        direct_pacer,
+        on_first_pcm=on_first_pcm,
+    )
+
+
+async def _send_sentence_start(
+    websocket: WebSocket,
+    lease: ConnectionLease,
+    sentence: str,
+    turn_id: str,
 ) -> None:
     await websocket.app.state.device_connections.send_json_for_lease(
         lease,
         {"type": "tts", "state": "sentence_start", "turn_id": turn_id, "text": sentence},
     )
+
+
+async def _synthesize_sentence_audio(
+    sentence: str,
+    tts: RealtimeTtsSession,
+    encoder: StreamingPcmToOpus | None,
+    direct_pacer: OpusPacketPacer,
+    *,
+    on_first_pcm: Callable[[], None] | None = None,
+) -> None:
+    first_pcm_received = False
     async for audio in tts.synthesize(sentence):
+        if audio and not first_pcm_received:
+            first_pcm_received = True
+            if on_first_pcm is not None:
+                on_first_pcm()
         if encoder is None:
             if not await direct_pacer.send(audio):
                 return
         else:
             await encoder.write(audio)
+
+
+async def _cleanup_audio_pipeline(
+    tts: RealtimeTtsSession | None,
+    encoder: StreamingPcmToOpus | None,
+    packet_task: asyncio.Task[None] | None,
+) -> None:
+    if encoder is not None:
+        with contextlib.suppress(Exception):
+            await encoder.cancel()
+    if packet_task is not None:
+        if not packet_task.done():
+            packet_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await packet_task
+    if tts is not None:
+        with contextlib.suppress(Exception):
+            await tts.cancel()
 
 
 async def _speak_fixed_message(
@@ -541,6 +615,7 @@ async def _speak_fixed_message(
     speech_rate: float,
     message: str,
     playback: PlaybackCoordinator,
+    emotion: str = "neutral",
 ) -> bool:
     """Speak a product-owned policy message without invoking the LLM."""
     serial = lease.serial_number
@@ -552,16 +627,31 @@ async def _speak_fixed_message(
     reply_id: str | None = None
     turn_id = str(uuid.uuid4())
     interrupted = False
-    pacer = OpusPacketPacer(
-        lambda packet: websocket.app.state.device_connections.send_bytes_for_lease(
+    emotion_sent = False
+
+    async def send_audio_packet(packet: bytes) -> bool:
+        nonlocal emotion_sent
+        delivered = await websocket.app.state.device_connections.send_bytes_for_lease(
             lease, packet
-        ),
-        startup_burst_packets=5,
+        )
+        if delivered and not emotion_sent:
+            await websocket.app.state.device_connections.send_json_for_lease(
+                lease,
+                {"type": "llm", "emotion": emotion, "turn_id": turn_id},
+            )
+            emotion_sent = True
+        return delivered
+
+    pacer = OpusPacketPacer(
+        send_audio_packet,
+        startup_burst_packets=PLAYBACK_STARTUP_PACKETS,
     )
 
     async def send_packets() -> None:
         assert encoder is not None
-        async for packet in encoder.packets(prebuffer_packets=5):
+        async for packet in encoder.packets(
+            prebuffer_packets=PLAYBACK_STARTUP_PACKETS
+        ):
             if not await pacer.send(packet):
                 return
 
@@ -599,13 +689,7 @@ async def _speak_fixed_message(
     except Exception:
         logger.exception("fixed policy prompt failed for device %s", serial)
     finally:
-        if tts is not None:
-            with contextlib.suppress(Exception):
-                await tts.cancel()
-        if encoder is not None and packet_task is not None and not packet_task.done():
-            with contextlib.suppress(Exception):
-                await encoder.cancel()
-            packet_task.cancel()
+        await _cleanup_audio_pipeline(tts, encoder, packet_task)
         if reply_id is not None:
             await playback.stop(
                 websocket,
@@ -629,15 +713,15 @@ async def _process_turn(
     audio_frames: list[bytes],
     audio_duration_ms: int,
     history: list[dict[str, str]],
-    turn_started: float,
+    timeline: VoiceTurnTimeline,
     playback: PlaybackCoordinator,
-    noise_turn_budget: _NoiseTurnBudget,
     user_exit_event: asyncio.Event,
     telemetry_tasks: set[asyncio.Task[None]],
     mcp_client: DeviceMcpClient | None = None,
     strip_wake_name: bool = False,
 ) -> bool:
     serial = lease.serial_number
+    turn_started = timeline.started_at
     providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
     fallback: ProviderBundle | None = websocket.app.state.fallback_providers
     router = EmotionRouter()
@@ -655,7 +739,9 @@ async def _process_turn(
         return await tool_registry.execute(name, arguments)
 
     tts: RealtimeTtsSession | None = None
+    tts_open_task: asyncio.Task[RealtimeTtsSession] | None = None
     encoder: StreamingPcmToOpus | None = None
+    encoder_start_task: asyncio.Task[StreamingPcmToOpus] | None = None
     packet_task: asyncio.Task[None] | None = None
     tts_started = False
     batch_tts = False
@@ -664,66 +750,147 @@ async def _process_turn(
     reply_id: str | None = None
     interrupted = False
     playback_stopped = False
-    pacer = OpusPacketPacer(
-        lambda packet: websocket.app.state.device_connections.send_bytes_for_lease(
+    pending_reply_emotion: str | None = None
+    sent_reply_emotion: str | None = None
+
+    def on_first_audio_packet() -> None:
+        nonlocal first_audio_latency_ms
+        if first_audio_latency_ms is not None:
+            return
+        timeline.mark("gateway_first_packet")
+        first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+        telemetry_logger.info(
+            "tts first packet sent serial=%s lease_generation=%d turn_id=%s "
+            "reply_id=%s first_audio_ms=%d",
+            serial,
+            lease.generation,
+            turn_id,
+            reply_id or "",
+            first_audio_latency_ms,
+        )
+
+    async def send_reply_audio_packet(packet: bytes) -> bool:
+        nonlocal sent_reply_emotion
+        delivered = await websocket.app.state.device_connections.send_bytes_for_lease(
             lease, packet
-        ),
-        startup_burst_packets=5,
+        )
+        if (
+            delivered
+            and pending_reply_emotion is not None
+            and pending_reply_emotion != sent_reply_emotion
+        ):
+            await websocket.app.state.device_connections.send_json_for_lease(
+                lease,
+                {
+                    "type": "llm",
+                    "emotion": pending_reply_emotion,
+                    "turn_id": turn_id,
+                },
+            )
+            sent_reply_emotion = pending_reply_emotion
+        return delivered
+
+    pacer = OpusPacketPacer(
+        send_reply_audio_packet,
+        startup_burst_packets=PLAYBACK_STARTUP_PACKETS,
+        on_first_send=on_first_audio_packet,
     )
 
     async def send_packets() -> None:
-        nonlocal first_audio_latency_ms
         assert encoder is not None
-        async for packet in encoder.packets(prebuffer_packets=5):
-            if first_audio_latency_ms is None:
-                first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+        async for packet in encoder.packets(
+            prebuffer_packets=PLAYBACK_STARTUP_PACKETS
+        ):
             if not await pacer.send(packet):
                 return
 
     try:
         asr_started = time.perf_counter()
+        transcription: TranscriptionResult | None = None
         try:
             transcription = await asr.finish()
+            asr_finished_at = time.perf_counter()
+            timeline.mark(
+                "asr_transcription_completed",
+                at=transcription.transcription_completed_at or asr_finished_at,
+            )
+            timeline.mark(
+                "asr_session_finished",
+                at=transcription.session_finished_at or asr_finished_at,
+            )
         except Exception as exc:
             with contextlib.suppress(Exception):
                 await asr.cancel()
-            if fallback is None:
-                await _send_turn_error_and_reset(
-                    websocket,
-                    lease,
-                    playback,
-                    turn_id,
-                    "asr-realtime-invalid",
-                    "realtime speech recognition is unavailable",
-                )
-                return False
-            error_code = getattr(exc, "code", "unknown")
-            logger.warning(
-                "realtime ASR failed for %s with %s; using batch fallback",
-                serial,
-                error_code,
-            )
-            fallback_operations.add("asr")
-            try:
-                transcript = await fallback.speech.transcribe(audio_frames)
-            except Exception as fallback_exc:
-                fallback_error_code = getattr(fallback_exc, "code", "unknown")
+            asr_error: Exception | None = exc
+            if isinstance(asr, _UnavailableRealtimeAsrSession):
+                retry_asr: RealtimeAsrSession | None = None
+                try:
+                    retry_asr = await providers.open_asr()
+                    for frame in audio_frames:
+                        await retry_asr.send_audio(frame)
+                    transcription = await retry_asr.finish()
+                except Exception as retry_exc:
+                    asr_error = retry_exc
+                    if retry_asr is not None:
+                        with contextlib.suppress(Exception):
+                            await retry_asr.cancel()
+                else:
+                    asr_error = None
+                    asr_finished_at = time.perf_counter()
+                    timeline.mark(
+                        "asr_transcription_completed",
+                        at=transcription.transcription_completed_at or asr_finished_at,
+                    )
+                    timeline.mark(
+                        "asr_session_finished",
+                        at=transcription.session_finished_at or asr_finished_at,
+                    )
+                    logger.info(
+                        "realtime ASR reconnect succeeded for %s after replaying %d frames",
+                        serial,
+                        len(audio_frames),
+                    )
+            if asr_error is not None:
+                if fallback is None:
+                    await _send_turn_error_and_reset(
+                        websocket,
+                        lease,
+                        playback,
+                        turn_id,
+                        "asr-realtime-invalid",
+                        "realtime speech recognition is unavailable",
+                    )
+                    return False
+                error_code = getattr(asr_error, "code", "unknown")
                 logger.warning(
-                    "batch ASR fallback failed for %s with %s",
+                    "realtime ASR failed for %s with %s; using batch fallback",
                     serial,
-                    fallback_error_code,
+                    error_code,
                 )
-                await _send_turn_error_and_reset(
-                    websocket,
-                    lease,
-                    playback,
-                    turn_id,
-                    "asr-fallback-failed",
-                    "speech recognition is temporarily unavailable",
-                )
-                return False
-            detected_emotion = getattr(fallback.speech, "last_emotion", None) or "neutral"
-            transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
+                fallback_operations.add("asr")
+                try:
+                    transcript = await fallback.speech.transcribe(audio_frames)
+                except Exception as fallback_exc:
+                    fallback_error_code = getattr(fallback_exc, "code", "unknown")
+                    logger.warning(
+                        "batch ASR fallback failed for %s with %s",
+                        serial,
+                        fallback_error_code,
+                    )
+                    await _send_turn_error_and_reset(
+                        websocket,
+                        lease,
+                        playback,
+                        turn_id,
+                        "asr-fallback-failed",
+                        "speech recognition is temporarily unavailable",
+                    )
+                    return False
+                detected_emotion = getattr(fallback.speech, "last_emotion", None) or "neutral"
+                transcription = TranscriptionResult(text=transcript, emotion=detected_emotion)
+                timeline.mark("asr_transcription_completed")
+                timeline.mark("asr_session_finished")
+        assert transcription is not None
         asr_latency_ms = int((time.perf_counter() - asr_started) * 1000)
         transcript = transcription.text.strip()
         if strip_wake_name:
@@ -735,18 +902,14 @@ async def _process_turn(
             # alert face. Never reject a meaningful transcript solely because
             # its audio is shorter than one second (for example "好" or "几点").
             logger.info("discarded ASR non-speech serial=%s code=asr-no-speech", serial)
-            if noise_turn_budget.consume_retry():
-                await websocket.app.state.device_connections.send_json_for_lease(
-                    lease,
-                    {"type": "listen", "state": "resume", "turn_id": turn_id},
-                )
-            else:
-                await websocket.app.state.device_connections.send_json_for_lease(
-                    lease,
-                    {"type": "listen", "state": "standby", "turn_id": turn_id},
-                )
+            # The device owns the bounded follow-up deadline. ASR filler can be
+            # caused by speaker tail or room noise and must never shorten that
+            # window by forcing the device directly into standby.
+            await websocket.app.state.device_connections.send_json_for_lease(
+                lease,
+                {"type": "listen", "state": "resume", "turn_id": turn_id},
+            )
             return False
-        noise_turn_budget.reset()
         await websocket.app.state.device_connections.send_json_for_lease(
             lease,
             {
@@ -799,11 +962,12 @@ async def _process_turn(
             snapshot.system_prompt.rstrip()
             + "\n\n"
             + reply_policy.context
-            + "\n不要输出 Markdown、网址或舞台动作。回复正文前必须先输出且只输出一个"
-            "表情控制标记，格式为 [[face:emotion]]，emotion 只能是 "
+            + "\n不要输出 Markdown、网址或舞台动作。首句表情由系统自动设置，无需在正文前"
+            "输出表情标记。如果完整句子结束后情绪明显变化，可以输出一个可选标记，"
+            "格式为 [[face:emotion]]，emotion 只能是 "
             + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))
-            + "。如果第二句情绪明显变化，可以在第一句完整结束后再输出一个标记；"
-            "整次回复最多两个标记，标记之外不要输出其他内部标签。"
+            + "。标记只能出现在完整句子的边界；整次回复最多两个标记，"
+            "标记之外不要输出其他内部标签。"
         )
         context_memories, context_summaries = await _load_context_sources(
             websocket.app.state.session_factory,
@@ -835,6 +999,31 @@ async def _process_turn(
             temperature=snapshot.llm_temperature,
             tools=tool_schemas or None,
         )
+        # Establish the provider TTS session while the LLM is producing its
+        # first sentence. The device stays in thinking state until real PCM is
+        # sent, so this hides connection setup without faking speech.
+        async def open_tts_with_timing() -> RealtimeTtsSession:
+            nonlocal reply_id
+            opened_tts = await providers.open_tts(
+                snapshot.voice, snapshot.tts_speech_rate
+            )
+            timeline.mark("tts_connected")
+            if reply_id is None:
+                reply_id = await playback.initiate(websocket, lease, turn_id)
+                timeline.bind_reply(reply_id)
+            return opened_tts
+
+        async def start_encoder_with_timing() -> StreamingPcmToOpus:
+            opened_encoder = StreamingPcmToOpus(
+                websocket.app.state.settings.ffmpeg_path
+            )
+            await opened_encoder.start()
+            timeline.mark("encoder_ready")
+            return opened_encoder
+
+        tts_open_task = asyncio.create_task(open_tts_with_timing())
+        if not providers.mock:
+            encoder_start_task = asyncio.create_task(start_encoder_with_timing())
         reply_parts: list[str] = []
         spoken_parts: list[str] = []
         spoken_chars = 0
@@ -843,7 +1032,7 @@ async def _process_turn(
         first_sentence_at: float | None = None
         tts_started_at: float | None = None
         pending_reply_emotion = emotion.reply_emotion
-        sent_reply_emotion: str | None = None
+        playback_ready = False
 
         def apply_face_event(event: FaceControlEvent) -> None:
             nonlocal pending_reply_emotion
@@ -854,46 +1043,45 @@ async def _process_turn(
             nonlocal encoder, first_sentence_at, packet_task, tts, tts_started
             nonlocal batch_tts, first_audio_latency_ms, tts_started_at, reply_id
             nonlocal spoken_chars, spoken_segments
-            nonlocal sent_reply_emotion
+            nonlocal playback_ready
+            first_realtime_segment = False
             sentence = sanitize_spoken_text(sentence)
             if not sentence or spoken_segments >= reply_policy.max_spoken_segments:
                 return
             sentence = sentence[: reply_policy.max_spoken_chars - spoken_chars].strip()
             if not sentence:
                 return
-            if pending_reply_emotion != sent_reply_emotion:
-                await websocket.app.state.device_connections.send_json_for_lease(
-                    lease,
-                    {
-                        "type": "llm",
-                        "emotion": pending_reply_emotion,
-                        "turn_id": turn_id,
-                    },
-                )
-                sent_reply_emotion = pending_reply_emotion
+            timeline.mark("first_speakable_text")
+            if first_sentence_at is None:
+                first_sentence_at = time.perf_counter()
             if tts is None and not batch_tts:
                 try:
-                    tts = await providers.open_tts(snapshot.voice, snapshot.tts_speech_rate)
+                    tts = await tts_open_task
                 except Exception:
                     if fallback is None:
                         raise
                     logger.warning("realtime TTS failed for %s; using batch fallback", serial)
                     fallback_operations.add("tts")
                     batch_tts = True
-                reply_id = await playback.start(websocket, lease, turn_id)
+                if reply_id is None:
+                    reply_id = await playback.initiate(websocket, lease, turn_id)
+                    timeline.bind_reply(reply_id)
                 if tts is not None and not providers.mock:
-                    encoder = StreamingPcmToOpus(websocket.app.state.settings.ffmpeg_path)
-                    await encoder.start()
-                    packet_task = asyncio.create_task(send_packets())
+                    assert encoder_start_task is not None
+                    encoder = await encoder_start_task
+                    first_realtime_segment = True
                 tts_started = True
                 tts_started_at = time.perf_counter()
-            if first_sentence_at is None:
-                first_sentence_at = time.perf_counter()
             spoken_parts.append(sentence)
             spoken_chars += len(sentence)
             spoken_segments += 1
             if batch_tts:
                 assert fallback is not None
+                assert reply_id is not None
+                if not playback_ready:
+                    await playback.ensure_ready(websocket, lease, reply_id, turn_id)
+                    timeline.mark("device_playback_ready")
+                    playback_ready = True
                 await websocket.app.state.device_connections.send_json_for_lease(
                     lease,
                     {
@@ -904,13 +1092,56 @@ async def _process_turn(
                     },
                 )
                 for packet in await fallback.speech.synthesize(sentence):
-                    if first_audio_latency_ms is None:
-                        first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
+                    if packet:
+                        timeline.mark("tts_first_pcm")
                     if not await pacer.send(packet):
                         return
             else:
                 assert tts is not None
-                await _speak_sentence(websocket, lease, sentence, tts, encoder, pacer, turn_id)
+                if first_realtime_segment:
+                    assert encoder is not None and reply_id is not None
+                    synthesis_task = asyncio.create_task(
+                        _synthesize_sentence_audio(
+                            sentence,
+                            tts,
+                            encoder,
+                            pacer,
+                            on_first_pcm=lambda: timeline.mark("tts_first_pcm"),
+                        )
+                    )
+                    try:
+                        await playback.ensure_ready(
+                            websocket, lease, reply_id, turn_id
+                        )
+                        timeline.mark("device_playback_ready")
+                        playback_ready = True
+                        await _send_sentence_start(websocket, lease, sentence, turn_id)
+                        packet_task = asyncio.create_task(send_packets())
+                        await synthesis_task
+                    except BaseException:
+                        if not synthesis_task.done():
+                            synthesis_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await synthesis_task
+                        raise
+                else:
+                    assert reply_id is not None
+                    if not playback_ready:
+                        await playback.ensure_ready(
+                            websocket, lease, reply_id, turn_id
+                        )
+                        timeline.mark("device_playback_ready")
+                        playback_ready = True
+                    await _speak_sentence(
+                        websocket,
+                        lease,
+                        sentence,
+                        tts,
+                        encoder,
+                        pacer,
+                        turn_id,
+                        on_first_pcm=lambda: timeline.mark("tts_first_pcm"),
+                    )
 
         if safety.fixed_response:
             reply_parts.append(safety.fixed_response)
@@ -921,6 +1152,7 @@ async def _process_turn(
                     llm_request,
                     tool_executor=execute_tool if tool_schemas else None,
                 ):
+                    timeline.mark("llm_first_token")
                     for face_event in face_parser.feed(token):
                         apply_face_event(face_event)
                         if face_event.kind != "text":
@@ -944,8 +1176,10 @@ async def _process_turn(
                         if output_safety.fixed_response and output_safety.category != "user-exit":
                             sentence = output_safety.fixed_response
                         await speak(sentence)
+            except PlaybackReadyTimeout:
+                raise
             except Exception:
-                if fallback is None or spoken_parts:
+                if fallback is None or spoken_parts or tts_started or tts is not None:
                     raise
                 logger.warning("streaming LLM failed for %s; using batch fallback", serial)
                 fallback_operations.add("llm")
@@ -962,14 +1196,27 @@ async def _process_turn(
                 await speak(trailing)
 
         if not tts_started or not reply_parts:
-            await _send_turn_error_and_reset(
-                websocket,
-                lease,
-                playback,
-                turn_id,
-                "empty-reply",
-                "AI returned an empty response",
-            )
+            if reply_id is not None and playback.reply_id == reply_id:
+                await playback.stop(
+                    websocket,
+                    lease,
+                    reply_id,
+                    turn_id,
+                    wait_for_drain=False,
+                )
+                playback_stopped = True
+                await _send_error(
+                    websocket, lease, "empty-reply", "AI returned an empty response"
+                )
+            else:
+                await _send_turn_error_and_reset(
+                    websocket,
+                    lease,
+                    playback,
+                    turn_id,
+                    "empty-reply",
+                    "AI returned an empty response",
+                )
             return False
 
         if tts is not None:
@@ -981,8 +1228,13 @@ async def _process_turn(
         if providers.mock and first_audio_latency_ms is None:
             first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
 
+        reply = "".join(spoken_parts).strip()
+        llm_latency_ms = int(((first_sentence_at or time.perf_counter()) - llm_started) * 1000)
+        tts_latency_ms = int((time.perf_counter() - (tts_started_at or llm_started)) * 1000)
+
         assert reply_id is not None
-        drained = await playback.stop(
+        drain_started = time.perf_counter()
+        drain_outcome = await playback.stop(
             websocket,
             lease,
             reply_id,
@@ -990,7 +1242,38 @@ async def _process_turn(
             wait_for_drain=True,
         )
         playback_stopped = True
-        if not drained:
+        logger.info(
+            "voice turn drain result serial=%s turn_id=%s delivered=%s "
+            "acknowledged=%s compatibility_accepted=%s wait_ms=%d",
+            serial,
+            turn_id,
+            drain_outcome.delivered,
+            drain_outcome.acknowledged,
+            drain_outcome.compatibility_accepted,
+            int((time.perf_counter() - drain_started) * 1000),
+        )
+        telemetry_logger.info(
+            "voice turn timeline serial=%s turn_id=%s reply_id=%s "
+            "asr_transcription_completed_ms=%s asr_session_finished_ms=%s "
+            "llm_first_token_ms=%s first_speakable_text_ms=%s "
+            "tts_connected_ms=%s device_playback_ready_ms=%s "
+            "tts_first_pcm_ms=%s gateway_first_packet_ms=%s "
+            "device_speaker_started_ms=%s fallbacks=%d",
+            serial,
+            turn_id,
+            reply_id,
+            timeline.elapsed_ms("asr_transcription_completed"),
+            timeline.elapsed_ms("asr_session_finished"),
+            timeline.elapsed_ms("llm_first_token"),
+            timeline.elapsed_ms("first_speakable_text"),
+            timeline.elapsed_ms("tts_connected"),
+            timeline.elapsed_ms("device_playback_ready"),
+            timeline.elapsed_ms("tts_first_pcm"),
+            timeline.elapsed_ms("gateway_first_packet"),
+            timeline.elapsed_ms("device_speaker_started"),
+            len(fallback_operations),
+        )
+        if not drain_outcome:
             await _send_error(
                 websocket,
                 lease,
@@ -998,10 +1281,6 @@ async def _process_turn(
                 "audio playback did not finish cleanly",
             )
             return False
-
-        reply = "".join(spoken_parts).strip()
-        llm_latency_ms = int(((first_sentence_at or time.perf_counter()) - llm_started) * 1000)
-        tts_latency_ms = int((time.perf_counter() - (tts_started_at or llm_started)) * 1000)
         history.extend(
             [
                 {"role": "user", "content": transcript},
@@ -1056,21 +1335,25 @@ async def _process_turn(
     except asyncio.CancelledError:
         interrupted = True
         await asr.cancel()
-        if tts is not None:
-            await tts.cancel()
-        if encoder is not None:
-            await encoder.cancel()
-        if packet_task is not None:
-            packet_task.cancel()
         raise
-    except TimeoutError as exc:
-        code = str(exc) or "tts-ready-timeout"
-        logger.warning("voice turn timed out for device %s code=%s", serial, code)
-        await _send_error(websocket, lease, code, "audio playback handshake timed out")
+    except PlaybackReadyTimeout:
+        code = "tts-ready-timeout"
+        logger.warning(
+            "voice turn timed out for device %s lease_generation=%d code=%s",
+            serial,
+            lease.generation,
+            code,
+        )
+        await _send_error(
+            websocket, lease, code, "audio playback handshake timed out"
+        )
+        await websocket.app.state.device_connections.retire(
+            lease, code=1011, reason="tts ready timeout"
+        )
         return False
     except Exception:
         logger.exception("voice turn failed for device %s", serial)
-        if tts_started:
+        if reply_id is not None or tts_started:
             await _send_error(websocket, lease, "ai-unavailable", "AI response unavailable")
         else:
             await _send_turn_error_and_reset(
@@ -1083,14 +1366,46 @@ async def _process_turn(
             )
         return False
     finally:
-        if tts_started and reply_id is not None and not playback_stopped:
-            await playback.stop(
-                websocket,
-                lease,
-                reply_id,
-                turn_id,
-                wait_for_drain=not interrupted,
-            )
+        if reply_id is not None and not playback_stopped and playback.reply_id == reply_id:
+            with contextlib.suppress(Exception):
+                await playback.stop(
+                    websocket,
+                    lease,
+                    reply_id,
+                    turn_id,
+                    wait_for_drain=not interrupted,
+                )
+            playback_stopped = True
+        await _cleanup_audio_pipeline(tts, encoder, packet_task)
+        if encoder is None and encoder_start_task is not None:
+            if not encoder_start_task.done():
+                encoder_start_task.cancel()
+            try:
+                unused_encoder = await encoder_start_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            else:
+                with contextlib.suppress(Exception):
+                    await unused_encoder.cancel()
+        if tts is None and tts_open_task is not None:
+            if not tts_open_task.done():
+                tts_open_task.cancel()
+            try:
+                unused_tts = await tts_open_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            else:
+                await unused_tts.cancel()
+        if reply_id is not None and not playback_stopped and playback.reply_id == reply_id:
+            with contextlib.suppress(Exception):
+                await playback.stop(
+                    websocket,
+                    lease,
+                    reply_id,
+                    turn_id,
+                    wait_for_drain=not interrupted,
+                )
+            playback_stopped = True
 
 
 async def _save_session_summary(
@@ -1325,6 +1640,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     )
     active_asr: RealtimeAsrSession | None = None
     active_task: asyncio.Task[bool] | None = None
+    active_timeline: VoiceTurnTimeline | None = None
     audio_bytes = 0
     audio_frames = 0
     audio_buffer: list[bytes] = []
@@ -1336,7 +1652,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     heartbeat_timed_out = False
     continuous_reminder_sent = False
     playback = PlaybackCoordinator()
-    noise_turn_budget = _NoiseTurnBudget()
     user_exit_event = asyncio.Event()
     telemetry_tasks: set[asyncio.Task[None]] = set()
     summary_tasks: set[asyncio.Task[None]] = set()
@@ -1426,9 +1741,9 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
 
         summary_task.add_done_callback(observe_summary)
 
-    async def start_active_turn() -> bool:
+    async def start_active_turn(turn_started: float) -> bool:
         nonlocal active_asr, active_task, audio_bytes, audio_frames, audio_buffer
-        nonlocal first_turn_pending
+        nonlocal active_timeline, first_turn_pending
         if active_asr is None or audio_bytes == 0:
             return False
         active_conversation_id = await ensure_logical_conversation()
@@ -1440,6 +1755,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         audio_frames = 0
         audio_buffer.clear()
         turn_id = str(uuid.uuid4())
+        active_timeline = VoiceTurnTimeline(turn_id=turn_id, started_at=turn_started)
         strip_wake_name = first_turn_pending
         first_turn_pending = False
         active_task = asyncio.create_task(
@@ -1455,9 +1771,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 turn_audio_frames,
                 turn_audio_duration_ms,
                 history,
-                time.perf_counter(),
+                active_timeline,
                 playback,
-                noise_turn_budget,
                 user_exit_event,
                 telemetry_tasks,
                 mcp_client,
@@ -1550,7 +1865,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 audio_frames += 1
                 audio_buffer.append(bytes(chunk))
                 if asr_endpoint_detected(active_asr):
-                    await start_active_turn()
+                    await start_active_turn(time.perf_counter())
                 continue
 
             text_frame = incoming.get("text")
@@ -1566,6 +1881,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     "control message must be JSON",
                 )
                 continue
+            message_received_at = time.perf_counter()
             message_type = message.get("type")
             logger.info("device websocket text serial=%s type=%s", serial, message_type)
             if message_type == "hello":
@@ -1682,12 +1998,23 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         "unsupported device stage",
                     )
                     continue
+                stage_turn_id = str(message.get("turn_id") or "")
+                stage_reply_id = str(message.get("reply_id") or "")
+                accepted = stage != "speaker_pcm_started"
+                if stage == "speaker_pcm_started" and active_timeline is not None:
+                    accepted = active_timeline.mark_device_stage(
+                        stage,
+                        turn_id=stage_turn_id,
+                        reply_id=stage_reply_id,
+                        at=message_received_at,
+                    )
                 logger.info(
-                    "device stage serial=%s stage=%s turn_id=%s reply_id=%s",
+                    "device stage serial=%s stage=%s turn_id=%s reply_id=%s accepted=%s",
                     serial,
                     stage,
-                    str(message.get("turn_id") or ""),
-                    str(message.get("reply_id") or ""),
+                    stage_turn_id,
+                    stage_reply_id,
+                    accepted,
                 )
                 continue
             if message_type != "listen":
@@ -1702,7 +2029,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             state = message.get("state")
             if state == "detect":
                 first_turn_pending = True
-                noise_turn_budget.reset()
                 await ensure_logical_conversation()
                 continue
             if state == "start":
@@ -1758,9 +2084,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             "message": policy.message,
                         },
                     )
-                    await websocket.app.state.device_connections.send_json_for_lease(
-                        connection_lease, {"type": "llm", "emotion": "safe_block"}
-                    )
                     active_task = asyncio.create_task(
                         _speak_fixed_message(
                             websocket,
@@ -1769,6 +2092,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                             snapshot.tts_speech_rate,
                             policy.message,
                             playback,
+                            emotion="safe_block",
                         )
                     )
                     continue
@@ -1813,6 +2137,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     with contextlib.suppress(asyncio.CancelledError):
                         await active_task
                 active_task = None
+                active_timeline = None
                 audio_bytes = 0
                 audio_frames = 0
                 audio_buffer.clear()
@@ -1838,7 +2163,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     websocket, connection_lease, "empty-audio", "no audio received"
                 )
                 continue
-            await start_active_turn()
+            await start_active_turn(message_received_at)
 
             if time.perf_counter() - connected_at >= 7200:
                 await websocket.app.state.device_connections.send_json_for_lease(

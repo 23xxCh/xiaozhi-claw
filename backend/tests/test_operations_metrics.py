@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -37,11 +38,22 @@ def _complete_mock_turn(websocket) -> None:
     websocket.send_json({"type": "listen", "state": "stop"})
     assert websocket.receive_json()["type"] == "stt"
     assert websocket.receive_json()["type"] == "llm"
-    assert websocket.receive_json()["type"] == "llm"
     assert websocket.receive_json()["state"] == "start"
-    assert websocket.receive_json()["state"] == "sentence_start"
-    websocket.receive_bytes()
-    assert websocket.receive_json()["state"] == "stop"
+    sentence_count = 0
+    audio_count = 0
+    while True:
+        message = websocket.receive()
+        if message.get("bytes") is not None:
+            audio_count += 1
+            continue
+        payload = json.loads(message["text"])
+        if payload.get("type") == "tts" and payload.get("state") == "sentence_start":
+            sentence_count += 1
+            continue
+        if payload.get("type") == "tts" and payload.get("state") == "stop":
+            break
+    assert sentence_count >= 1
+    assert audio_count >= 1
     completed = websocket.receive_json()
     assert completed["type"] == "turn"
     assert completed["state"] == "completed"

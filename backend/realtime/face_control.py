@@ -34,7 +34,6 @@ class FaceControlParser:
 
     def __init__(self) -> None:
         self._buffer = ""
-        self._visible_text_seen = False
         self._at_sentence_boundary = True
         self._accepted_emotions = 0
 
@@ -100,8 +99,6 @@ class FaceControlParser:
     def _accepts(self, emotion: str) -> bool:
         if emotion not in SUPPORTED_FACE_EMOTIONS or self._accepted_emotions >= 2:
             return False
-        if self._accepted_emotions == 0:
-            return not self._visible_text_seen
         return self._at_sentence_boundary
 
     def _emit_text(self, value: str, events: list[FaceControlEvent]) -> None:
@@ -111,5 +108,4 @@ class FaceControlParser:
         stripped = value.rstrip()
         if not stripped:
             return
-        self._visible_text_seen = True
         self._at_sentence_boundary = stripped[-1] in _SENTENCE_BOUNDARIES

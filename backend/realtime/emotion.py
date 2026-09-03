@@ -35,4 +35,4 @@ class EmotionRouter:
             return EmotionDecision(normalized, "curious", "surprised")
         if normalized in {"angry", "disgusted"}:
             return EmotionDecision(normalized, "worried", "relaxed")
-        return EmotionDecision(normalized, "thinking", "happy")
+        return EmotionDecision(normalized, "thinking", "neutral")

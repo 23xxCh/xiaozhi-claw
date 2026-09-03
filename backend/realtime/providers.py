@@ -3,6 +3,7 @@ import base64
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -16,12 +17,15 @@ from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
 
 logger = logging.getLogger(__name__)
+ASR_BACKGROUND_CLOSE_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
 class TranscriptionResult:
     text: str
     emotion: str = "neutral"
+    transcription_completed_at: float | None = None
+    session_finished_at: float | None = None
 
 
 class RealtimeProviderError(RuntimeError):
@@ -29,6 +33,13 @@ class RealtimeProviderError(RuntimeError):
         self.provider = provider
         self.code = code[:80] or "unknown"
         super().__init__(f"{provider} realtime provider error: {self.code}")
+
+
+class RealtimeProviderTimeout(RuntimeError):
+    def __init__(self, provider: str, stage: str) -> None:
+        self.provider = provider
+        self.stage = stage
+        super().__init__(f"{provider} realtime provider timeout: {stage}")
 
 
 def _raise_if_provider_error(event: dict[str, object], provider: str) -> None:
@@ -62,6 +73,8 @@ class RealtimeLlmProvider(Protocol):
         *,
         tool_executor: Callable[[str, dict[str, object]], Awaitable[str]] | None = None,
     ) -> AsyncIterator[str]: ...
+
+    async def aclose(self) -> None: ...
 
 
 class RealtimeTtsSession(Protocol):
@@ -100,6 +113,9 @@ class MockLlmProvider:
         transcript = str(request.context.messages[-1].get("content", ""))
         yield f"收到：{transcript}"
 
+    async def aclose(self) -> None:
+        return None
+
 
 class MockTtsSession:
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
@@ -122,6 +138,7 @@ class QwenRealtimeAsrSession:
         self._endpoint = asyncio.Event()
         self._events: asyncio.Queue[dict[str, object] | BaseException] = asyncio.Queue()
         self._reader_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
 
     @classmethod
     async def open(cls, settings: Settings) -> "QwenRealtimeAsrSession":
@@ -161,6 +178,7 @@ class QwenRealtimeAsrSession:
         try:
             while True:
                 event = json.loads(await self.websocket.recv())
+                event["_gateway_received_at"] = time.perf_counter()
                 _raise_if_provider_error(event, "qwen-asr")
                 if event.get("type") == "input_audio_buffer.speech_stopped":
                     self._endpoint.set()
@@ -177,12 +195,15 @@ class QwenRealtimeAsrSession:
         return self._endpoint.is_set()
 
     async def _wait_for(self, expected: str) -> dict[str, object]:
-        async with asyncio.timeout(15):
-            while True:
-                event = json.loads(await self.websocket.recv())
-                _raise_if_provider_error(event, "qwen-asr")
-                if event.get("type") == expected:
-                    return event
+        try:
+            async with asyncio.timeout(15):
+                while True:
+                    event = json.loads(await self.websocket.recv())
+                    _raise_if_provider_error(event, "qwen-asr")
+                    if event.get("type") == expected:
+                        return event
+        except TimeoutError as exc:
+            raise RealtimeProviderTimeout("qwen-asr", expected) from exc
 
     async def send_audio(self, frame: bytes) -> None:
         ogg = self.ogg_muxer.add_packet(frame)
@@ -214,27 +235,67 @@ class QwenRealtimeAsrSession:
         )
         text = ""
         emotion = "neutral"
-        async with asyncio.timeout(30):
-            while True:
-                event = await self._events.get()
-                if isinstance(event, BaseException):
-                    raise event
-                event_type = event.get("type")
-                if event_type in {
-                    "conversation.item.input_audio_transcription.text",
-                    "conversation.item.input_audio_transcription.completed",
-                }:
-                    text = str(event.get("transcript") or event.get("text") or text)
-                    emotion = str(event.get("emotion") or emotion)
-                if event_type == "session.finished":
-                    break
-        await self.websocket.close()
-        if self._reader_task is not None:
-            await self._reader_task
-        self.closed = True
-        return TranscriptionResult(text.strip(), emotion)
+        transcription_completed_at: float | None = None
+        session_finished_at: float | None = None
+        try:
+            async with asyncio.timeout(30):
+                while True:
+                    event = await self._events.get()
+                    if isinstance(event, TimeoutError):
+                        raise RealtimeProviderTimeout("qwen-asr", "session-finish") from event
+                    if isinstance(event, BaseException):
+                        raise event
+                    event_type = event.get("type")
+                    if event_type in {
+                        "conversation.item.input_audio_transcription.text",
+                        "conversation.item.input_audio_transcription.completed",
+                    }:
+                        text = str(event.get("transcript") or event.get("text") or text)
+                        emotion = str(event.get("emotion") or emotion)
+                    if event_type == "conversation.item.input_audio_transcription.completed":
+                        transcription_completed_at = float(
+                            event.get("_gateway_received_at") or time.perf_counter()
+                        )
+                    if event_type == "session.finished":
+                        session_finished_at = float(
+                            event.get("_gateway_received_at") or time.perf_counter()
+                        )
+                        break
+        except TimeoutError as exc:
+            raise RealtimeProviderTimeout("qwen-asr", "session-finish") from exc
+        result = TranscriptionResult(
+            text.strip(),
+            emotion,
+            transcription_completed_at=transcription_completed_at,
+            session_finished_at=session_finished_at,
+        )
+        self._close_task = asyncio.create_task(self._close_after_finish())
+        return result
+
+    async def _close_after_finish(self) -> None:
+        try:
+            async with asyncio.timeout(ASR_BACKGROUND_CLOSE_TIMEOUT_SECONDS):
+                await self.websocket.close()
+                if self._reader_task is not None:
+                    await self._reader_task
+        except TimeoutError:
+            logger.warning("qwen ASR close timed out after session finished")
+        except Exception as exc:
+            logger.warning(
+                "qwen ASR close failed after session finished: %s",
+                type(exc).__name__,
+            )
+        finally:
+            if self._reader_task is not None and not self._reader_task.done():
+                self._reader_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._reader_task
+            self.closed = True
 
     async def cancel(self) -> None:
+        if self._close_task is not None:
+            await self._close_task
+            return
         if not self.closed:
             await self.websocket.close()
             if self._reader_task is not None:
@@ -245,8 +306,18 @@ class QwenRealtimeAsrSession:
 
 
 class DeepSeekStreamingLlmProvider:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None) -> None:
         self.settings = settings
+        self._client = client or httpx.AsyncClient(
+            timeout=self.settings.provider_timeout_seconds
+        )
+        self._closed = False
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._client.aclose()
 
     async def reply_stream(
         self,
@@ -277,8 +348,8 @@ class DeepSeekStreamingLlmProvider:
             tool_calls: dict[int, dict[str, str]] = {}
             assistant_parts: list[str] = []
             reasoning_parts: list[str] = []
-            async with httpx.AsyncClient(timeout=self.settings.provider_timeout_seconds) as client:
-                async with client.stream(
+            try:
+                async with self._client.stream(
                     "POST",
                     url,
                     headers={"Authorization": f"Bearer {self.settings.llm_api_key}"},
@@ -319,6 +390,8 @@ class DeepSeekStreamingLlmProvider:
                                 if isinstance(function, dict):
                                     entry["name"] += str(function.get("name") or "")
                                     entry["arguments"] += str(function.get("arguments") or "")
+            except httpx.TimeoutException as exc:
+                raise RealtimeProviderTimeout("deepseek", "response-stream") from exc
             if not tool_calls or tool_executor is None:
                 return
             assistant_message: dict[str, object] = {
@@ -407,12 +480,15 @@ class QwenRealtimeTtsSession:
         return session
 
     async def _wait_for(self, expected: str) -> dict[str, object]:
-        async with asyncio.timeout(15):
-            while True:
-                event = json.loads(await self.websocket.recv())
-                _raise_if_provider_error(event, "qwen-tts")
-                if event.get("type") == expected:
-                    return event
+        try:
+            async with asyncio.timeout(15):
+                while True:
+                    event = json.loads(await self.websocket.recv())
+                    _raise_if_provider_error(event, "qwen-tts")
+                    if event.get("type") == expected:
+                        return event
+        except TimeoutError as exc:
+            raise RealtimeProviderTimeout("qwen-tts", expected) from exc
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         await self.websocket.send(
@@ -445,19 +521,29 @@ class QwenRealtimeTtsSession:
                         events.put_nowait(base64.b64decode(str(event.get("delta") or "")))
                     if event_type == "response.done":
                         return
+            except TimeoutError:
+                events.put_nowait(
+                    RealtimeProviderTimeout("qwen-tts", "response-event")
+                )
             except Exception as exc:
                 events.put_nowait(exc)
             finally:
                 events.put_nowait(None)
 
         receiver = asyncio.create_task(receive_response())
+        received_audio = False
         try:
             while True:
                 item = await events.get()
                 if item is None:
+                    if not received_audio:
+                        raise RealtimeProviderError("qwen-tts", "empty-audio")
                     return
                 if isinstance(item, Exception):
                     raise item
+                if not item:
+                    continue
+                received_audio = True
                 yield item
         finally:
             if not receiver.done():
@@ -499,6 +585,9 @@ class RealtimeProviderBundle:
         return await QwenRealtimeTtsSession.open(
             self.settings, voice=voice, speech_rate=speech_rate
         )
+
+    async def aclose(self) -> None:
+        await self.llm.aclose()
 
 
 def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:

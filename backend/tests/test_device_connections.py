@@ -46,3 +46,19 @@ async def test_old_disconnect_cannot_remove_new_lease() -> None:
     assert second_socket.json_messages == [
         {"session_id": "session-2", "type": "ping"}
     ]
+
+
+async def test_retire_closes_only_the_matching_current_lease() -> None:
+    manager = DeviceConnectionManager()
+    first_socket = _WebSocket()
+    second_socket = _WebSocket()
+    first = await manager.connect("DEVICE-3", first_socket, "session-1")  # type: ignore[arg-type]
+    second = await manager.connect("DEVICE-3", second_socket, "session-2")  # type: ignore[arg-type]
+
+    assert await manager.retire(first, code=1011, reason="stale timeout") is False
+    assert second_socket.closed is None
+    assert await manager.is_current(second)
+
+    assert await manager.retire(second, code=1011, reason="tts ready timeout") is True
+    assert second_socket.closed == (1011, "tts ready timeout")
+    assert not await manager.is_current(second)

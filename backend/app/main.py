@@ -80,6 +80,11 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
                 await dispatcher.stop()
             if reaper is not None:
                 await reaper.stop()
+            close_realtime_providers = getattr(
+                app.state.realtime_providers, "aclose", None
+            )
+            if close_realtime_providers is not None:
+                await close_realtime_providers()
             await engine.dispose()
 
     app = FastAPI(

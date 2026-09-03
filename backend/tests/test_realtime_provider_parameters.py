@@ -15,6 +15,7 @@ from backend.realtime.providers import (
     QwenRealtimeAsrSession,
     QwenRealtimeTtsSession,
     RealtimeProviderError,
+    RealtimeProviderTimeout,
 )
 from backend.realtime.reply_policy import build_voice_reply_policy
 from backend.realtime.session import (
@@ -72,6 +73,57 @@ async def test_deepseek_streaming_request_uses_fast_non_thinking_mode(monkeypatc
     assert captured["thinking"] == {"type": "disabled"}
 
 
+@pytest.mark.asyncio
+async def test_deepseek_provider_reuses_one_client_and_closes_it_once() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"好"}}]}\n\ndata: [DONE]\n\n',
+        )
+
+    class _CountingClient(httpx.AsyncClient):
+        close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            await super().aclose()
+
+    client = _CountingClient(transport=httpx.MockTransport(handler))
+    settings = Settings(
+        provider_mode="custom",
+        llm_url="https://llm.example/v1",
+        llm_api_key="secret",
+        llm_model="deepseek-v4-flash",
+    )
+    provider = DeepSeekStreamingLlmProvider(settings, client=client)
+    request = LlmRequest(
+        context=ContextBuilder().build(
+            system_prompt="你是助手",
+            current_question="你好",
+            history=[],
+            memories=[],
+            summaries=[],
+            tools=None,
+        ),
+        model="deepseek-v4-flash",
+        temperature=0.35,
+    )
+
+    for _ in range(2):
+        assert [chunk async for chunk in provider.reply_stream(request)] == ["好"]
+
+    assert requests == 2
+    assert client.is_closed is False
+    await provider.aclose()
+    await provider.aclose()
+    assert client.close_calls == 1
+    assert client.is_closed is True
+
+
 class _FakeRealtimeSocket:
     def __init__(self, events: list[dict[str, object]] | None = None) -> None:
         self.sent: list[str] = []
@@ -107,6 +159,17 @@ class _PlaybackSensitiveRealtimeSocket(_FakeRealtimeSocket):
         if self.first_audio_read_at is None:
             self.first_audio_read_at = asyncio.get_running_loop().time()
         return payload
+
+
+class _SlowCloseRealtimeSocket(_FakeRealtimeSocket):
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        super().__init__(events)
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_started.set()
+        await self.release_close.wait()
 
 
 @pytest.mark.asyncio
@@ -167,6 +230,35 @@ async def test_qwen_tts_drains_provider_while_playback_consumer_is_slow() -> Non
     assert chunks == [b"pcm"]
 
 
+@pytest.mark.asyncio
+async def test_qwen_tts_wraps_provider_timeout_with_stable_stage() -> None:
+    class _TimeoutSocket(_FakeRealtimeSocket):
+        async def recv(self) -> str:
+            raise TimeoutError
+
+    session = QwenRealtimeTtsSession(_TimeoutSocket(), event_timeout_seconds=0.01)
+
+    with pytest.raises(RealtimeProviderTimeout) as raised:
+        async for _ in session.synthesize("超时测试"):
+            pass
+
+    assert raised.value.provider == "qwen-tts"
+    assert raised.value.stage == "response-event"
+    assert str(raised.value) == "qwen-tts realtime provider timeout: response-event"
+
+
+@pytest.mark.asyncio
+async def test_qwen_tts_rejects_completed_response_without_audio() -> None:
+    session = QwenRealtimeTtsSession(
+        _FakeRealtimeSocket([{"type": "response.done"}]),
+        event_timeout_seconds=0.1,
+    )
+
+    with pytest.raises(RealtimeProviderError, match="empty-audio"):
+        async for _ in session.synthesize("没有音频"):
+            pass
+
+
 def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> None:
     buffer = SentenceBuffer()
 
@@ -179,8 +271,8 @@ def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> Non
 def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sentence() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 15) == []
-    assert buffer.feed("句") == ["短" * 15 + "句"]
+    assert buffer.feed("短" * 7) == []
+    assert buffer.feed("句") == ["短" * 7 + "句"]
     assert buffer.feed("后续内容") == []
     assert buffer.flush() == "后续内容"
 
@@ -188,7 +280,7 @@ def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sent
 def test_sentence_buffer_keeps_hard_limit_after_first_chunk() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 16) == ["短" * 16]
+    assert buffer.feed("短" * 8) == ["短" * 8]
     assert buffer.feed("句" * 32) == ["句" * 32]
 
 
@@ -283,7 +375,38 @@ async def test_qwen_realtime_asr_wraps_raw_opus_and_uses_manual_turn_detection(
     ]
     assert result.text == "你好，小智"
     assert result.emotion == "happy"
+    assert result.transcription_completed_at is not None
+    assert result.session_finished_at is not None
+    assert result.transcription_completed_at <= result.session_finished_at
     assert connect_kwargs["proxy"] is None
+
+
+@pytest.mark.asyncio
+async def test_qwen_realtime_asr_returns_before_close_handshake_finishes() -> None:
+    socket = _SlowCloseRealtimeSocket(
+        [
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "关闭握手不应阻塞回复",
+            },
+            {"type": "session.finished"},
+        ]
+    )
+    session = QwenRealtimeAsrSession(socket)
+    session._reader_task = asyncio.create_task(session._read_events())
+    finish_task = asyncio.create_task(session.finish())
+
+    await socket.close_started.wait()
+    await asyncio.sleep(0)
+    try:
+        assert finish_task.done()
+        assert (await finish_task).text == "关闭握手不应阻塞回复"
+    finally:
+        socket.release_close.set()
+        if not finish_task.done():
+            await finish_task
+        if session._close_task is not None:
+            await session._close_task
 
 
 @pytest.mark.asyncio
