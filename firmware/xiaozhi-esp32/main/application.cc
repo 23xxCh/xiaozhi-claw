@@ -295,7 +295,7 @@ void Application::Run() {
                 reply_pending_ = false;
                 SetDeviceState(kDeviceStateSpeaking);
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
-                if (protocol_) {
+                if (IsControlChannelReady()) {
                     protocol_->SendDeviceStage(
                         "speaker_pcm_started", active_turn_id_, active_tts_reply_id_);
                 }
@@ -347,7 +347,7 @@ void Application::Run() {
             // order. StartListeningAudio() sends listen.start before it re-arms
             // this event, so no audio can reach the server prematurely.
             const auto state = GetDeviceState();
-            const bool upload_ready = protocol_ && protocol_->IsAudioChannelOpened() &&
+            const bool upload_ready = IsControlChannelReady() &&
                                       listening_capture_ready_;
             if (!upload_ready && state != kDeviceStateConnecting &&
                 state != kDeviceStateListening) {
@@ -391,7 +391,7 @@ void Application::Run() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
-            if (protocol_ && protocol_->IsAudioChannelOpened() &&
+            if (IsControlChannelReady() &&
                 protocol_->SupportsHeartbeat()) {
                 heartbeat_ticks_++;
                 if (heartbeat_ticks_ >= kHeartbeatIntervalTicks) {
@@ -420,9 +420,9 @@ void Application::Run() {
                 heartbeat_awaiting_ = 0;
             }
 
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+#if (CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1) && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
             if (GetDeviceState() == kDeviceStateIdle && protocol_ &&
-                !protocol_->IsAudioChannelOpened()) {
+                !IsControlChannelReady()) {
                 standby_reconnect_ticks_++;
                 if (standby_reconnect_ticks_ >= kStandbyReconnectIntervalTicks) {
                     standby_reconnect_ticks_ = 0;
@@ -489,7 +489,7 @@ void Application::HandleNetworkConnectedEvent() {
             },
             "activation", 4096 * 2, this, 2, &activation_task_handle_);
     }
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+#if (CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1) && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
     else if (state == kDeviceStateIdle) {
         EnsureControlChannelReady();
     }
@@ -537,7 +537,7 @@ void Application::HandleActivationDoneEvent() {
         // Play the success sound to indicate the device is ready
         audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
     });
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
+#if (CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1) && !CONFIG_HENSUN_ONE_SHOT_CONVERSATION
     EnsureControlChannelReady();
 #endif
 #if CONFIG_HENSUN_DIAGNOSTIC_AUTO_LISTEN_ON_BOOT
@@ -558,21 +558,47 @@ void Application::HandleActivationDoneEvent() {
 }
 
 void Application::EnsureControlChannelReady() {
-    if (!protocol_ || protocol_->IsAudioChannelOpened() ||
-        control_channel_task_handle_ != nullptr) {
+    if (control_channel_connecting_.load() || !protocol_ || IsControlChannelReady() ||
+        reply_pending_ || !active_turn_id_.empty()) {
         return;
     }
 
+    control_channel_connecting_.store(true);
     BaseType_t created = xTaskCreate(
         [](void* arg) {
             auto* app = static_cast<Application*>(arg);
-            // Idle preconnect only reuses the already provisioned WSS config.
-            // A token refresh can replace the Protocol object, so it remains a
-            // main-loop operation on the next real wake instead of racing this
-            // background task.
-            const bool opened = app->protocol_->OpenAudioChannel();
-            app->control_channel_task_handle_ = nullptr;
+            bool opened = app->protocol_->OpenAudioChannel();
+            if (!opened && app->protocol_is_websocket_) {
+                // Refresh the short-lived token without replacing this Protocol.
+                // WebsocketProtocol reads its URL/token from NVS on every open.
+                Ota refresh;
+                if (refresh.CheckVersion() == ESP_OK && refresh.HasWebsocketConfig() &&
+                    !refresh.HasMqttConfig() && !refresh.HasActivationCode() &&
+                    !refresh.HasActivationChallenge()) {
+                    opened = app->protocol_->OpenAudioChannel();
+                }
+            }
             app->Schedule([app, opened]() {
+                app->control_channel_connecting_.store(false);
+                if (app->control_channel_close_pending_ || app->protocol_reset_pending_) {
+                    app->pending_device_config_ = nullptr;
+                    app->CloseControlChannel(app->protocol_reset_pending_);
+                    app->FinishActivation();
+                    return;
+                }
+                if (app->activation_protocol_pending_) {
+                    app->FinishActivation();
+                    return;
+                }
+                if (app->IsControlChannelReady() && app->pending_device_config_) {
+                    auto apply = std::move(app->pending_device_config_);
+                    app->pending_device_config_ = nullptr;
+                    apply();
+                }
+                while (app->IsControlChannelReady() && !app->pending_mcp_messages_.empty()) {
+                    app->protocol_->SendMcpMessage(app->pending_mcp_messages_.front());
+                    app->pending_mcp_messages_.pop_front();
+                }
                 if (!opened) {
                     ESP_LOGW(TAG, "Idle control channel preconnect failed");
                 }
@@ -583,16 +609,54 @@ void Application::EnsureControlChannelReady() {
                     const std::string wake_word = app->pending_connect_wake_word_;
                     app->ContinueWakeWordInvoke(wake_word);
                 } else {
-                    app->ContinueOpenAudioChannel(kListeningModeManualStop);
+                    app->ContinueOpenAudioChannel(app->listening_mode_);
                 }
             });
             vTaskDelete(nullptr);
         },
-        "control_channel", 4096 * 2, this, 2, &control_channel_task_handle_);
+        "control_channel", 4096 * 2, this, 2, nullptr);
     if (created != pdPASS) {
-        control_channel_task_handle_ = nullptr;
+        control_channel_connecting_.store(false);
         ESP_LOGE(TAG, "Failed to create idle control channel task");
     }
+}
+
+bool Application::IsControlChannelReady() const {
+    return !control_channel_connecting_.load() && protocol_ &&
+           protocol_->IsAudioChannelOpened();
+}
+
+void Application::CloseControlChannel(bool reset_protocol) {
+    if (control_channel_connecting_.load()) {
+        control_channel_close_pending_ = true;
+        protocol_reset_pending_ = protocol_reset_pending_ || reset_protocol;
+        return;
+    }
+    if (protocol_) {
+        protocol_->CloseAudioChannel();
+        if (reset_protocol) {
+            protocol_.reset();
+        }
+    }
+    control_channel_close_pending_ = false;
+    protocol_reset_pending_ = false;
+    pending_mcp_messages_.clear();
+    if (reset_protocol) {
+        pending_device_config_ = nullptr;
+    }
+}
+
+void Application::FinishActivation() {
+    if (!activation_protocol_pending_ || control_channel_connecting_.load()) {
+        return;
+    }
+    activation_protocol_pending_ = false;
+    if (GetDeviceState() == kDeviceStateWifiConfiguring ||
+        GetDeviceState() == kDeviceStateStarting) {
+        return;
+    }
+    InitializeProtocol();
+    xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
 
 void Application::ActivationTask() {
@@ -605,11 +669,11 @@ void Application::ActivationTask() {
     // Check for new firmware version
     CheckNewVersion();
 
-    // Initialize the protocol
-    InitializeProtocol();
-
-    // Signal completion to main loop
-    xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+    // Protocol ownership stays in the main loop, including during Wi-Fi recovery.
+    Schedule([this]() {
+        activation_protocol_pending_ = true;
+        FinishActivation();
+    });
 }
 
 void Application::CheckAssetsVersion() {
@@ -777,9 +841,12 @@ void Application::InitializeProtocol() {
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto codec = board.GetAudioCodec();
+    pending_device_config_ = nullptr;
+    pending_mcp_messages_.clear();
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
+    protocol_is_websocket_ = !ota_->HasMqttConfig() && ota_->HasWebsocketConfig();
     if (ota_->HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
     } else if (ota_->HasWebsocketConfig()) {
@@ -792,8 +859,16 @@ void Application::InitializeProtocol() {
     protocol_->OnConnected([this]() { DismissAlert(); });
 
     protocol_->OnNetworkError([this](const std::string& message) {
-        last_error_message_ = message;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+        if (control_channel_connecting_.load()) {
+            return;  // The worker retries expired tokens before reporting failure.
+        }
+        Schedule([this, message]() {
+            if (control_channel_connecting_.load() || IsControlChannelReady()) {
+                return;  // A synchronous token refresh has already recovered.
+            }
+            last_error_message_ = message;
+            xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+        });
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
@@ -806,21 +881,30 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
-        board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        heartbeat_ticks_ = 0;
-        heartbeat_missed_ = 0;
-        heartbeat_awaiting_ = 0;
-        if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
-            ESP_LOGW(TAG,
-                     "Server sample rate %d does not match device output sample rate %d, "
-                     "resampling may cause distortion",
-                     protocol_->server_sample_rate(), codec->output_sample_rate());
-        }
+        const int server_sample_rate = protocol_->server_sample_rate();
+        Schedule([this, codec, &board, server_sample_rate]() {
+            board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+            heartbeat_ticks_ = 0;
+            heartbeat_missed_ = 0;
+            heartbeat_awaiting_ = 0;
+            if (server_sample_rate != codec->output_sample_rate()) {
+                ESP_LOGW(TAG,
+                         "Server sample rate %d does not match device output sample rate %d, "
+                         "resampling may cause distortion",
+                         server_sample_rate, codec->output_sample_rate());
+            }
+        });
     });
 
     protocol_->OnAudioChannelClosed([this, &board]() {
-        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        Schedule([this]() {
+        if (control_channel_connecting_.load()) {
+            return;  // A cached-token retry closes its old socket inside the worker.
+        }
+        Schedule([this, &board]() {
+            if (control_channel_connecting_.load() || IsControlChannelReady()) {
+                return;  // Ignore the retired socket after a successful reopen.
+            }
+            board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
             heartbeat_ticks_ = 0;
             heartbeat_missed_ = 0;
             heartbeat_awaiting_ = 0;
@@ -886,7 +970,7 @@ void Application::InitializeProtocol() {
                     audio_service_.ResetDecoder();
                     tts_playback_prepared_.store(true);
                     if (!active_tts_reply_id_.empty() && protocol_) {
-                        if (!protocol_->SendTtsState(
+                        if (!IsControlChannelReady() || !protocol_->SendTtsState(
                                 "ready", active_tts_reply_id_, active_turn_id_)) {
                             ESP_LOGE(TAG, "tts-ready-send-failed");
                             AbortDialogueToStandby("tts-ready-send-failed", true);
@@ -932,7 +1016,7 @@ void Application::InitializeProtocol() {
                         tts_audio_started_ = false;
                         if (GetDeviceState() == kDeviceStateSpeaking) {
 #if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
-                            protocol_->CloseAudioChannel();
+                            CloseControlChannel();
                             SetDeviceState(kDeviceStateIdle);
 #else
                             if (listening_mode_ == kListeningModeManualStop) {
@@ -1114,38 +1198,52 @@ void Application::HandleDeviceConfig(const cJSON* root) {
     const int volume = speaker_volume->valueint;
     const int brightness = screen_brightness->valueint;
     const std::string id(command_id->valuestring);
-    Settings saved("hensun_config");
-    const int saved_version = saved.GetInt("version", 0);
-    if (version < saved_version) {
-        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "stale-version");
-        return;
-    }
-    if (version < 1 || volume < 10 || volume > 100 || brightness < 10 ||
-        brightness > 100) {
-        protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "invalid-config");
-        return;
-    }
-
     Schedule([this, id, version, volume, brightness]() {
-        auto& board = Board::GetInstance();
-        auto codec = board.GetAudioCodec();
-        auto backlight = board.GetBacklight();
-        if (codec == nullptr || backlight == nullptr) {
-            protocol_->SendDeviceConfigAck(
-                id, version, false, 0, 0, "unsupported-hardware");
-            return;
+        auto apply = [this, id, version, volume, brightness]() {
+            if (!protocol_) {
+                return;
+            }
+            Settings saved("hensun_config");
+            const int saved_version = saved.GetInt("version", 0);
+            if (version < saved_version) {
+                protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "stale-version");
+                return;
+            }
+            if (version < 1 || volume < 10 || volume > 100 || brightness < 10 ||
+                brightness > 100) {
+                protocol_->SendDeviceConfigAck(id, version, false, 0, 0, "invalid-config");
+                return;
+            }
+            auto& board = Board::GetInstance();
+            auto codec = board.GetAudioCodec();
+            auto backlight = board.GetBacklight();
+            if (codec == nullptr || backlight == nullptr) {
+                protocol_->SendDeviceConfigAck(
+                    id, version, false, 0, 0, "unsupported-hardware");
+                return;
+            }
+            codec->SetOutputVolume(volume);
+            backlight->SetBrightness(static_cast<uint8_t>(brightness), true);
+            Settings settings("hensun_config", true);
+            settings.SetInt("version", version);
+            protocol_->SendDeviceConfigAck(id, version, true, volume, brightness);
+            ESP_LOGI(TAG, "Applied device configuration v%d (volume=%d, brightness=%d)",
+                     version, volume, brightness);
+        };
+        if (control_channel_connecting_.load() || !IsControlChannelReady()) {
+            // The server expires superseded commands; keep the latest update
+            // until the handshake stops mutating the websocket handle.
+            pending_device_config_ = std::move(apply);
+        } else {
+            apply();
         }
-        codec->SetOutputVolume(volume);
-        backlight->SetBrightness(static_cast<uint8_t>(brightness), true);
-        Settings settings("hensun_config", true);
-        settings.SetInt("version", version);
-        protocol_->SendDeviceConfigAck(id, version, true, volume, brightness);
-        ESP_LOGI(TAG, "Applied device configuration v%d (volume=%d, brightness=%d)",
-                 version, volume, brightness);
     });
 }
 
 bool Application::OpenAudioChannelWithConfigRefresh() {
+    if (control_channel_connecting_.load()) {
+        return false;
+    }
     ESP_LOGI(TAG, "Opening audio channel; protocol=%p", protocol_.get());
     // The cached device-session token is valid for a short period. Reuse it
     // first so an ordinary wake-up does not pay for a second HTTPS bootstrap
@@ -1274,7 +1372,7 @@ void Application::HandleToggleChatEvent() {
         !active_turn_id_.empty() || !active_tts_reply_id_.empty() ||
         reply_settle_active_;
     if (dialogue_active) {
-        if (protocol_->IsAudioChannelOpened()) {
+        if (IsControlChannelReady()) {
             protocol_->SendAbortSpeaking(kAbortReasonNone);
         }
         AbortDialogueToStandby("boot-stop", true);
@@ -1283,7 +1381,8 @@ void Application::HandleToggleChatEvent() {
 
     if (state == kDeviceStateIdle) {
         ListeningMode mode = GetDefaultListeningMode();
-        if (!protocol_->IsAudioChannelOpened()) {
+        listening_mode_ = mode;
+        if (!IsControlChannelReady()) {
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
             Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
@@ -1302,19 +1401,20 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
     }
     ESP_LOGI(TAG, "ContinueOpenAudioChannel(mode=%d), channel_open=%d",
              static_cast<int>(mode),
-             protocol_ ? protocol_->IsAudioChannelOpened() : false);
+             IsControlChannelReady());
 
     // Switch to performance mode before connecting to reduce latency
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
-    if (control_channel_task_handle_ != nullptr) {
+    if (control_channel_connecting_.load()) {
+        listening_mode_ = mode;
         ESP_LOGI(TAG, "Waiting for idle control channel preconnect");
         return;
     }
 
     bool opened_channel = false;
-    if (!protocol_->IsAudioChannelOpened()) {
+    if (!IsControlChannelReady()) {
         // Public/self-hosted bootstrap and the WSS handshake can take a few
         // seconds. Start the local encoder first so a user who speaks right
         // after pressing BOOT is buffered instead of losing the first phrase.
@@ -1341,7 +1441,7 @@ void Application::HandleStartListeningEvent() {
     auto state = GetDeviceState();
     ESP_LOGI(TAG, "HandleStartListeningEvent(state=%d, protocol=%p, channel_open=%d)",
              static_cast<int>(state), protocol_.get(),
-             protocol_ ? protocol_->IsAudioChannelOpened() : false);
+             IsControlChannelReady());
 
     if (state == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
@@ -1359,8 +1459,9 @@ void Application::HandleStartListeningEvent() {
 
     if (state == kDeviceStateIdle) {
         pending_connect_wake_word_.clear();
-        if (control_channel_task_handle_ != nullptr ||
-            !protocol_->IsAudioChannelOpened()) {
+        listening_mode_ = kListeningModeManualStop;
+        if (control_channel_connecting_.load() ||
+            !IsControlChannelReady()) {
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
             Schedule([this]() { ContinueOpenAudioChannel(kListeningModeManualStop); });
@@ -1381,7 +1482,7 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
-        if (protocol_) {
+        if (IsControlChannelReady()) {
             protocol_->SendStopListening();
         }
         SetDeviceState(kDeviceStateIdle);
@@ -1430,8 +1531,8 @@ void Application::BeginWakeWordInvoke(const std::string& wake_word) {
     audio_service_.ResetSendQueueOverflow();
     audio_service_.EncodeWakeWord();
 
-    const bool control_channel_connecting = control_channel_task_handle_ != nullptr;
-    if (control_channel_connecting || !protocol_->IsAudioChannelOpened()) {
+    const bool control_channel_connecting = control_channel_connecting_.load();
+    if (control_channel_connecting || !IsControlChannelReady()) {
         // Start local capture before publishing the connecting state.  The
         // state update schedules the WSS bootstrap onto the next main-loop
         // turn, so waiting until ContinueWakeWordInvoke() loses the opening
@@ -1453,7 +1554,7 @@ void Application::BeginWakeWordInvoke(const std::string& wake_word) {
         return;
     }
 
-    if (control_channel_connecting || !protocol_->IsAudioChannelOpened()) {
+    if (control_channel_connecting || !IsControlChannelReady()) {
         // Schedule to let the state change be processed first (UI update),
         // then continue with OpenAudioChannel which may block for ~1 second
         Schedule([this, wake_word]() { ContinueWakeWordInvoke(wake_word); });
@@ -1473,12 +1574,12 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
-    if (control_channel_task_handle_ != nullptr) {
+    if (control_channel_connecting_.load()) {
         ESP_LOGI(TAG, "Waiting for idle control channel preconnect");
         return;
     }
 
-    if (!protocol_->IsAudioChannelOpened()) {
+    if (!IsControlChannelReady()) {
         // Capture began in BeginWakeWordInvoke(). Keep its buffered frames
         // intact while Bootstrap/WSS connects; re-enabling here would reset
         // the front of a question spoken immediately after the wake word.
@@ -1628,6 +1729,10 @@ void Application::StartListeningAudio() {
     if (GetDeviceState() != kDeviceStateListening) {
         return;
     }
+    if (!IsControlChannelReady()) {
+        AbortDialogueToStandby("listen-channel-not-ready", true);
+        return;
+    }
 
     if (audio_service_.ConsumeSendQueueOverflow()) {
         ESP_LOGE(TAG, "wake-buffer-overflow: discarding incomplete utterance");
@@ -1736,7 +1841,7 @@ void Application::FinishTtsPlayback(std::string reply_id) {
     CancelTtsFirstPcmWatchdog();
     const bool had_audio = tts_audio_started_;
     const std::string turn_id = active_turn_id_;
-    if (!protocol_ || !protocol_->SendTtsState("drained", reply_id, turn_id)) {
+    if (!IsControlChannelReady() || !protocol_->SendTtsState("drained", reply_id, turn_id)) {
         ESP_LOGE(TAG, "tts-drained-send-failed");
         AbortDialogueToStandby("tts-drained-send-failed", true);
         return;
@@ -1755,8 +1860,8 @@ void Application::FinishTtsPlayback(std::string reply_id) {
              (unsigned long)audio_service_.GetDecodeDropCount());
     active_turn_id_.clear();
 #if CONFIG_HENSUN_ONE_SHOT_CONVERSATION
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        protocol_->CloseAudioChannel();
+    if (IsControlChannelReady()) {
+        CloseControlChannel();
     }
     if (had_audio) {
         BeginReplySettle(false);
@@ -1813,7 +1918,7 @@ void Application::AbortDialogueToStandby(const char* reason, bool close_audio_ch
     audio_service_.EnableWakeWordDetection(true);
 
     if (close_audio_channel && protocol_) {
-        protocol_->CloseAudioChannel();
+        CloseControlChannel();
     }
 }
 
@@ -1828,7 +1933,7 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
-    if (protocol_) {
+    if (IsControlChannelReady()) {
         protocol_->SendAbortSpeaking(reason);
     }
     AbortDialogueToStandby("abort-speaking", true);
@@ -1847,11 +1952,7 @@ ListeningMode Application::GetDefaultListeningMode() const {
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
-    // Disconnect the audio channel
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        protocol_->CloseAudioChannel();
-    }
-    protocol_.reset();
+    // esp_restart releases network resources without racing an in-flight open.
     audio_service_.Stop();
 
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1865,11 +1966,8 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     std::string upgrade_url = url;
     std::string version_info = version.empty() ? "(Manual upgrade)" : version;
 
-    // Close audio channel if it's open
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        ESP_LOGI(TAG, "Closing audio channel before firmware upgrade");
-        protocol_->CloseAudioChannel();
-    }
+    // The activation task can request an upgrade while preconnect is finishing.
+    Schedule([this]() { CloseControlChannel(); });
     ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
 
     Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download",
@@ -1933,18 +2031,18 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     } else if (state == kDeviceStateListening) {
         Schedule([this]() {
             if (protocol_) {
-                protocol_->CloseAudioChannel();
+                CloseControlChannel();
             }
         });
     }
 }
 
 bool Application::CanEnterSleepMode() {
-    if (GetDeviceState() != kDeviceStateIdle) {
+    if (GetDeviceState() != kDeviceStateIdle || control_channel_connecting_.load()) {
         return false;
     }
 
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+    if (IsControlChannelReady()) {
         return false;
     }
 
@@ -1963,7 +2061,15 @@ void Application::RegisterMcpBroadcastCallback(std::function<void(const std::str
 void Application::SendMcpMessage(const std::string& payload) {
     // Always schedule to run in main task for thread safety
     Schedule([this, payload]() {
-        if (protocol_) {
+        if (control_channel_connecting_.load()) {
+            // Discovery can arrive with hello; never race the opening socket.
+            if (pending_mcp_messages_.size() < 8) {
+                pending_mcp_messages_.push_back(payload);
+            } else {
+                ESP_LOGW(TAG, "Too many MCP replies during control preconnect");
+                CloseControlChannel();
+            }
+        } else if (IsControlChannelReady()) {
             protocol_->SendMcpMessage(payload);
         }
         if (mcp_broadcast_callback_) {
@@ -1993,9 +2099,7 @@ void Application::SetAecMode(AecMode mode) {
         }
 
         // If the AEC mode is changed, close the audio channel
-        if (protocol_ && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
-        }
+        CloseControlChannel();
     });
 }
 
@@ -2003,11 +2107,6 @@ void Application::PlaySound(const std::string_view& sound) { audio_service_.Play
 
 void Application::ResetProtocol() {
     Schedule([this]() {
-        // Close audio channel if opened
-        if (protocol_ && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
-        }
-        // Reset protocol
-        protocol_.reset();
+        CloseControlChannel(true);
     });
 }

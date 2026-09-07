@@ -358,6 +358,42 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         self.assertNotIn("audio_service_", restore)
         self.assertIn("if (!activation_prompt_visible)", check.split("ota_->CheckVersion()", 1)[0])
 
+    def test_nocam_preconnect_keeps_one_shot_excluded_and_defers_protocol_mutation(self):
+        source = self.read_required(ROOT / "main/application.cc")
+        guard = (
+            "#if (CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || "
+            "CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1) && "
+            "!CONFIG_HENSUN_ONE_SHOT_CONVERSATION"
+        )
+        self.assertEqual(source.count(guard), 3)
+        self.assertEqual(source.count("protocol_->IsAudioChannelOpened()"), 1)
+        self.assertEqual(source.count("protocol_->CloseAudioChannel()"), 1)
+        self.assertEqual(source.count("protocol_.reset()"), 1)
+        worker = source.split("void Application::EnsureControlChannelReady()", 1)[1].split(
+            "bool Application::IsControlChannelReady()", 1
+        )[0]
+        self.assertLess(worker.index("control_channel_connecting_.store(true)"), worker.index("xTaskCreate("))
+        completion = worker.split("app->Schedule([app, opened]()", 1)[1]
+        self.assertIn("control_channel_connecting_.store(false)", completion)
+        self.assertLess(completion.index("protocol_reset_pending_"), completion.index("auto apply ="))
+        self.assertIn("ContinueOpenAudioChannel(app->listening_mode_)", completion)
+        self.assertIn("Ota refresh;", worker)
+        self.assertIn("!opened && app->protocol_is_websocket_", worker)
+        self.assertNotIn("InitializeProtocol()", worker)
+
+    def test_successful_reconnect_ignores_queued_old_error_and_close_notifications(self):
+        source = self.read_required(ROOT / "main/application.cc")
+        error = source.split("protocol_->OnNetworkError", 1)[1].split(
+            "protocol_->OnIncomingAudio", 1
+        )[0].split("Schedule(", 1)[1]
+        closed = source.split("protocol_->OnAudioChannelClosed", 1)[1].split(
+            "protocol_->OnIncomingJson", 1
+        )[0].split("Schedule(", 1)[1]
+        guard = "control_channel_connecting_.load() || IsControlChannelReady()"
+        self.assertLess(error.index(guard), error.index("MAIN_EVENT_ERROR"))
+        self.assertLess(closed.index(guard), closed.index("PowerSaveLevel::LOW_POWER"))
+        self.assertLess(closed.index(guard), closed.index("AbortDialogueToStandby"))
+
     def test_lvgl_claim_qr_uses_only_one_qrcodegen_implementation(self):
         cmake = (
             ROOT

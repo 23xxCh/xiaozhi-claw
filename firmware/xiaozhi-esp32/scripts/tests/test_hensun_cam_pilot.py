@@ -134,7 +134,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIn("state != kDeviceStateConnecting", send_event)
         self.assertIn("listening_capture_ready_", send_event)
         self.assertLess(
-            send_event.index("IsAudioChannelOpened()"),
+            send_event.index("IsControlChannelReady()"),
             send_event.index("PopPacketFromSendQueue()"),
         )
 
@@ -167,7 +167,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         self.assertIsNotNone(method)
         body = method.group(1)
         self.assertIn(
-            "control_channel_connecting || !protocol_->IsAudioChannelOpened()",
+            "control_channel_connecting || !IsControlChannelReady()",
             body,
         )
         self.assertIn("audio_service_.EnableVoiceProcessing(true)", body)
@@ -313,7 +313,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
         )[1].split("void Application::StartListeningAudio", 1)[0]
 
         self.assertIn("EnsureControlChannelReady();", activation)
-        self.assertIn("control_channel_task_handle_", continue_wake)
+        self.assertIn("control_channel_connecting_", continue_wake)
         self.assertIn("void Application::EnsureControlChannelReady()", self.application_source)
         self.assertIn('"control_channel"', self.application_source)
         self.assertRegex(
@@ -705,7 +705,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             re.DOTALL,
         )
         self.assertIsNotNone(one_shot)
-        self.assertIn("protocol_->CloseAudioChannel()", one_shot.group(1))
+        self.assertIn("CloseControlChannel()", one_shot.group(1))
 
     def test_hensun_half_duplex_disables_wake_word_detection_while_speaking(self):
         speaking = re.search(
@@ -772,7 +772,7 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             re.DOTALL,
         )
         self.assertIsNotNone(one_shot)
-        self.assertIn("protocol_->CloseAudioChannel()", one_shot.group(1))
+        self.assertIn("CloseControlChannel()", one_shot.group(1))
         self.assertIn("SetDeviceState(kDeviceStateIdle)", one_shot.group(1))
 
     def test_hensun_cam_uses_noise_tolerant_vad_settings(self):

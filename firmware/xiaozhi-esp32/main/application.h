@@ -170,7 +170,13 @@ private:
     uint32_t heartbeat_sequence_ = 0;
     uint32_t heartbeat_awaiting_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
-    TaskHandle_t control_channel_task_handle_ = nullptr;
+    std::atomic<bool> control_channel_connecting_{false};
+    bool control_channel_close_pending_ = false;
+    bool protocol_reset_pending_ = false;
+    bool activation_protocol_pending_ = false;
+    bool protocol_is_websocket_ = false;
+    std::function<void()> pending_device_config_;
+    std::deque<std::string> pending_mcp_messages_;
     std::string pending_connect_wake_word_;
 
 
@@ -195,6 +201,9 @@ private:
     void FinishTtsPlayback(std::string reply_id);
     void AbortDialogueToStandby(const char* reason, bool close_audio_channel);
     void EnsureControlChannelReady();
+    bool IsControlChannelReady() const;
+    void CloseControlChannel(bool reset_protocol = false);
+    void FinishActivation();
 
     // Activation task (runs in background)
     void ActivationTask();
