@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
-from ..catalog import ensure_catalog, ensure_default_agent
+from ..catalog import ensure_catalog, ensure_default_agent, resolve_agent_presets
 from ..db import get_session
 from ..dependencies import require_adult_user
 from ..models import (
@@ -20,6 +20,7 @@ from ..models import (
 )
 from ..schemas import AgentCreateRequest, AgentResponse, AgentUpdateRequest
 from ..usage_profiles import ensure_adult_profile
+from ..voice_routes import route_capabilities
 
 router = APIRouter(prefix="/v1/agents", tags=["agents"])
 
@@ -64,18 +65,31 @@ async def _response(
 
 
 async def _validate_presets(
-    session: AsyncSession, model_preset_id: str, voice_preset_id: str
+    session: AsyncSession, model_preset_id: str | None, voice_preset_id: str | None
+) -> tuple[ModelPreset, VoicePreset]:
+    try:
+        return await resolve_agent_presets(session, model_preset_id, voice_preset_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422, detail=str(error)
+        ) from error
+
+
+def _validate_parameters(
+    model: ModelPreset, payload: AgentCreateRequest | AgentUpdateRequest, agent: Agent | None = None
 ) -> None:
-    model = await session.get(ModelPreset, model_preset_id)
-    voice = await session.get(VoicePreset, voice_preset_id)
-    if model is None or not model.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="model preset unavailable"
-        )
-    if voice is None or not voice.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="voice preset unavailable"
-        )
+    capabilities = route_capabilities(model)
+    for field, default in (("llm_temperature", 0.6), ("tts_speech_rate", 1.0)):
+        value = getattr(payload, field)
+        previous = getattr(agent, field) if agent else default
+        # Legacy clients may send the entire form. An unchanged inactive value
+        # stays stored for switching back, but never becomes an active parameter.
+        if value is not None and value != previous and not getattr(capabilities, field):
+            raise HTTPException(status_code=422, detail=f"selected route does not support {field}")
+    if isinstance(payload, AgentUpdateRequest) and payload.tools is not None:
+        previous_tools = json.loads(agent.tools_json or "{}") if agent else {}
+        if not capabilities.tools and payload.tools != previous_tools:
+            raise HTTPException(status_code=422, detail="selected route does not support tools")
 
 
 @router.get("", response_model=list[AgentResponse])
@@ -115,7 +129,10 @@ async def create_agent(
     session: AsyncSession = Depends(get_session),
 ) -> AgentResponse:
     await ensure_catalog(session)
-    await _validate_presets(session, payload.model_preset_id, payload.voice_preset_id)
+    model, voice = await _validate_presets(
+        session, payload.model_preset_id, payload.voice_preset_id
+    )
+    _validate_parameters(model, payload)
     if payload.usage_profile_id is None:
         profile_id = (await ensure_adult_profile(session, user)).id
     else:
@@ -129,8 +146,8 @@ async def create_agent(
         name=payload.name,
         avatar_url=str(payload.avatar_url) if payload.avatar_url else None,
         system_prompt=payload.system_prompt,
-        model_preset_id=payload.model_preset_id,
-        voice_preset_id=payload.voice_preset_id,
+        model_preset_id=model.id,
+        voice_preset_id=voice.id,
         llm_temperature=payload.llm_temperature,
         tts_speech_rate=payload.tts_speech_rate,
     )
@@ -166,7 +183,8 @@ async def update_agent(
     agent = await owned_agent(session, user, agent_id)
     model_id = payload.model_preset_id or agent.model_preset_id
     voice_id = payload.voice_preset_id or agent.voice_preset_id
-    await _validate_presets(session, model_id, voice_id)
+    model, _ = await _validate_presets(session, model_id, voice_id)
+    _validate_parameters(model, payload, agent)
     if payload.name is not None:
         agent.name = payload.name
     if payload.avatar_url is not None:

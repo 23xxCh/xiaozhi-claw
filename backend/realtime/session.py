@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -23,6 +23,7 @@ from backend.ai.context import (
 )
 from backend.app.audit import add_audit_event
 from backend.app.catalog import ensure_default_agent
+from backend.app.config import Settings
 from backend.app.device_connections import ConnectionLease
 from backend.app.generated.device_ws_contract import DEVICE_STAGE_STATES
 from backend.app.models import (
@@ -55,11 +56,14 @@ from backend.app.security import (
     verify_device_session_token,
     verify_secret,
 )
+from backend.app.voice_routes import validate_model_route, voice_is_compatible
 
+from .conversation_backend import ConversationMessage
+from .doubao import DoubaoConfig, DoubaoRealtimeBackend
 from .emotion import EmotionRouter
 from .face_control import SUPPORTED_FACE_EMOTIONS, FaceControlEvent, FaceControlParser
 from .mcp import DeviceMcpClient, DeviceMcpError
-from .media import OpusPacketPacer, StreamingPcmToOpus
+from .media import OpusPacketPacer, StreamingOpusToPcm, StreamingPcmToOpus
 from .playback import PlaybackCoordinator, PlaybackReadyTimeout
 from .providers import (
     RealtimeAsrSession,
@@ -68,6 +72,7 @@ from .providers import (
     TranscriptionResult,
 )
 from .reply_policy import build_voice_reply_policy
+from .s2s import SpeechToSpeechInput, process_s2s_turn, record_s2s_usage
 from .tools import ToolRegistry, create_search_provider
 
 logger = logging.getLogger(__name__)
@@ -206,6 +211,9 @@ class AgentSnapshot:
     llm_input_cost_micros_per_million_tokens: int
     llm_output_cost_micros_per_million_tokens: int
     tts_cost_micros_per_10k_chars: int
+    route_kind: str = "cascade"
+    realtime_provider: str | None = None
+    realtime_model: str | None = None
 
 
 class _UnavailableRealtimeAsrSession:
@@ -284,7 +292,7 @@ async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot
         device.active_agent_id = agent.id
     else:
         agent = await session.get(Agent, device.active_agent_id)
-    if agent is None:
+    if agent is None or agent.owner_user_id != device.owner_user_id:
         raise RuntimeError("active agent is missing")
     profile = await session.get(UsageProfile, device.active_profile_id or agent.usage_profile_id)
     if profile is None or profile.owner_user_id != device.owner_user_id:
@@ -302,6 +310,9 @@ async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot
     voice = await session.get(VoicePreset, agent.voice_preset_id)
     if model is None or not model.enabled or voice is None or not voice.enabled:
         raise RuntimeError("agent preset is unavailable")
+    validate_model_route(model)
+    if not voice_is_compatible(model, voice):
+        raise RuntimeError("agent voice is incompatible with its route")
     profile_memory_allowed = profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent
     return AgentSnapshot(
         agent_id=agent.id,
@@ -324,6 +335,9 @@ async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot
         llm_input_cost_micros_per_million_tokens=(model.llm_input_cost_micros_per_million_tokens),
         llm_output_cost_micros_per_million_tokens=(model.llm_output_cost_micros_per_million_tokens),
         tts_cost_micros_per_10k_chars=model.tts_cost_micros_per_10k_chars,
+        route_kind=model.route_kind,
+        realtime_provider=model.realtime_provider,
+        realtime_model=model.realtime_model,
     )
 
 
@@ -435,8 +449,9 @@ async def _receive_device_message(
     timeout_seconds: float,
     stop_event: asyncio.Event | None = None,
     revoked_event: asyncio.Event | None = None,
+    endpoint_event: asyncio.Event | None = None,
 ) -> dict[str, object] | None:
-    if stop_event is None and revoked_event is None:
+    if stop_event is None and revoked_event is None and endpoint_event is None:
         try:
             return await asyncio.wait_for(websocket.receive(), timeout=timeout_seconds)
         except TimeoutError:
@@ -447,17 +462,25 @@ async def _receive_device_message(
         asyncio.create_task(event.wait())
         for event in (stop_event, revoked_event) if event is not None
     }
+    endpoint_task = asyncio.create_task(endpoint_event.wait()) if endpoint_event else None
+    watched_tasks = {receive_task, *stop_tasks}
+    if endpoint_task is not None:
+        watched_tasks.add(endpoint_task)
     try:
         done, _ = await asyncio.wait(
-            {receive_task, *stop_tasks},
+            watched_tasks,
             timeout=timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
+        # A control event and a device frame can arrive together. Preserve a
+        # frame already consumed by receive(); otherwise the next ping is lost.
+        if receive_task in done:
+            return receive_task.result()
         if not done or done.intersection(stop_tasks):
             return None
-        return receive_task.result()
+        return {"type": "provider.endpoint"}
     finally:
-        for task in (receive_task, *stop_tasks):
+        for task in watched_tasks:
             if not task.done():
                 task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -493,6 +516,7 @@ async def _record_turn(
     first_audio_latency_ms: int | None,
     safety_category: str | None,
     fallback_operations: set[str],
+    settings: Settings,
 ) -> None:
     estimated_output_tokens = max(1, len(reply) // 4)
     asr_cost = round(snapshot.asr_cost_micros_per_minute * audio_duration_ms / 60_000)
@@ -501,7 +525,12 @@ async def _record_turn(
         + snapshot.llm_output_cost_micros_per_million_tokens * estimated_output_tokens / 1_000_000
     )
     tts_cost = round(snapshot.tts_cost_micros_per_10k_chars * len(reply) / 10_000)
-    total_cost = asr_cost + llm_cost + tts_cost
+    # The fallback has no approved price mapping here. Keep only known primary
+    # estimates in the subtotal; unknown supplier charges stay explicit below.
+    total_cost = sum(
+        cost for operation, cost in (("asr", asr_cost), ("llm", llm_cost), ("tts", tts_cost))
+        if operation not in fallback_operations
+    )
     async with session_factory() as session:
         conversation = await session.get(ConversationSession, conversation_id)
         if conversation is None:
@@ -525,41 +554,61 @@ async def _record_turn(
                     session_id=conversation_id,
                     user_id=user_id,
                     device_id=device_id,
-                    provider=snapshot.asr_provider,
-                    model=snapshot.asr_model,
+                    provider=("dashscope-batch" if "asr" in fallback_operations
+                              else snapshot.asr_provider),
+                    model=(settings.fallback_asr_model if "asr" in fallback_operations
+                           else snapshot.asr_model),
                     operation="asr",
                     input_units=audio_duration_ms,
                     output_units=len(transcript),
                     latency_ms=asr_latency_ms,
-                    cost_micros=asr_cost,
+                    cost_micros=(None if "asr" in fallback_operations else asr_cost),
+                    cost_status=("unknown" if "asr" in fallback_operations else "estimated"),
                     error_code=("fallback-batch" if "asr" in fallback_operations else None),
                 ),
                 ProviderUsage(
                     session_id=conversation_id,
                     user_id=user_id,
                     device_id=device_id,
-                    provider=snapshot.llm_provider,
-                    model=snapshot.llm_model,
+                    provider=("dashscope-batch" if "llm" in fallback_operations
+                              else snapshot.llm_provider),
+                    model=(settings.fallback_llm_model if "llm" in fallback_operations
+                           else snapshot.llm_model),
                     operation="llm",
                     input_units=estimated_input_tokens,
                     output_units=estimated_output_tokens,
                     latency_ms=llm_latency_ms,
-                    cost_micros=llm_cost,
+                    cost_micros=(None if "llm" in fallback_operations else llm_cost),
+                    cost_status=("unknown" if "llm" in fallback_operations else "estimated"),
                     error_code=("fallback-batch" if "llm" in fallback_operations else None),
                 ),
                 ProviderUsage(
                     session_id=conversation_id,
                     user_id=user_id,
                     device_id=device_id,
-                    provider=snapshot.tts_provider,
-                    model=snapshot.tts_model,
+                    provider=("dashscope-batch" if "tts" in fallback_operations
+                              else snapshot.tts_provider),
+                    model=(settings.fallback_tts_model if "tts" in fallback_operations
+                           else snapshot.tts_model),
                     operation="tts",
                     input_units=len(reply),
                     latency_ms=tts_latency_ms,
-                    cost_micros=tts_cost,
+                    cost_micros=(None if "tts" in fallback_operations else tts_cost),
+                    cost_status=("unknown" if "tts" in fallback_operations else "estimated"),
                     error_code=("fallback-batch" if "tts" in fallback_operations else None),
                 ),
             ]
+        )
+        # The unsuccessful primary attempt may also be billable. Its measured
+        # units are unavailable; do not duplicate the fallback's success units.
+        session.add_all(
+            ProviderUsage(
+                session_id=conversation_id, user_id=user_id, device_id=device_id,
+                provider=getattr(snapshot, f"{operation}_provider"),
+                model=getattr(snapshot, f"{operation}_model"), operation=f"{operation}_attempt",
+                cost_micros=None, cost_status="unknown", error_code="fallback-primary-failed",
+            )
+            for operation in sorted(fallback_operations)
         )
         add_audit_event(
             session,
@@ -593,6 +642,7 @@ async def _speak_sentence(
         encoder,
         direct_pacer,
         on_first_pcm=on_first_pcm,
+        first_audio_timeout=websocket.app.state.settings.provider_timeout_seconds,
     )
 
 
@@ -615,18 +665,30 @@ async def _synthesize_sentence_audio(
     direct_pacer: OpusPacketPacer,
     *,
     on_first_pcm: Callable[[], None] | None = None,
+    first_audio_timeout: float = 30,
 ) -> None:
-    first_pcm_received = False
-    async for audio in tts.synthesize(sentence):
-        if audio and not first_pcm_received:
-            first_pcm_received = True
-            if on_first_pcm is not None:
-                on_first_pcm()
+    stream = aiter(tts.synthesize(sentence))
+    try:
+        async with asyncio.timeout(first_audio_timeout):
+            audio = await anext(stream)
+            while not audio:
+                audio = await anext(stream)
+    except StopAsyncIteration as exc:
+        raise RuntimeError("tts-empty-audio") from exc
+    if on_first_pcm is not None:
+        on_first_pcm()
+    while True:
         if encoder is None:
             if not await direct_pacer.send(audio):
                 return
         else:
             await encoder.write(audio)
+        try:
+            audio = await anext(stream)
+            while not audio:
+                audio = await anext(stream)
+        except StopAsyncIteration:
+            return
 
 
 async def _cleanup_audio_pipeline(
@@ -634,14 +696,14 @@ async def _cleanup_audio_pipeline(
     encoder: StreamingPcmToOpus | None,
     packet_task: asyncio.Task[None] | None,
 ) -> None:
-    if encoder is not None:
-        with contextlib.suppress(Exception):
-            await encoder.cancel()
     if packet_task is not None:
         if not packet_task.done():
             packet_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await packet_task
+    if encoder is not None:
+        with contextlib.suppress(Exception):
+            await encoder.cancel()
     if tts is not None:
         with contextlib.suppress(Exception):
             await tts.cancel()
@@ -667,6 +729,7 @@ async def _speak_fixed_message(
     turn_id = str(uuid.uuid4())
     interrupted = False
     emotion_sent = False
+    used_fallback = False
 
     async def send_audio_packet(packet: bytes) -> bool:
         nonlocal emotion_sent
@@ -700,6 +763,7 @@ async def _speak_fixed_message(
         except Exception:
             if fallback is None:
                 raise
+            used_fallback = True
             logger.warning("realtime TTS failed for policy prompt on %s; using fallback", serial)
             reply_id = await playback.start(websocket, lease, turn_id)
             await websocket.app.state.device_connections.send_json_for_lease(
@@ -725,8 +789,26 @@ async def _speak_fixed_message(
     except asyncio.CancelledError:
         interrupted = True
         raise
-    except Exception:
-        logger.exception("fixed policy prompt failed for device %s", serial)
+    except Exception as exc:
+        await _cleanup_audio_pipeline(tts, encoder, packet_task)
+        if (
+            not isinstance(exc, PlaybackReadyTimeout)
+            and fallback is not None
+            and not used_fallback
+            and not emotion_sent
+            and await websocket.app.state.device_connections.is_current(lease)
+        ):
+            try:
+                if reply_id is None:
+                    reply_id = await playback.start(websocket, lease, turn_id)
+                await _send_sentence_start(websocket, lease, message, turn_id)
+                for packet in await fallback.speech.synthesize(message):
+                    if packet and not await pacer.send(packet):
+                        break
+            except Exception:
+                logger.exception("fixed policy backup failed for device %s", serial)
+        else:
+            logger.exception("fixed policy prompt failed for device %s", serial)
     finally:
         await _cleanup_audio_pipeline(tts, encoder, packet_task)
         if reply_id is not None:
@@ -758,12 +840,29 @@ async def _process_turn(
     telemetry_tasks: set[asyncio.Task[None]],
     mcp_client: DeviceMcpClient | None = None,
     strip_wake_name: bool = False,
+    authorize: Callable[[], Awaitable[None]] | None = None,
+    turn_providers: RealtimeProviderBundle | None = None,
 ) -> bool:
+    if isinstance(asr, SpeechToSpeechInput):
+        assert authorize is not None
+        return await process_s2s_turn(
+            websocket, lease, asr, device_id=device_id, user_id=user_id,
+            conversation_id=conversation_id, snapshot=snapshot, history=history,
+            timeline=timeline, playback=playback, user_exit_event=user_exit_event,
+            authorize=authorize, telemetry_tasks=telemetry_tasks,
+        )
     serial = lease.serial_number
     turn_started = timeline.started_at
-    providers: RealtimeProviderBundle = websocket.app.state.realtime_providers
+    providers: RealtimeProviderBundle = turn_providers or websocket.app.state.realtime_providers
     fallback: ProviderBundle | None = websocket.app.state.fallback_providers
     router = EmotionRouter()
+    fallback_usage_settings = websocket.app.state.settings.model_copy(deep=True)
+    fallback_speech_settings = getattr(getattr(fallback, "speech", None), "settings", None)
+    if fallback_speech_settings is not None:
+        fallback_usage_settings = fallback_usage_settings.model_copy(update={
+            "fallback_asr_model": fallback_speech_settings.asr_model,
+            "fallback_tts_model": fallback_speech_settings.tts_model,
+        })
     provider_settings = getattr(providers, "settings", websocket.app.state.settings)
     search_provider = create_search_provider(provider_settings)
     tool_registry = ToolRegistry(search_provider=search_provider)
@@ -773,6 +872,11 @@ async def _process_turn(
         tool_schemas.extend(mcp_client.openai_tools(enabled_tools))
 
     async def execute_tool(name: str, arguments: dict[str, object]) -> str:
+        if authorize is not None:
+            await authorize()
+        allowed_names = {item["function"]["name"] for item in tool_schemas}
+        if name not in allowed_names:
+            raise RuntimeError("tool is not enabled")
         if mcp_client is not None and mcp_client.can_call(name):
             return await mcp_client.call(name, arguments)
         return await tool_registry.execute(name, arguments)
@@ -1146,51 +1250,69 @@ async def _process_turn(
                     if not await pacer.send(packet):
                         return
             else:
-                assert tts is not None
-                if first_realtime_segment:
-                    assert encoder is not None and reply_id is not None
-                    synthesis_task = asyncio.create_task(
-                        _synthesize_sentence_audio(
+                try:
+                    assert tts is not None
+                    if first_realtime_segment:
+                        assert encoder is not None and reply_id is not None
+                        synthesis_task = asyncio.create_task(
+                            _synthesize_sentence_audio(
+                                sentence,
+                                tts,
+                                encoder,
+                                pacer,
+                                on_first_pcm=lambda: timeline.mark("tts_first_pcm"),
+                                first_audio_timeout=websocket.app.state.settings.provider_timeout_seconds,
+                            )
+                        )
+                        try:
+                            await playback.ensure_ready(
+                                websocket, lease, reply_id, turn_id
+                            )
+                            timeline.mark("device_playback_ready")
+                            playback_ready = True
+                            await _send_sentence_start(websocket, lease, sentence, turn_id)
+                            packet_task = asyncio.create_task(send_packets())
+                            await synthesis_task
+                        except BaseException:
+                            if not synthesis_task.done():
+                                synthesis_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError, Exception):
+                                await synthesis_task
+                            raise
+                    else:
+                        assert reply_id is not None
+                        if not playback_ready:
+                            await playback.ensure_ready(
+                                websocket, lease, reply_id, turn_id
+                            )
+                            timeline.mark("device_playback_ready")
+                            playback_ready = True
+                        await _speak_sentence(
+                            websocket,
+                            lease,
                             sentence,
                             tts,
                             encoder,
                             pacer,
+                            turn_id,
                             on_first_pcm=lambda: timeline.mark("tts_first_pcm"),
                         )
-                    )
-                    try:
-                        await playback.ensure_ready(
-                            websocket, lease, reply_id, turn_id
-                        )
-                        timeline.mark("device_playback_ready")
-                        playback_ready = True
-                        await _send_sentence_start(websocket, lease, sentence, turn_id)
-                        packet_task = asyncio.create_task(send_packets())
-                        await synthesis_task
-                    except BaseException:
-                        if not synthesis_task.done():
-                            synthesis_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                            await synthesis_task
+                except PlaybackReadyTimeout:
+                    raise
+                except Exception:
+                    if fallback is None or "gateway_first_packet" in timeline.marks:
                         raise
-                else:
-                    assert reply_id is not None
-                    if not playback_ready:
-                        await playback.ensure_ready(
-                            websocket, lease, reply_id, turn_id
-                        )
-                        timeline.mark("device_playback_ready")
-                        playback_ready = True
-                    await _speak_sentence(
-                        websocket,
-                        lease,
-                        sentence,
-                        tts,
-                        encoder,
-                        pacer,
-                        turn_id,
-                        on_first_pcm=lambda: timeline.mark("tts_first_pcm"),
-                    )
+                    if authorize is not None:
+                        await authorize()
+                    # Nothing was sent: discard buffered PCM before retrying the
+                    # complete unheard prefix on the existing cascade backup.
+                    await _cleanup_audio_pipeline(tts, encoder, packet_task)
+                    tts, encoder, packet_task = None, None, None
+                    batch_tts = True
+                    fallback_operations.add("tts")
+                    for packet in await fallback.speech.synthesize("".join(spoken_parts)):
+                        if packet and not await pacer.send(packet):
+                            return
 
         if safety.fixed_response:
             reply_parts.append(safety.fixed_response)
@@ -1235,7 +1357,7 @@ async def _process_turn(
                 reply_parts.clear()
                 sentence_buffer = SentenceBuffer()
                 fallback_text = await fallback.llm.reply(
-                    llm_request.with_model(websocket.app.state.settings.fallback_llm_model)
+                    llm_request.with_model(fallback_usage_settings.fallback_llm_model)
                 )
                 reply_parts.append(fallback_text)
                 for sentence in sentence_buffer.feed(fallback_text):
@@ -1356,6 +1478,7 @@ async def _process_turn(
                 first_audio_latency_ms=first_audio_latency_ms,
                 safety_category=safety.category,
                 fallback_operations=fallback_operations,
+                settings=fallback_usage_settings,
             )
         )
         telemetry_tasks.add(telemetry_task)
@@ -1384,6 +1507,7 @@ async def _process_turn(
             )
         turn_outcome = "completed"
         turn_error_code = None
+        timeline.mark("turn_completed")
         return safety.end_session
     except asyncio.CancelledError:
         interrupted = True
@@ -1410,6 +1534,7 @@ async def _process_turn(
     except Exception:
         turn_error_code = "ai-unavailable"
         logger.exception("voice turn failed for device %s", serial)
+        await _cleanup_audio_pipeline(tts, encoder, packet_task)
         if reply_id is not None or tts_started:
             await _send_error(websocket, lease, "ai-unavailable", "AI response unavailable")
         else:
@@ -1501,7 +1626,7 @@ async def _save_session_summary(
         )
         summary_request = LlmRequest(
             context=summary_context,
-            model=snapshot.llm_model,
+            model=snapshot.llm_model or websocket.app.state.settings.llm_model,
             temperature=0.2,
             max_output_tokens=256,
         )
@@ -1710,7 +1835,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     connection_lease = await websocket.app.state.device_connections.connect(
         serial, websocket, connection_id, reset_epoch=reset_epoch
     )
-    active_asr: RealtimeAsrSession | None = None
+    active_asr: RealtimeAsrSession | SpeechToSpeechInput | None = None
+    turn_providers = websocket.app.state.realtime_providers
     active_task: asyncio.Task[bool] | None = None
     active_timeline: VoiceTurnTimeline | None = None
     audio_bytes = 0
@@ -1733,6 +1859,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     # A warm device WebSocket can span multiple sleep/wake sessions. Only a
     # real local wake arms prefix removal for the immediately following turn.
     first_turn_pending = False
+    last_input_closed = False
 
     def asr_endpoint_detected(asr: RealtimeAsrSession) -> bool:
         detector = getattr(asr, "endpoint_detected", None)
@@ -1753,11 +1880,137 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             raise WebSocketDisconnect(code=4403)
         return current
 
-    async def open_asr_for_turn() -> RealtimeAsrSession:
+    async def authorize_turn() -> None:
         async with session_factory() as session:
             await require_current_ownership(session)
+
+    async def open_asr_for_turn() -> RealtimeAsrSession | SpeechToSpeechInput | None:
+        """One entry for explicit and early-binary input, including policy and route selection."""
+        nonlocal snapshot, active_task, continuous_reminder_sent, turn_providers
+        nonlocal last_input_closed
+        last_input_closed = False
+        async with session_factory() as session:
+            current_device = await require_current_ownership(session)
+            next_snapshot = await _load_snapshot(session, current_device)
+            if conversation_id is not None and (
+                next_snapshot.agent_id != snapshot.agent_id
+                or next_snapshot.usage_profile_id != snapshot.usage_profile_id
+            ):
+                await finalize_logical_conversation("configuration-changed")
+            snapshot = next_snapshot
+            profile = await session.get(UsageProfile, snapshot.usage_profile_id)
+            if profile is None:
+                raise WebSocketDisconnect(code=4403)
+            await ensure_logical_conversation()
+            policy = await evaluate_profile_policy(
+                session, profile, family_mode_enabled=settings.family_mode_enabled,
+                conversation_started_at=conversation_started_at,
+            )
+            quota = await quota_for_user(session, user_id, settings)
+            await session.commit()
+        if not policy.allowed or (policy.continuous_reminder_due and not continuous_reminder_sent):
+            reminder = policy.allowed
+            message = "已经聊了一会儿，起来活动一下吧。" if reminder else policy.message
+            await websocket.app.state.device_connections.send_json_for_lease(
+                connection_lease, {"type": "alert",
+                                   "status": "break-reminder" if reminder else policy.code,
+                                   "message": message},
+            )
+            if snapshot.route_kind == "cascade":
+                active_task = asyncio.create_task(_speak_fixed_message(
+                    websocket, connection_lease, snapshot.voice, snapshot.tts_speech_rate,
+                    message, playback, emotion="safe_block" if not reminder else "neutral",
+                ))
+            continuous_reminder_sent = continuous_reminder_sent or reminder
+            return None
+        if quota.remaining <= 0:
+            await _send_error(websocket, connection_lease, "quota-exhausted",
+                              "monthly voice quota exhausted")
+            return None
+        if snapshot.route_kind == "realtime_s2s":
+            if (
+                not settings.doubao_realtime_enabled or not settings.doubao_api_key
+                or (settings.app_env == "production" and not settings.doubao_realtime_validated)
+                or snapshot.usage_profile_kind != UsageProfileKind.ADULT.value
+            ):
+                await _send_error(websocket, connection_lease, "s2s-not-enabled",
+                                  "豆包语音尚未开放，请手动选择其他语音方案。")
+                return None
+            backend = None
+            decoder = None
+            try:
+                registry = ToolRegistry(search_provider=create_search_provider(settings))
+                tools = registry.definitions(snapshot.tools)
+                if mcp_client is not None:
+                    tools.extend(mcp_client.openai_tools(snapshot.tools))
+                allowed_names = {item["function"]["name"] for item in tools}
+                input_accepted = asyncio.Event()
+
+                async def execute_tool(name, arguments):
+                    await asyncio.wait_for(input_accepted.wait(), settings.provider_timeout_seconds)
+                    await authorize_turn()
+                    async with session_factory() as session:
+                        agent = await session.get(Agent, snapshot.agent_id)
+                        current_tools = json.loads(agent.tools_json or "{}") if agent else {}
+                    permission_name = DeviceMcpClient.SAFE_TOOL_ALIASES.get(name, name)
+                    if name not in allowed_names or not current_tools.get(permission_name, False):
+                        raise RuntimeError("tool is not enabled")
+                    if mcp_client is not None and mcp_client.can_call(name):
+                        return await mcp_client.call(name, arguments)
+                    return await registry.execute(name, arguments)
+
+                memories, summaries = await _load_context_sources(
+                    session_factory, snapshot, settings,
+                )
+                context = ContextBuilder().build(
+                    system_prompt=(snapshot.system_prompt + "\n"
+                                   + build_voice_reply_policy("").context
+                                   + "\n用户明确要故事时讲完整短故事，最多160字。"
+                                   "不要输出或朗读Markdown、网址、表情标签或舞台动作。"),
+                    current_question="", history=history[-20:], memories=memories,
+                    summaries=summaries, tools=tools or None,
+                )
+                instructions = "\n".join(str(item["content"]) for item in context.messages
+                                         if item["role"] == "system")
+                previous = [ConversationMessage(role=item["role"], text=str(item["content"]))
+                            for item in context.messages[:-1]
+                            if item["role"] in {"user", "assistant"}]
+                # ponytail: fresh upstream per turn keeps consent/context isolation;
+                # reuse only after measuring connection cost with equivalent invalidation.
+                backend = await DoubaoRealtimeBackend.open(
+                    DoubaoConfig(api_key=settings.doubao_api_key, url=settings.doubao_realtime_url,
+                                 model=snapshot.realtime_model, voice=snapshot.voice,
+                                 timeout_seconds=settings.provider_timeout_seconds),
+                    instructions=instructions, history=previous, tools=tools,
+                    tool_executor=execute_tool if tools else None,
+                )
+                decoder = StreamingOpusToPcm(settings.ffmpeg_path)
+                await decoder.start()
+                return SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()), input_accepted)
+            except asyncio.CancelledError:
+                if decoder is not None:
+                    await decoder.cancel()
+                if backend is not None:
+                    await backend.close()
+                raise
+            except Exception as exc:
+                if decoder is not None:
+                    await decoder.cancel()
+                if backend is not None:
+                    await backend.close()
+                await _send_error(websocket, connection_lease,
+                                  getattr(exc, "code", "s2s-unavailable"),
+                                  "豆包语音暂时不可用，请重试或手动更换语音方案。")
+                return None
+        turn_providers = websocket.app.state.realtime_providers
+        if isinstance(turn_providers, RealtimeProviderBundle):
+            turn_providers = turn_providers.for_models(
+                asr_provider=snapshot.asr_provider, asr_model=snapshot.asr_model,
+                llm_provider=snapshot.llm_provider, llm_model=snapshot.llm_model,
+                tts_provider=snapshot.tts_provider, tts_model=snapshot.tts_model,
+            )
         try:
-            return await websocket.app.state.realtime_providers.open_asr()
+            return await turn_providers.open_asr()
         except Exception as exc:
             logger.warning(
                 "realtime ASR open failed for %s with %s; buffering for batch fallback",
@@ -1830,11 +2083,35 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
 
         summary_task.add_done_callback(observe_summary)
 
+    async def cancel_input() -> None:
+        nonlocal active_asr
+        source, active_asr = active_asr, None
+        if source is None:
+            return
+        try:
+            await source.cancel()
+        finally:
+            # A paid upstream can be aborted before ASR/VAD starts a reply task.
+            # Keep that attempt visible without consuming a completed-turn quota.
+            if isinstance(source, SpeechToSpeechInput) and conversation_id is not None:
+                try:
+                    await record_s2s_usage(
+                        session_factory, conversation_id=conversation_id, user_id=user_id,
+                        device_id=device_id, model=snapshot.realtime_model,
+                        provider_session_id=source.backend.session_id, response_id="",
+                        turn_id=source.turn_id, usage={}, completed=False,
+                        latency_ms=None, error_code="input-cancelled",
+                    )
+                except Exception:
+                    logger.error("S2S input usage recording failed turn_id=%s", source.turn_id)
+
     async def start_active_turn(turn_started: float) -> bool:
         nonlocal active_asr, active_task, audio_bytes, audio_frames, audio_buffer
         nonlocal active_timeline, first_turn_pending
+        nonlocal last_input_closed
         if active_asr is None or audio_bytes == 0:
             return False
+        last_input_closed = True
         async with session_factory() as session:
             await require_current_ownership(session)
         active_conversation_id = await ensure_logical_conversation()
@@ -1845,7 +2122,9 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         audio_bytes = 0
         audio_frames = 0
         audio_buffer.clear()
-        turn_id = str(uuid.uuid4())
+        turn_id = (
+            turn_asr.turn_id if isinstance(turn_asr, SpeechToSpeechInput) else str(uuid.uuid4())
+        )
         active_timeline = VoiceTurnTimeline(turn_id=turn_id, started_at=turn_started)
         strip_wake_name = first_turn_pending
         first_turn_pending = False
@@ -1868,6 +2147,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 telemetry_tasks,
                 mcp_client,
                 strip_wake_name=strip_wake_name,
+                authorize=authorize_turn,
+                turn_providers=turn_providers,
             )
         )
         return True
@@ -1879,14 +2160,23 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 timeout_seconds=settings.device_ws_activity_timeout_seconds,
                 stop_event=user_exit_event,
                 revoked_event=connection_lease.revoked,
+                endpoint_event=getattr(active_asr, "endpoint_event", None),
             )
             if connection_lease.revoked.is_set():
                 break
+            if incoming is not None and incoming.get("type") == "provider.endpoint":
+                if not await start_active_turn(time.perf_counter()) and active_asr is not None:
+                    await cancel_input()
+                    active_asr = None
+                    await _send_error(websocket, connection_lease, "s2s-input-unavailable",
+                                      "语音输入未完成，请重试。")
+                continue
             if user_exit_event.is_set():
                 await finalize_logical_conversation("user-exit")
                 user_exit_event.clear()
                 first_turn_pending = False
-                continue
+                if incoming is None:
+                    continue
             if incoming is None:
                 heartbeat_timed_out = True
                 logger.warning("device websocket heartbeat timeout serial=%s", serial)
@@ -1917,8 +2207,10 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     audio_bytes = 0
                     audio_frames = 0
                     audio_buffer.clear()
+                    if active_asr is None:
+                        continue
                 if audio_bytes + len(chunk) > MAX_UTTERANCE_BYTES:
-                    await active_asr.cancel()
+                    await cancel_input()
                     active_asr = None
                     audio_bytes = 0
                     audio_frames = 0
@@ -1931,7 +2223,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     )
                     continue
                 if audio_frames >= settings.max_device_audio_queue_frames:
-                    await active_asr.cancel()
+                    await cancel_input()
                     active_asr = None
                     audio_bytes = 0
                     audio_frames = 0
@@ -1946,8 +2238,16 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 try:
                     await active_asr.send_audio(chunk)
                 except Exception as exc:
+                    if isinstance(active_asr, SpeechToSpeechInput):
+                        await cancel_input()
+                        active_asr = None
+                        audio_buffer.clear()
+                        audio_bytes = audio_frames = 0
+                        await _send_error(websocket, connection_lease, "s2s-input-failed",
+                                          "豆包收音暂时不可用，请重试。")
+                        continue
                     with contextlib.suppress(Exception):
-                        await active_asr.cancel()
+                        await cancel_input()
                     logger.warning(
                         "realtime ASR audio send failed for %s with %s; "
                         "buffering for batch fallback",
@@ -1994,6 +2294,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         "audio_params": {
                             "format": "mock-utf8"
                             if websocket.app.state.realtime_providers.mock
+                            and snapshot.route_kind == "cascade"
                             else "opus",
                             "sample_rate": 24000,
                             "channels": 1,
@@ -2028,7 +2329,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 abort_reason = str(message.get("reason") or "aborted")
                 first_turn_pending = False
                 if active_asr is not None:
-                    await active_asr.cancel()
+                    await cancel_input()
                     active_asr = None
                 if active_task is not None and not active_task.done():
                     active_task.cancel()
@@ -2061,15 +2362,16 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     active_task = None
                     if telemetry_tasks:
                         await asyncio.gather(*tuple(telemetry_tasks), return_exceptions=True)
-                    await websocket.app.state.device_connections.send_json_for_lease(
-                        connection_lease,
-                        {
-                            "type": "turn",
-                            "state": "completed",
-                            "turn_id": acknowledged_turn_id,
-                            "reply_id": reply_id,
-                        },
-                    )
+                    if active_timeline is None or "turn_completed" in active_timeline.marks:
+                        await websocket.app.state.device_connections.send_json_for_lease(
+                            connection_lease,
+                            {
+                                "type": "turn",
+                                "state": "completed",
+                                "turn_id": acknowledged_turn_id,
+                                "reply_id": reply_id,
+                            },
+                        )
                     if end_session:
                         await finalize_logical_conversation("user-exit")
                         user_exit_event.clear()
@@ -2144,71 +2446,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     if end_session:
                         await finalize_logical_conversation("user-exit")
                         user_exit_event.clear()
-                async with session_factory() as session:
-                    current_device = await require_current_ownership(session)
-                    next_snapshot = await _load_snapshot(session, current_device)
-                    if conversation_id is not None and (
-                        next_snapshot.agent_id != snapshot.agent_id
-                        or next_snapshot.usage_profile_id != snapshot.usage_profile_id
-                    ):
-                        await finalize_logical_conversation("configuration-changed")
-                    snapshot = next_snapshot
-                    profile = await session.get(UsageProfile, snapshot.usage_profile_id)
-                    if profile is None:
-                        await websocket.close(code=4404, reason="usage profile removed")
-                        break
-                    await ensure_logical_conversation()
-                    assert conversation_started_at is not None
-                    policy = await evaluate_profile_policy(
-                        session,
-                        profile,
-                        family_mode_enabled=settings.family_mode_enabled,
-                        conversation_started_at=conversation_started_at,
-                    )
-                    await session.commit()
-                if not policy.allowed:
-                    await websocket.app.state.device_connections.send_json_for_lease(
-                        connection_lease,
-                        {
-                            "type": "alert",
-                            "status": policy.code,
-                            "message": policy.message,
-                        },
-                    )
-                    active_task = asyncio.create_task(
-                        _speak_fixed_message(
-                            websocket,
-                            connection_lease,
-                            snapshot.voice,
-                            snapshot.tts_speech_rate,
-                            policy.message,
-                            playback,
-                            emotion="safe_block",
-                        )
-                    )
-                    continue
-                if policy.continuous_reminder_due and not continuous_reminder_sent:
-                    reminder = "已经聊了一会儿，起来活动一下吧。"
-                    await websocket.app.state.device_connections.send_json_for_lease(
-                        connection_lease,
-                        {
-                            "type": "alert",
-                            "status": "break-reminder",
-                            "message": reminder,
-                        },
-                    )
-                    active_task = asyncio.create_task(
-                        _speak_fixed_message(
-                            websocket,
-                            connection_lease,
-                            snapshot.voice,
-                            snapshot.tts_speech_rate,
-                            reminder,
-                            playback,
-                        )
-                    )
-                    continuous_reminder_sent = True
-                    continue
                 # A few ESP32 transports can put the first binary frame on the
                 # socket immediately before listen.start. The binary branch
                 # already opens an implicit ASR session for that race; preserve
@@ -2221,7 +2458,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 continue
             if state == "standby":
                 if active_asr is not None:
-                    await active_asr.cancel()
+                    await cancel_input()
                     active_asr = None
                 if active_task is not None and not active_task.done():
                     active_task.cancel()
@@ -2246,7 +2483,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 )
                 continue
             if active_asr is None or audio_bytes == 0:
-                if active_task is not None:
+                if active_task is not None or last_input_closed:
                     # The Qwen server VAD already closed this utterance. A late
                     # local listen.stop is only an acknowledgement of that turn.
                     continue
@@ -2279,7 +2516,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     finally:
         async def cleanup_connection() -> None:
             if active_asr is not None:
-                await active_asr.cancel()
+                await cancel_input()
             if active_task is not None and not active_task.done():
                 active_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

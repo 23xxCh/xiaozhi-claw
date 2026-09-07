@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     qwen_realtime_asr_model: str = "qwen3-asr-flash-realtime"
     qwen_realtime_vad_silence_ms: int = 700
     qwen_realtime_tts_model: str = "qwen3-tts-flash-realtime"
+    doubao_realtime_enabled: bool = False
+    doubao_realtime_validated: bool = False
+    doubao_api_key: str = Field(default="", repr=False)
+    doubao_realtime_url: str = "wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue"
     fallback_enabled: bool = True
     fallback_api_key: str = ""
     fallback_asr_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -108,6 +112,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":
+        if self.doubao_realtime_enabled:
+            if not self.doubao_api_key.strip():
+                raise ValueError("DOUBAO_API_KEY is required when the route is enabled")
+            if not self.doubao_realtime_url.startswith("wss://"):
+                raise ValueError("DOUBAO_REALTIME_URL must use WSS")
+            if self.app_env == "production" and not self.doubao_realtime_validated:
+                raise ValueError("Doubao route requires real-device release validation")
         if self.app_env in {"staging", "production"}:
             unsafe = {
                 "admin_api_key": self.admin_api_key,

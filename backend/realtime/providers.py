@@ -6,8 +6,9 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+from urllib.parse import urlencode
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
@@ -143,7 +144,8 @@ class QwenRealtimeAsrSession:
     @classmethod
     async def open(cls, settings: Settings) -> "QwenRealtimeAsrSession":
         url = (
-            f"{settings.qwen_realtime_asr_url.rstrip('/')}?model={settings.qwen_realtime_asr_model}"
+            f"{settings.qwen_realtime_asr_url.rstrip('/')}?"
+            f"{urlencode({'model': settings.qwen_realtime_asr_model})}"
         )
         websocket = await connect(
             url,
@@ -306,15 +308,36 @@ class QwenRealtimeAsrSession:
 
 
 class DeepSeekStreamingLlmProvider:
-    def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        client: httpx.AsyncClient | None = None,
+        deepseek_options: bool = True,
+        owns_client: bool = True,
+    ) -> None:
         self.settings = settings
         self._client = client or httpx.AsyncClient(
             timeout=self.settings.provider_timeout_seconds
         )
         self._closed = False
+        self._deepseek_options = deepseek_options
+        self._owns_client = owns_client
+
+    def for_provider(
+        self, provider: str, *, settings: Settings | None = None
+    ) -> "DeepSeekStreamingLlmProvider":
+        if provider not in {"deepseek", "openai-compatible"}:
+            raise RealtimeProviderError("binding", "unsupported-llm-provider")
+        return DeepSeekStreamingLlmProvider(
+            settings or self.settings,
+            client=self._client,
+            deepseek_options=provider == "deepseek",
+            owns_client=False,
+        )
 
     async def aclose(self) -> None:
-        if self._closed:
+        if self._closed or not self._owns_client:
             return
         self._closed = True
         await self._client.aclose()
@@ -336,11 +359,11 @@ class DeepSeekStreamingLlmProvider:
                 "temperature": request.temperature,
                 "max_tokens": request.max_output_tokens,
                 "stream": True,
-                # Voice turns are short and latency-sensitive. DeepSeek V4
-                # enables thinking by default, which can add several seconds
-                # before the first audible sentence for simple questions.
-                "thinking": {"type": "disabled"},
             }
+            if self._deepseek_options:
+                # This option is private to DeepSeek, not part of the shared
+                # OpenAI-compatible chat completions protocol.
+                payload["thinking"] = {"type": "disabled"}
             if request.tools:
                 payload["tools"] = request.tools
                 if tool_result_added:
@@ -444,7 +467,8 @@ class QwenRealtimeTtsSession:
         cls, settings: Settings, *, voice: str, speech_rate: float
     ) -> "QwenRealtimeTtsSession":
         url = (
-            f"{settings.qwen_realtime_tts_url.rstrip('/')}?model={settings.qwen_realtime_tts_model}"
+            f"{settings.qwen_realtime_tts_url.rstrip('/')}?"
+            f"{urlencode({'model': settings.qwen_realtime_tts_model})}"
         )
         websocket = await connect(
             url,
@@ -573,6 +597,45 @@ class RealtimeProviderBundle:
     settings: Settings
     llm: RealtimeLlmProvider
     mock: bool = False
+    _owns_llm: bool = field(default=True, repr=False)
+
+    def for_models(
+        self,
+        *,
+        asr_provider: str,
+        asr_model: str,
+        llm_provider: str,
+        llm_model: str,
+        tts_provider: str,
+        tts_model: str,
+    ) -> "RealtimeProviderBundle":
+        """Freeze supported per-turn model choices without opening another pool.
+
+        Provider IDs describe supported wire protocols. Endpoints and credentials
+        remain application configuration; unsupported choices never fall through
+        to an unrelated implementation. Only the application bundle owns its LLM.
+        """
+        if asr_provider != "dashscope":
+            raise RealtimeProviderError("binding", "unsupported-asr-provider")
+        if tts_provider != "dashscope":
+            raise RealtimeProviderError("binding", "unsupported-tts-provider")
+        if llm_provider not in {"deepseek", "openai-compatible"}:
+            raise RealtimeProviderError("binding", "unsupported-llm-provider")
+        if any(not isinstance(model, str) or not model.strip() for model in (
+            asr_model, llm_model, tts_model,
+        )):
+            raise RealtimeProviderError("binding", "missing-model")
+        settings = self.settings.model_copy(deep=True, update={
+            "asr_model": asr_model, "qwen_realtime_asr_model": asr_model,
+            "llm_model": llm_model,
+            "tts_model": tts_model, "qwen_realtime_tts_model": tts_model,
+        })
+        llm = self.llm
+        if not self.mock:
+            if not isinstance(llm, DeepSeekStreamingLlmProvider):
+                raise RealtimeProviderError("binding", "unsupported-llm-implementation")
+            llm = llm.for_provider(llm_provider, settings=settings)
+        return RealtimeProviderBundle(settings, llm, self.mock, _owns_llm=False)
 
     async def open_asr(self) -> RealtimeAsrSession:
         if self.mock:
@@ -587,7 +650,8 @@ class RealtimeProviderBundle:
         )
 
     async def aclose(self) -> None:
-        await self.llm.aclose()
+        if self._owns_llm:
+            await self.llm.aclose()
 
 
 def create_realtime_providers(settings: Settings) -> RealtimeProviderBundle:

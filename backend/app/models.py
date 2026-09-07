@@ -143,12 +143,15 @@ class ModelPreset(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(80))
     description: Mapped[str] = mapped_column(String(240), default="")
-    asr_provider: Mapped[str] = mapped_column(String(40))
-    asr_model: Mapped[str] = mapped_column(String(120))
-    llm_provider: Mapped[str] = mapped_column(String(40))
-    llm_model: Mapped[str] = mapped_column(String(120))
-    tts_provider: Mapped[str] = mapped_column(String(40))
-    tts_model: Mapped[str] = mapped_column(String(120))
+    route_kind: Mapped[str] = mapped_column(String(24), default="cascade", server_default="cascade")
+    realtime_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    realtime_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    asr_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    asr_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    llm_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tts_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    tts_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     asr_cost_micros_per_minute: Mapped[int] = mapped_column(Integer, default=0)
     llm_input_cost_micros_per_million_tokens: Mapped[int] = mapped_column(Integer, default=0)
     llm_output_cost_micros_per_million_tokens: Mapped[int] = mapped_column(Integer, default=0)
@@ -401,7 +404,10 @@ class EncryptedSessionSummary(Base):
 
 class ProviderUsage(Base):
     __tablename__ = "provider_usage"
-    __table_args__ = (Index("ix_provider_usage_created_at_operation", "created_at", "operation"),)
+    __table_args__ = (
+        Index("ix_provider_usage_created_at_operation", "created_at", "operation"),
+        UniqueConstraint("billing_event_key", name="uq_provider_usage_billing_event_key"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     session_id: Mapped[str | None] = mapped_column(
@@ -415,7 +421,16 @@ class ProviderUsage(Base):
     input_units: Mapped[int] = mapped_column(Integer, default=0)
     output_units: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
-    cost_micros: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micros: Mapped[int | None] = mapped_column(
+        Integer().evaluates_none(), default=0, nullable=True
+    )
+    cost_status: Mapped[str] = mapped_column(
+        String(16), default="estimated", server_default="estimated"
+    )
+    billing_event_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    usage_details_json: Mapped[str] = mapped_column(Text, default="{}")
+    pricing_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

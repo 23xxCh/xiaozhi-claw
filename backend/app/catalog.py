@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Agent, Device, ModelPreset, User, VoicePreset
 from .usage_profiles import ensure_adult_profile
+from .voice_routes import compatible_voices, validate_model_route
 
 DEFAULT_MODEL_PRESETS = (
     {
@@ -54,6 +55,26 @@ DEFAULT_MODEL_PRESETS = (
         "enabled": False,
         "is_default": False,
     },
+    {
+        "id": "doubao-realtime",
+        "display_name": "豆包实时语音",
+        "description": "端到端语音对话，支持已开放的工具；表达灵活度和语速固定",
+        "route_kind": "realtime_s2s",
+        "realtime_provider": "doubao",
+        "realtime_model": "1.2.6.1",
+        "asr_provider": None,
+        "asr_model": None,
+        "llm_provider": None,
+        "llm_model": None,
+        "tts_provider": None,
+        "tts_model": None,
+        "asr_cost_micros_per_minute": 0,
+        "llm_input_cost_micros_per_million_tokens": 0,
+        "llm_output_cost_micros_per_million_tokens": 0,
+        "tts_cost_micros_per_10k_chars": 0,
+        "enabled": False,
+        "is_default": False,
+    },
 )
 
 DEFAULT_VOICE_PRESETS = (
@@ -73,6 +94,14 @@ DEFAULT_VOICE_PRESETS = (
         "provider": "dashscope",
         "voice": "Ethan",
         "preview_url": "/voice-previews/ethan.mp3",
+        "is_default": False,
+    },
+    {
+        "id": "doubao-vv",
+        "display_name": "VV / 豆包女声",
+        "language": "zh-CN",
+        "provider": "doubao",
+        "voice": "zh_female_vv_jupiter_bigtts",
         "is_default": False,
     },
 )
@@ -112,7 +141,14 @@ async def ensure_default_agent(session: AsyncSession, user: User) -> Agent:
         select(Agent).where(Agent.owner_user_id == user.id).order_by(Agent.created_at)
     )
     if agent is None:
-        agent = Agent(owner_user_id=user.id, usage_profile_id=profile.id, name="我的助手")
+        model, voice = await resolve_agent_presets(session)
+        agent = Agent(
+            owner_user_id=user.id,
+            usage_profile_id=profile.id,
+            name="我的助手",
+            model_preset_id=model.id,
+            voice_preset_id=voice.id,
+        )
         session.add(agent)
         await session.flush()
     devices = list(
@@ -127,3 +163,32 @@ async def ensure_default_agent(session: AsyncSession, user: User) -> Agent:
         device.active_agent_id = agent.id
         device.active_profile_id = agent.usage_profile_id
     return agent
+
+
+async def resolve_agent_presets(
+    session: AsyncSession,
+    model_preset_id: str | None = None,
+    voice_preset_id: str | None = None,
+) -> tuple[ModelPreset, VoicePreset]:
+    """Resolve omitted choices from one catalog for creation and device onboarding."""
+    if model_preset_id is None:
+        model = await session.scalar(
+            select(ModelPreset)
+            .where(ModelPreset.enabled.is_(True))
+            .order_by(ModelPreset.is_default.desc(), ModelPreset.id)
+            .limit(1)
+        )
+    else:
+        model = await session.get(ModelPreset, model_preset_id)
+    if model is None or not model.enabled:
+        raise ValueError("model preset unavailable")
+    validate_model_route(model)
+    voices = list(await session.scalars(select(VoicePreset).where(VoicePreset.enabled.is_(True))))
+    compatible = compatible_voices(model, voices)
+    voice = next(
+        (item for item in compatible if voice_preset_id is None or item.id == voice_preset_id),
+        None,
+    )
+    if voice is None:
+        raise ValueError("voice preset is unavailable or incompatible with the selected model")
+    return model, voice

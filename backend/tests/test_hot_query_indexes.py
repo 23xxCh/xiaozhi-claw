@@ -14,7 +14,7 @@ from backend.app.models import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260829_07"
-INDEX_REVISION = "20260903_08"
+CURRENT_HEAD = "20260907_09"
 EXPECTED_INDEXES = {
     "usage_events": {
         "ix_usage_events_user_kind_created_at",
@@ -66,7 +66,7 @@ def test_hot_query_index_migration_round_trips_sqlite(tmp_path: Path) -> None:
     _alembic(database, "upgrade", "head")
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            INDEX_REVISION,
+            CURRENT_HEAD,
         )
         for table, indexes in EXPECTED_INDEXES.items():
             assert indexes <= _index_names(connection, table)

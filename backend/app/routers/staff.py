@@ -223,6 +223,7 @@ async def admin_metrics(
                 func.sum(ProviderUsage.cost_micros),
                 func.sum(case((error_condition, 1), else_=0)),
                 func.sum(case((fallback_condition, 1), else_=0)),
+                func.sum(case((ProviderUsage.cost_micros.is_(None), 1), else_=0)),
             )
             .where(ProviderUsage.created_at >= since_30d)
             .group_by(ProviderUsage.operation)
@@ -236,8 +237,11 @@ async def admin_metrics(
             "cost_micros": int(cost or 0),
             "errors": int(errors or 0),
             "fallbacks": int(fallbacks or 0),
+            "unknown_cost_records": int(unknown_costs or 0),
         }
-        for operation, requests, average_latency, cost, errors, fallbacks in provider_rows
+        for (
+            operation, requests, average_latency, cost, errors, fallbacks, unknown_costs
+        ) in provider_rows
     ]
     provider_requests = sum(item["requests"] for item in provider_latency)
     provider_cost = sum(item["cost_micros"] for item in provider_latency)
@@ -264,6 +268,7 @@ async def admin_metrics(
         "provider_errors_30d": provider_errors,
         "provider_fallbacks_30d": provider_fallbacks,
         "provider_cost_micros_30d": provider_cost,
+        "unknown_cost_records_30d": sum(item["unknown_cost_records"] for item in provider_latency),
         "cost_per_active_user_micros_30d": (
             provider_cost // int(active_users_30d) if active_users_30d else 0
         ),
@@ -461,6 +466,7 @@ async def admin_provider_usage(
                 func.sum(ProviderUsage.cost_micros),
                 func.sum(ProviderUsage.input_units),
                 func.sum(ProviderUsage.output_units),
+                func.sum(case((ProviderUsage.cost_micros.is_(None), 1), else_=0)),
             ).group_by(
                 ProviderUsage.provider,
                 ProviderUsage.model,
@@ -477,6 +483,9 @@ async def admin_provider_usage(
             "cost_micros": int(cost or 0),
             "input_units": int(input_units or 0),
             "output_units": int(output_units or 0),
+            "unknown_cost_records": int(unknown_costs or 0),
         }
-        for provider, model, operation, requests, cost, input_units, output_units in rows
+        for (
+            provider, model, operation, requests, cost, input_units, output_units, unknown_costs
+        ) in rows
     ]

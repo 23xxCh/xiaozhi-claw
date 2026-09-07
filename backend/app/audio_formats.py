@@ -50,10 +50,15 @@ def _ogg_page(
 class IncrementalOggOpusMuxer:
     """Wrap independent raw Opus frames in one incrementally produced Ogg stream."""
 
-    def __init__(self, *, input_sample_rate: int, frame_duration_ms: int) -> None:
+    def __init__(
+        self, *, input_sample_rate: int, frame_duration_ms: int, pre_skip_samples: int = 312
+    ) -> None:
         if input_sample_rate <= 0 or frame_duration_ms <= 0:
             raise ValueError("sample rate and frame duration must be positive")
+        if not 0 <= pre_skip_samples <= 65535:
+            raise ValueError("pre-skip must fit the unsigned 16-bit OpusHead field")
         self.input_sample_rate = input_sample_rate
+        self.pre_skip_samples = pre_skip_samples
         self.samples_per_packet = 48000 * frame_duration_ms // 1000
         self.serial_number = 0x48454E53
         self.sequence_number = 0
@@ -64,7 +69,7 @@ class IncrementalOggOpusMuxer:
         opus_head = (
             b"OpusHead"
             + bytes([1, 1])
-            + struct.pack("<H", 312)
+            + struct.pack("<H", self.pre_skip_samples)
             + struct.pack("<I", self.input_sample_rate)
             + struct.pack("<h", 0)
             + bytes([0])

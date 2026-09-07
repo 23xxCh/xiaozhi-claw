@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 from datetime import UTC, datetime
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from backend.realtime.providers import (
     DeepSeekStreamingLlmProvider,
     QwenRealtimeAsrSession,
     QwenRealtimeTtsSession,
+    RealtimeProviderBundle,
     RealtimeProviderError,
     RealtimeProviderTimeout,
 )
@@ -461,3 +463,133 @@ async def test_qwen_local_stop_commits_before_finishing_manual_session() -> None
         "session.finish",
     ]
     assert result.text == "本地提前停止"
+
+
+def _selected_models(**updates):
+    return {
+        "asr_provider": "dashscope",
+        "asr_model": "selected-asr&revision=2",
+        "llm_provider": "deepseek",
+        "llm_model": "selected-llm",
+        "tts_provider": "dashscope",
+        "tts_model": "selected-tts&revision=3",
+        **updates,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bound_bundle_uses_selected_asr_tts_models_and_preserves_source(monkeypatch):
+    urls = []
+
+    class BindingSocket:
+        def __init__(self):
+            self.events = asyncio.Queue()
+
+        async def send(self, value):
+            if json.loads(value)["type"] == "session.update":
+                self.events.put_nowait(json.dumps({"type": "session.updated"}))
+
+        async def recv(self):
+            return await self.events.get()
+
+        async def close(self):
+            return None
+
+    async def fake_connect(url, **kwargs):
+        urls.append(url)
+        return BindingSocket()
+
+    monkeypatch.setattr(realtime_providers, "connect", fake_connect)
+    settings = Settings(provider_mode="custom", asr_model="source-asr", tts_model="source-tts")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    source = RealtimeProviderBundle(settings, DeepSeekStreamingLlmProvider(settings, client=client))
+    bound = source.for_models(**_selected_models())
+    asr = tts = None
+    try:
+        asr = await bound.open_asr()
+        tts = await bound.open_tts("Cherry")
+        assert [parse_qs(urlsplit(url).query) for url in urls] == [
+            {"model": ["selected-asr&revision=2"]},
+            {"model": ["selected-tts&revision=3"]},
+        ]
+        assert bound.settings.asr_model == "selected-asr&revision=2"
+        assert bound.settings.tts_model == "selected-tts&revision=3"
+        assert bound.settings.llm_model == "selected-llm"
+        assert source.settings.asr_model == "source-asr"
+        assert source.settings.tts_model == "source-tts"
+        source.settings.llm_url = "https://changed.example"
+        assert bound.settings.llm_url != source.settings.llm_url
+        await bound.aclose()
+        assert client.is_closed is False
+    finally:
+        if asr:
+            await asr.cancel()
+        if tts:
+            await tts.cancel()
+        await source.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["deepseek", "openai-compatible"])
+async def test_binding_shares_client_but_isolates_provider_specific_llm_options(provider):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, text='data: {"choices":[{"delta":{"content":"好"}}]}\n\ndata: [DONE]\n\n'
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    settings = Settings(provider_mode="custom", llm_url="https://llm.example/v1")
+    source = RealtimeProviderBundle(settings, DeepSeekStreamingLlmProvider(settings, client=client))
+    bound = source.for_models(**_selected_models(llm_provider=provider))
+    try:
+        assert bound.llm._client is source.llm._client is client
+        request = LlmRequest(
+            context=ContextBuilder().build(
+                system_prompt="你是助手",
+                current_question="你好",
+                history=[],
+                memories=[],
+                summaries=[],
+                tools=None,
+            ),
+            model=bound.settings.llm_model,
+            temperature=0.35,
+        )
+        assert [part async for part in bound.llm.reply_stream(request)] == ["好"]
+        assert requests[0]["model"] == "selected-llm"
+        assert ("thinking" in requests[0]) is (provider == "deepseek")
+        await bound.llm.aclose()
+        await bound.aclose()
+        assert client.is_closed is False
+    finally:
+        await source.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize(
+    "updates,code",
+    [
+        ({"asr_provider": "other"}, "unsupported-asr-provider"),
+        ({"tts_provider": "other"}, "unsupported-tts-provider"),
+        ({"llm_provider": "other"}, "unsupported-llm-provider"),
+        ({"asr_model": ""}, "missing-model"),
+    ],
+)
+def test_binding_rejects_unsupported_routes_even_in_mock_mode(updates, code):
+    source = realtime_providers.create_realtime_providers(Settings(provider_mode="mock"))
+    with pytest.raises(RealtimeProviderError, match=code):
+        source.for_models(**_selected_models(**updates))
+
+
+@pytest.mark.asyncio
+async def test_valid_binding_keeps_mock_implementations():
+    source = realtime_providers.create_realtime_providers(Settings(provider_mode="mock"))
+    bound = source.for_models(**_selected_models())
+    assert bound.mock is True
+    assert bound.llm is source.llm
+    assert isinstance(await bound.open_asr(), realtime_providers.MockAsrSession)
+    assert isinstance(await bound.open_tts("Cherry"), realtime_providers.MockTtsSession)

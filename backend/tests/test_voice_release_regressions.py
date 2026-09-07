@@ -5,9 +5,27 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from backend.realtime.commands import DeviceCommandDispatcher
+from backend.realtime.session import _receive_device_message
 
 from .conftest import provision_owned_device
 from .test_websocket import _device_headers, _receive_mock_turn
+
+
+def test_simultaneous_session_exit_keeps_already_received_ping():
+    async def run():
+        stopped = asyncio.Event()
+        stopped.set()
+
+        class Socket:
+            async def receive(self):
+                return {"type": "websocket.receive", "text": '{"type":"ping"}'}
+
+        message = await _receive_device_message(
+            Socket(), timeout_seconds=1, stop_event=stopped,
+        )
+        assert message is not None and message["text"] == '{"type":"ping"}'
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("chunk_size", [1, 45])

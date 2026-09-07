@@ -53,10 +53,16 @@ async def usage(
     )
     return UsageSummaryResponse(
         voice_turns=int(turns or 0),
-        provider_cost_micros=sum(item.cost_micros for item in usages),
-        pricing_configured=pricing_configured,
+        provider_cost_micros=sum(
+            item.cost_micros for item in usages if item.cost_micros is not None
+        ),
+        pricing_configured=(
+            pricing_configured and all(item.cost_micros is not None for item in usages)
+        ),
         asr_units=sum(item.input_units for item in usages if item.operation == "asr"),
         llm_input_units=sum(item.input_units for item in usages if item.operation == "llm"),
         llm_output_units=sum(item.output_units for item in usages if item.operation == "llm"),
         tts_units=sum(item.input_units for item in usages if item.operation == "tts"),
+        realtime_s2s_requests=sum(item.operation == "realtime_s2s" for item in usages),
+        unknown_cost_records=sum(item.cost_micros is None for item in usages),
     )

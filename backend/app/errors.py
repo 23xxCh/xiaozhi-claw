@@ -11,6 +11,12 @@ def _request_id(request: Request) -> str:
 
 def _http_error(status_code: int, detail: object) -> tuple[str, str]:
     text = str(detail)
+    if text == "doubao route has not passed release validation":
+        return "VOICE_ROUTE_NOT_VALIDATED", "豆包语音方案尚未完成启用配置或发布验证"
+    if "voice preset is unavailable or incompatible" in text:
+        return "VOICE_PRESET_INCOMPATIBLE", "此声音不适用于当前语音方案，请重新选择"
+    if "selected route does not support" in text:
+        return "VOICE_PARAMETER_UNSUPPORTED", "当前语音方案不支持此设置，请刷新后重新选择"
     if "invalid email code" in text:
         return "INVALID_CODE", "验证码不正确，请重新输入"
     if status_code == 429:

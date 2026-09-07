@@ -1,5 +1,7 @@
+import re
 from datetime import datetime
 from enum import StrEnum
+from math import isfinite
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, HttpUrl, field_validator, model_validator
@@ -179,8 +181,8 @@ class AgentCreateRequest(BaseModel):
         min_length=1,
         max_length=8000,
     )
-    model_preset_id: str = Field(default="fast-chat", max_length=64)
-    voice_preset_id: str = Field(default="cherry", max_length=64)
+    model_preset_id: str | None = Field(default=None, min_length=1, max_length=64)
+    voice_preset_id: str | None = Field(default=None, min_length=1, max_length=64)
     llm_temperature: float = Field(default=0.6, ge=0, le=2)
     tts_speech_rate: float = Field(default=1.0, ge=0.5, le=2.0)
     usage_profile_id: str | None = None
@@ -216,20 +218,33 @@ class AgentResponse(BaseModel):
     updated_at: datetime
 
 
+class RouteCapabilities(BaseModel):
+    llm_temperature: bool
+    tts_speech_rate: bool
+    tools: bool
+    supported_tool_ids: list[str] = Field(default_factory=list)
+
+
 class ModelPresetResponse(BaseModel):
     id: str
     display_name: str
     description: str
     is_default: bool
+    route_kind: Literal["cascade", "realtime_s2s"]
+    capabilities: RouteCapabilities
+    compatible_voice_ids: list[str]
+    default_voice_preset_id: str | None
 
 
 class AdminModelPresetResponse(ModelPresetResponse):
-    asr_provider: str
-    asr_model: str
-    llm_provider: str
-    llm_model: str
-    tts_provider: str
-    tts_model: str
+    realtime_provider: str | None
+    realtime_model: str | None
+    asr_provider: str | None
+    asr_model: str | None
+    llm_provider: str | None
+    llm_model: str | None
+    tts_provider: str | None
+    tts_model: str | None
     enabled: bool
     asr_cost_micros_per_minute: int
     llm_input_cost_micros_per_million_tokens: int
@@ -240,6 +255,9 @@ class AdminModelPresetResponse(ModelPresetResponse):
 class AdminModelPresetUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=240)
+    route_kind: Literal["cascade", "realtime_s2s"] | None = None
+    realtime_provider: str | None = Field(default=None, min_length=1, max_length=40)
+    realtime_model: str | None = Field(default=None, min_length=1, max_length=120)
     asr_provider: str | None = Field(default=None, min_length=1, max_length=40)
     asr_model: str | None = Field(default=None, min_length=1, max_length=120)
     llm_provider: str | None = Field(default=None, min_length=1, max_length=40)
@@ -265,6 +283,7 @@ class VoicePresetResponse(BaseModel):
     id: str
     display_name: str
     language: str
+    provider: str
     voice: str
     preview_url: str | None
     is_default: bool
@@ -374,6 +393,45 @@ class UsageSummaryResponse(BaseModel):
     llm_input_units: int
     llm_output_units: int
     tts_units: int
+    realtime_s2s_requests: int = 0
+    unknown_cost_records: int = 0
+
+
+class ProviderUsageMeter(BaseModel):
+    kind: Literal["input_audio", "output_audio", "input_text", "output_text"]
+    unit: Literal["milliseconds", "tokens", "characters"]
+    quantity: int = Field(ge=0, strict=True)
+
+
+class ProviderUsageDetails(BaseModel):
+    """Only metering data belongs here, never a provider response or transcript."""
+
+    schema_version: Literal[1] = 1
+    meters: list[ProviderUsageMeter] = Field(default_factory=list, max_length=32)
+    provider_usage: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("provider_usage")
+    @classmethod
+    def numeric_usage_only(cls, value: dict[str, object]) -> dict[str, object]:
+        count = 0
+
+        def validate(item: object, depth: int) -> None:
+            nonlocal count
+            count += 1
+            if count > 256 or depth > 4:
+                raise ValueError("provider usage exceeds metering limits")
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if not isinstance(key, str) or not re.fullmatch(
+                        r"[A-Za-z][A-Za-z0-9_]{0,79}", key
+                    ):
+                        raise ValueError("provider usage keys must be counter names")
+                    validate(child, depth + 1)
+            elif type(item) not in (int, float) or not isfinite(item) or item < 0:
+                raise ValueError("provider usage must contain only nonnegative numeric counters")
+
+        validate(value, 0)
+        return value
 
 
 class StaffCreateRequest(BaseModel):
