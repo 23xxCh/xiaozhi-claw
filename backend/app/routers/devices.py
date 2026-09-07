@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
@@ -21,6 +21,7 @@ from ..models import (
     StaffUser,
     User,
 )
+from ..quota import _as_utc
 from ..schemas import (
     ClaimConfirmRequest,
     DeviceBootstrapRequest,
@@ -239,6 +240,14 @@ async def confirm_claim(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="18+ confirmation required"
         )
+    # Authentication only reads. Start a fresh transaction so a concurrent claim's
+    # account changes are visible after acquiring the lock (including MySQL RR).
+    user_id = user.id
+    await session.rollback()
+    if session.get_bind().dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE; a no-op write serializes local claim transactions.
+        await session.execute(update(User).where(User.id == user_id).values(id=User.id))
+    await session.refresh(user, with_for_update=True)
     code_hash = hash_secret(payload.claim_code, request.app.state.settings.device_credential_pepper)
     claim = await session.scalar(
         select(Claim).where(Claim.code_hash == code_hash).with_for_update()
@@ -264,15 +273,43 @@ async def confirm_claim(
     agent = await ensure_default_agent(session, user)
     device.active_agent_id = agent.id
     device.active_profile_id = agent.usage_profile_id
-    session.add(
-        Entitlement(
-            user_id=user.id,
-            plan="trial",
-            monthly_turn_limit=request.app.state.settings.trial_monthly_turns,
-            starts_at=now,
-            expires_at=now + timedelta(days=request.app.state.settings.trial_days),
+    if device.service_gift_status == "eligible":
+        entitlement = await session.scalar(
+            select(Entitlement)
+            .where(Entitlement.user_id == user.id, Entitlement.expires_at > now)
+            .order_by(Entitlement.expires_at.desc())
+            .limit(1)
+            .with_for_update()
         )
-    )
+        gift_starts_at = _as_utc(entitlement.expires_at) if entitlement else now
+        gift_expires_at = gift_starts_at + timedelta(days=request.app.state.settings.trial_days)
+        if entitlement is None:
+            entitlement = Entitlement(
+                user_id=user.id,
+                plan="trial",
+                monthly_turn_limit=request.app.state.settings.trial_monthly_turns,
+                starts_at=now,
+                expires_at=gift_expires_at,
+            )
+            session.add(entitlement)
+        else:
+            entitlement.expires_at = gift_expires_at
+        device.service_gift_status = "granted"
+        device.service_gift_granted_at = now
+        await session.flush()
+        add_audit_event(
+            session,
+            actor_type="user",
+            actor_id=user.id,
+            action="device.service-gift-granted",
+            payload={
+                "device_id": device.id,
+                "claim_id": claim.id,
+                "entitlement_id": entitlement.id,
+                "starts_at": gift_starts_at.isoformat(),
+                "expires_at": gift_expires_at.isoformat(),
+            },
+        )
     add_audit_event(
         session,
         actor_type="user",

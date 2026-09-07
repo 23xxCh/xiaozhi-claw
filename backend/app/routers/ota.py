@@ -46,6 +46,7 @@ async def select_release(
     board_type: str,
     serial_number: str,
     current_version: str,
+    auto_update_enabled: bool = True,
 ) -> FirmwareRelease | None:
     releases = list(
         await session.scalars(
@@ -61,7 +62,8 @@ async def select_release(
         (
             release
             for release in releases
-            if _version_tuple(release.version) > _version_tuple(current_version)
+            if (auto_update_enabled or release.mandatory)
+            and _version_tuple(release.version) > _version_tuple(current_version)
         ),
         None,
     )
@@ -147,6 +149,7 @@ async def check_release(
         board_type=device.board_type,
         serial_number=device.serial_number,
         current_version=current_version,
+        auto_update_enabled=device.ota_auto_update,
     )
     if selected is None:
         response.status_code = status.HTTP_204_NO_CONTENT

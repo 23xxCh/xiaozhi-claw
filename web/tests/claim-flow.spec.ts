@@ -29,9 +29,14 @@ test("claim fragment survives login without entering an access log", async ({ pa
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ id: "device-1", status: "online" }),
+      body: JSON.stringify({ id: "device-1" }),
     });
   });
+  await page.route("**/v1/devices", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{ id: "device-1", online: true }]),
+  }));
 
   await page.goto("/claim#code=123456");
   await expect(page).toHaveURL(/\/login\?next=%2Fclaim$/);
@@ -45,4 +50,37 @@ test("claim fragment survives login without entering an access log", async ({ pa
   await expect(page.getByText("请说：你好小灿")).toBeVisible();
   expect(confirmedCode).toBe("123456");
   expect(await page.evaluate(() => sessionStorage.getItem("hensun_claim_code"))).toBeNull();
+});
+
+test("claim stays bound while offline and refreshes the real online state", async ({ page }) => {
+  let online = false;
+  let claimRequests = 0;
+  await page.route("**/v1/auth/me", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ agreements_complete: true }),
+  }));
+  await page.route("**/v1/claims/confirm", (route) => {
+    claimRequests += 1;
+    return route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ id: "device-1" }),
+    });
+  });
+  await page.route("**/v1/devices", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{ id: "device-1", online }]),
+  }));
+
+  await page.goto("/claim#code=123456");
+  await expect(page.getByText("设备已绑定，等待设备上线")).toBeVisible();
+  await expect(page.getByText("设备在线，可以聊天")).toHaveCount(0);
+  await expect(page.getByText("请说：你好小灿")).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem("hensun_claim_code"))).toBeNull();
+
+  online = true;
+  await page.getByRole("button", { name: "刷新设备状态" }).click();
+  await expect(page.getByText("设备在线，可以聊天")).toBeVisible();
+  await expect(page.getByText("请说：你好小灿")).toBeVisible();
+  expect(claimRequests).toBe(1);
 });

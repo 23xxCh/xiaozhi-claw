@@ -240,6 +240,12 @@ class Device(Base):
         Integer, default=1, server_default="1"
     )
     reset_epoch: Mapped[int] = mapped_column(Integer, default=0)
+    service_gift_status: Mapped[str] = mapped_column(
+        String(24), default="eligible", server_default="eligible"
+    )
+    service_gift_granted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

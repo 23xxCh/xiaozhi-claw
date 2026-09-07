@@ -12,6 +12,7 @@ from ..models import (
     AgentMemory,
     ConversationSession,
     EncryptedSessionSummary,
+    MemorySummary,
     User,
 )
 from ..schemas import MemoryExportResponse, SessionSummaryUpdateRequest
@@ -63,6 +64,7 @@ async def delete_all_account_memories(
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    await session.execute(delete(MemorySummary).where(MemorySummary.user_id == user.id))
     await session.execute(delete(AgentMemory).where(AgentMemory.user_id == user.id))
     await session.execute(
         delete(EncryptedSessionSummary).where(EncryptedSessionSummary.user_id == user.id)

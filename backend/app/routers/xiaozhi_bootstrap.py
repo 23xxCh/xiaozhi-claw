@@ -113,6 +113,7 @@ async def xiaozhi_bootstrap(
             board_type=device.board_type,
             serial_number=device.serial_number,
             current_version=version or device.firmware_version,
+            auto_update_enabled=device.ota_auto_update,
         )
         await session.commit()
 
