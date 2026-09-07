@@ -339,6 +339,25 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         self.assertIn("display->ShowActivationCode", app_source)
         self.assertIn('SetEmotion("surprised")', app_source)
 
+    def test_code_only_claim_polls_without_challenge_activation_or_reannouncing(self):
+        source = self.read_required(ROOT / "main/application.cc")
+        check = source.split("void Application::CheckNewVersion()", 1)[1].split(
+            "void Application::InitializeProtocol()", 1
+        )[0]
+        code_only = check.split("if (!ota_->HasActivationChallenge()) {", 1)[1].split(
+            "// This will block", 1
+        )[0]
+        self.assertIn("vTaskDelay(pdMS_TO_TICKS(3000));", code_only)
+        self.assertIn("continue;", code_only)
+        self.assertNotIn("Activate()", code_only)
+        self.assertIn("if (code != announced_activation_code)", check)
+        self.assertIn("else if (!activation_prompt_visible)", check)
+        # A transient error must restore the QR without queuing the same digit sounds.
+        restore = check.split("else if (!activation_prompt_visible)", 1)[1].split("}", 1)[0]
+        self.assertIn("display->ShowActivationCode", restore)
+        self.assertNotIn("audio_service_", restore)
+        self.assertIn("if (!activation_prompt_visible)", check.split("ota_->CheckVersion()", 1)[0])
+
     def test_lvgl_claim_qr_uses_only_one_qrcodegen_implementation(self):
         cmake = (
             ROOT

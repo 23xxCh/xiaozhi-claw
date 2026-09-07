@@ -676,14 +676,19 @@ void Application::CheckNewVersion() {
     const int MAX_RETRY = 10;
     int retry_count = 0;
     int retry_delay = 10;  // Initial retry delay in seconds
+    std::string announced_activation_code;
+    bool activation_prompt_visible = false;
 
     auto& board = Board::GetInstance();
     while (true) {
         auto display = board.GetDisplay();
-        display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+        if (!activation_prompt_visible) {
+            display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
+        }
 
         esp_err_t err = ota_->CheckVersion();
         if (err != ESP_OK) {
+            activation_prompt_visible = false;
             retry_count++;
             if (retry_count >= MAX_RETRY) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
@@ -713,6 +718,7 @@ void Application::CheckNewVersion() {
         retry_delay = 10;  // Reset retry delay
 
         if (ota_->HasNewVersion()) {
+            activation_prompt_visible = false;
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return;  // This line will never be reached after reboot
             }
@@ -726,10 +732,27 @@ void Application::CheckNewVersion() {
             break;
         }
 
-        display->SetStatus(Lang::Strings::ACTIVATION);
         // Activation code is shown to the user and waiting for the user to input
         if (ota_->HasActivationCode()) {
-            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
+            const auto& code = ota_->GetActivationCode();
+            if (code != announced_activation_code) {
+                ShowActivationCode(code, ota_->GetActivationMessage());
+                announced_activation_code = code;
+            } else if (!activation_prompt_visible) {
+                // Restore the QR after an error without replaying the same code.
+                display->SetStatus(Lang::Strings::ACTIVATION);
+                display->ShowActivationCode(code.c_str(), ota_->GetActivationClaimUrl().c_str());
+            }
+            activation_prompt_visible = true;
+        } else {
+            activation_prompt_visible = false;
+            display->SetStatus(Lang::Strings::ACTIVATION);
+        }
+
+        // Code-only claiming is confirmed by the next bootstrap, not Activate().
+        if (!ota_->HasActivationChallenge()) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
         }
 
         // This will block the loop until the activation is done or timeout
