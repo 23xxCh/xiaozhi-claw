@@ -237,7 +237,7 @@ def test_expired_claim_code_is_rejected(
     assert response.status_code == 410
 
 
-def test_second_valid_claim_code_cannot_take_an_owned_device(
+def test_repeated_claim_code_cannot_take_an_owned_device(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     registered = client.post(
@@ -285,4 +285,4 @@ def test_second_valid_claim_code_cannot_take_an_owned_device(
         json={"claim_code": second_code},
     )
 
-    assert conflict.status_code == 409
+    assert conflict.status_code == 404

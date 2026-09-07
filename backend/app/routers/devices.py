@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
 from ..catalog import ensure_default_agent
+from ..claims import begin_claim_issuance, consume_device_claims, issue_claim, lock_claim_device
 from ..db import get_session
 from ..dependencies import authenticate_device, require_admin_or_staff, require_adult_user
 from ..models import (
@@ -38,7 +39,6 @@ from ..schemas import (
 from ..security import (
     create_device_session_token,
     hash_secret,
-    new_claim_code,
     new_device_secret,
 )
 
@@ -182,9 +182,11 @@ async def bootstrap_device(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="missing device secret"
         )
+    await begin_claim_issuance(session)
     device = await authenticate_device(
         request, session, device_id, authorization.removeprefix("Bearer ")
     )
+    await lock_claim_device(session, device)
     if device.lifecycle in {
         DeviceLifecycle.LOST_LOCKED.value,
         DeviceLifecycle.RMA_QUARANTINE.value,
@@ -206,15 +208,9 @@ async def bootstrap_device(
         )
 
     now = datetime.now(UTC)
-    code = new_claim_code()
-    claim = Claim(
-        code_hash=hash_secret(code, request.app.state.settings.device_credential_pepper),
-        device_id=device.id,
-        expires_at=now + timedelta(seconds=request.app.state.settings.claim_ttl_seconds),
-    )
+    code, claim = await issue_claim(session, device, request.app.state.settings, now)
     device.firmware_version = payload.firmware_version
     device.last_seen_at = now
-    session.add(claim)
     add_audit_event(
         session,
         actor_type="device",
@@ -249,11 +245,17 @@ async def confirm_claim(
         await session.execute(update(User).where(User.id == user_id).values(id=User.id))
     await session.refresh(user, with_for_update=True)
     code_hash = hash_secret(payload.claim_code, request.app.state.settings.device_credential_pepper)
-    claim = await session.scalar(
-        select(Claim).where(Claim.code_hash == code_hash).with_for_update()
-    )
+    claim = await session.scalar(select(Claim).where(Claim.code_hash == code_hash))
+    if claim is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="claim not found")
+    device = await session.get(Device, claim.device_id)
+    if device is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+    # All claim paths lock device then claim, avoiding issuance/confirmation deadlocks.
+    await lock_claim_device(session, device)
+    await session.refresh(claim, with_for_update=True)
     now = datetime.now(UTC)
-    if claim is None or claim.consumed_at is not None:
+    if claim.consumed_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="claim not found")
     expires_at = claim.expires_at
     if expires_at.tzinfo is None:
@@ -261,15 +263,12 @@ async def confirm_claim(
     if expires_at <= now:
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="claim expired")
 
-    device = await session.get(Device, claim.device_id, with_for_update=True)
-    if device is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
     if device.lifecycle != DeviceLifecycle.FACTORY_UNCLAIMED.value or device.owner_user_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="device already owned")
 
     device.owner_user_id = user.id
     device.lifecycle = DeviceLifecycle.OWNED.value
-    claim.consumed_at = now
+    await consume_device_claims(session, device.id, now)
     agent = await ensure_default_agent(session, user)
     device.active_agent_id = agent.id
     device.active_profile_id = agent.usage_profile_id
@@ -402,6 +401,8 @@ async def unbind_device(
     session: AsyncSession = Depends(get_session),
 ) -> DeviceUnbindResponse:
     device = await session.get(Device, device_id)
+    if device is not None:
+        await lock_claim_device(session, device)
     if device is None or device.owner_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
     device.owner_user_id = None
@@ -410,6 +411,7 @@ async def unbind_device(
     device.lifecycle = DeviceLifecycle.FACTORY_UNCLAIMED.value
     device.memory_consent = False
     device.reset_epoch += 1
+    await consume_device_claims(session, device.id, datetime.now(UTC))
     session.add(
         DeviceCommand(
             device_id=device.id,

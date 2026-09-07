@@ -7,6 +7,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
+from ..claims import consume_device_claims, lock_claim_device
 from ..db import get_session
 from ..dependencies import require_admin, require_staff
 from ..models import (
@@ -379,10 +380,12 @@ async def quarantine_device_for_rma(
     device = await session.get(Device, device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="device not found")
+    await lock_claim_device(session, device)
     device.lifecycle = DeviceLifecycle.RMA_QUARANTINE.value
     device.owner_user_id = None
     device.active_agent_id = None
     device.reset_epoch += 1
+    await consume_device_claims(session, device.id, datetime.now(UTC))
     add_audit_event(
         session,
         actor_type="staff",

@@ -1,14 +1,14 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, Header, HTTPException, Request, status
 from sqlalchemy import select
 
 from ..audit import add_audit_event
-from ..models import Claim, Device, DeviceLifecycle
+from ..claims import begin_claim_issuance, issue_claim, lock_claim_device
+from ..models import Device, DeviceLifecycle
+from ..quota import _as_utc
 from ..security import (
     create_device_session_token,
-    hash_secret,
-    new_claim_code,
     verify_secret,
 )
 from .ota import select_release
@@ -34,6 +34,7 @@ async def xiaozhi_bootstrap(
     """Translate the upstream XiaoZhi bootstrap shape for local pilot devices."""
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
+        await begin_claim_issuance(session)
         device = await session.scalar(select(Device).where(Device.serial_number == device_id))
         if device is None:
             raise HTTPException(
@@ -52,6 +53,7 @@ async def xiaozhi_bootstrap(
                 detail="invalid device credential",
             )
 
+        await lock_claim_device(session, device)
         now = datetime.now(UTC)
         version = _firmware_version(system_info)
         if version:
@@ -63,23 +65,7 @@ async def xiaozhi_bootstrap(
                     status_code=status.HTTP_423_LOCKED,
                     detail=device.lifecycle,
                 )
-            old_claims = list(
-                await session.scalars(
-                    select(Claim).where(
-                        Claim.device_id == device.id,
-                        Claim.consumed_at.is_(None),
-                    )
-                )
-            )
-            for old_claim in old_claims:
-                old_claim.consumed_at = now
-            code = new_claim_code()
-            claim = Claim(
-                code_hash=hash_secret(code, settings.device_credential_pepper),
-                device_id=device.id,
-                expires_at=now + timedelta(seconds=settings.claim_ttl_seconds),
-            )
-            session.add(claim)
+            code, claim = await issue_claim(session, device, settings, now)
             add_audit_event(
                 session,
                 actor_type="device",
@@ -93,7 +79,9 @@ async def xiaozhi_bootstrap(
                     "code": code,
                     "message": "请在 Hensun AI 网页输入 6 位绑定码",
                     "claim_url": f"{settings.web_app_url.rstrip('/')}/claim#code={code}",
-                    "timeout_ms": settings.claim_ttl_seconds * 1000,
+                    "timeout_ms": max(
+                        1, int((_as_utc(claim.expires_at) - now).total_seconds() * 1000)
+                    ),
                 },
                 "server_time": {
                     "timestamp": int(now.timestamp() * 1000),

@@ -1,13 +1,13 @@
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..catalog import ensure_default_agent
 from ..db import get_session
 from ..dependencies import require_adult_user
-from ..models import ConversationSession, Device, DeviceSession, User
+from ..models import Agent, ConversationSession, Device, DeviceSession, User
 from ..schemas import OnboardingStatusResponse
 
 router = APIRouter(prefix="/v1/onboarding", tags=["onboarding"])
@@ -16,15 +16,17 @@ router = APIRouter(prefix="/v1/onboarding", tags=["onboarding"])
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def onboarding_status(
     request: Request,
+    device_id: str | None = None,
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> OnboardingStatusResponse:
-    devices = list(
-        await session.scalars(
-            select(Device).where(Device.owner_user_id == user.id).order_by(Device.created_at)
-        )
-    )
-    if not devices:
+    query = select(Device).where(Device.owner_user_id == user.id)
+    if device_id is not None:
+        query = query.where(Device.id == device_id)
+    device = await session.scalar(query.order_by(Device.created_at).limit(1))
+    if device_id is not None and device is None:
+        raise HTTPException(status_code=404, detail="device not found")
+    if device is None:
         return OnboardingStatusResponse(
             device_bound=False,
             assistant_configured=False,
@@ -35,9 +37,10 @@ async def onboarding_status(
             active_agent_id=None,
         )
 
-    device = devices[0]
-    agent = await ensure_default_agent(session, user)
-    await session.commit()
+    agent = await session.get(Agent, device.active_agent_id) if device.active_agent_id else None
+    if agent is None or agent.owner_user_id != user.id:
+        agent = await ensure_default_agent(session, user)
+        await session.commit()
     configured = agent.config_version > 1 or agent.name != "我的助手"
     cutoff = datetime.now(UTC) - timedelta(
         seconds=request.app.state.settings.device_offline_after_seconds
@@ -45,15 +48,19 @@ async def onboarding_status(
     latest_session = await session.scalar(
         select(DeviceSession)
         .where(DeviceSession.device_id == device.id)
-        .order_by(DeviceSession.connected_at.desc())
+        .order_by(DeviceSession.connected_at.desc(), DeviceSession.id.desc())
+        .limit(1)
     )
     heartbeat = latest_session.heartbeat_at if latest_session else None
     if heartbeat is not None and heartbeat.tzinfo is None:
         heartbeat = heartbeat.replace(tzinfo=UTC)
-    online = bool(latest_session and latest_session.status == "online" and heartbeat >= cutoff)
+    online = bool(
+        latest_session and latest_session.status == "online" and heartbeat and heartbeat >= cutoff
+    )
     first_conversation = await session.scalar(
         select(ConversationSession.id).where(
             ConversationSession.user_id == user.id,
+            ConversationSession.device_id == device.id,
             ConversationSession.turn_count > 0,
         )
     )

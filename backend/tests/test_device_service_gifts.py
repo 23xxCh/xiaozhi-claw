@@ -10,6 +10,7 @@ from sqlalchemy import select
 from backend.app.models import Agent, AuditEvent, Claim, Device, Entitlement, UsageEvent
 from backend.app.quota import _as_utc
 from backend.app.routers import devices
+from backend.app.security import hash_secret
 
 
 def _login(client: TestClient, name: str) -> dict[str, str]:
@@ -152,7 +153,23 @@ def test_concurrent_claims_for_one_device_grant_once(
     headers = [_login(client, f"gift-race-{index}") for index in range(2)]
     device = _new_device(client, admin_headers, "GIFT-RACE")
     first_code = _claim_code(client, device)
-    codes = [first_code, first_code if same_code else _claim_code(client, device)]
+    second_code = first_code
+    if not same_code:
+        second_code = f"{(int(first_code) + 1) % 1_000_000:06d}"
+
+        async def add_legacy_code() -> None:
+            async with client.app.state.session_factory() as session:
+                session.add(Claim(
+                    device_id=device["device_id"],
+                    code_hash=hash_secret(
+                        second_code, client.app.state.settings.device_credential_pepper
+                    ),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                ))
+                await session.commit()
+
+        asyncio.run(add_legacy_code())
+    codes = [first_code, second_code]
     barrier = Barrier(2)
 
     def claim(index: int):
@@ -161,9 +178,7 @@ def test_concurrent_claims_for_one_device_grant_once(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses = list(pool.map(claim, range(2)))
-    assert sorted(response.status_code for response in responses) == (
-        [200, 404] if same_code else [200, 409]
-    )
+    assert sorted(response.status_code for response in responses) == [200, 404]
     assert len(asyncio.run(_rows(client, Entitlement))) == 1
     assert sorted(_quota(client, header)["plan"] for header in headers) == ["free", "trial"]
 
