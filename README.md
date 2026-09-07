@@ -6,8 +6,9 @@ half-duplex conversation, with the existing ASR/LLM/TTS route retained and an
 optional Doubao speech-to-speech route under validation. Real synthetic-audio
 probes passed both the direct PCM adapter and the complete bidirectional Opus
 gateway (147 output packets), with simulated device ACKs. This is not a
-microphone, speaker or whole-device acceptance result. The real database has
-not been migrated, the Doubao catalog candidate remains disabled, and the
+microphone, speaker or whole-device acceptance result. The local pilot database
+is now at revision `20260907_10`; production has not been migrated. The Doubao
+catalog candidate remains disabled, and the
 existing default route is unchanged. CAM builds and acceptance results below
 are historical engineering references, not evidence that this NOCAM candidate
 has passed. The product continues to exclude a motor, battery, charging dock,
@@ -18,6 +19,12 @@ Current route decision, acceptance steps and evidence:
 [`ADR 0006`](docs/adr/0006-selectable-voice-routes.md),
 [`Doubao acceptance`](docs/runbooks/doubao-acceptance.md), and
 [`2026-09-07 candidate report`](docs/reports/2026-09-07-doubao-candidate.md).
+
+Mobile setup, recoverable claims and the latest NOCAM security build:
+[`Productization report`](docs/reports/2026-09-07-productization-onboarding.md).
+The local NOCAM now runs the verified application update, has been claimed,
+and establishes a real gateway connection. Device identity, Wi-Fi settings and assets were preserved; real voice
+and whole-device acceptance remain pending.
 
 ## Start here
 
