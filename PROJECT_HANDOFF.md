@@ -1,5 +1,11 @@
 # Hensun Desk 项目交接说明
 
+> 当前状态补充：2026-09-07（Asia/Hong_Kong）。本轮候选为 ESP32-S3 NOCAM、Wi-Fi、轮流讲话；保留经典 ASR/LLM/TTS，并新增可选豆包端到端实时语音。本轮已形成独立本地逻辑提交和候选包，完整版本见最新报告，不能仅用下方旧提交或 CAM 记录判断版本。
+> 真实豆包鉴权及一轮 16kHz 合成 PCM 输入已取得 365252 字节 24kHz PCM 输出；完整网关双向 Opus 真实复测已通过（模拟设备回执），麦克风、扬声器、表情及整机验收仍待完成。真实数据库未迁移，豆包目录候选仍禁用，原默认路线保留；本轮没有因此刷机或生产部署。
+> 当前入口：[ADR 0006](docs/adr/0006-selectable-voice-routes.md)、[豆包验收手册](docs/runbooks/doubao-acceptance.md)、[候选证据报告](docs/reports/2026-09-07-doubao-candidate.md)。完整阶段与放行条件见[开发路线图](docs/plans/2026-09-07-hensun-development-roadmap.md)。
+
+以下保留 **2026-08-28 的 CAM 历史快照**。其中“当前”、COM 口、地址、进程、刷写和验收状态均指当时环境；继续执行前必须重新核对。与上方 NOCAM 候选或新 ADR 不一致时，以上方当前入口为准。
+
 > 状态核对时间：2026-08-28（Asia/Hong_Kong）
 > 当前阶段：单台本地金样机稳定性收口  
 > 当前工作目录：`E:\HENSUN_STABILITY_WT`  

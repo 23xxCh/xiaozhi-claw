@@ -1,10 +1,23 @@
 # Hensun Desk Pilot
 
 Commercial pilot foundation for an 18+ desktop AI assistant and light
-companion. The current CAM engineering build is USB-C powered and retains its
-camera for development. It intentionally excludes a motor, battery, charging
-dock, child mode, virtual-romance positioning, and medical or psychological
+companion. The current 2026-09-07 candidate targets ESP32-S3 NOCAM, Wi-Fi and
+half-duplex conversation, with the existing ASR/LLM/TTS route retained and an
+optional Doubao speech-to-speech route under validation. Real synthetic-audio
+probes passed both the direct PCM adapter and the complete bidirectional Opus
+gateway (147 output packets), with simulated device ACKs. This is not a
+microphone, speaker or whole-device acceptance result. The real database has
+not been migrated, the Doubao catalog candidate remains disabled, and the
+existing default route is unchanged. CAM builds and acceptance results below
+are historical engineering references, not evidence that this NOCAM candidate
+has passed. The product continues to exclude a motor, battery, charging dock,
+child mode, virtual-romance positioning, and medical or psychological
 treatment claims.
+
+Current route decision, acceptance steps and evidence:
+[`ADR 0006`](docs/adr/0006-selectable-voice-routes.md),
+[`Doubao acceptance`](docs/runbooks/doubao-acceptance.md), and
+[`2026-09-07 candidate report`](docs/reports/2026-09-07-doubao-candidate.md).
 
 ## Start here
 
