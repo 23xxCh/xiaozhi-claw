@@ -19,6 +19,22 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         self.assertTrue(path.is_file(), f"missing board file: {path}")
         return path.read_text(encoding="utf-8")
 
+    def test_nocam_advertises_implemented_playback_and_telemetry_without_pcm_mouth(self):
+        protocol = self.read_required(ROOT / "main/protocols/websocket_protocol.cc")
+        shared_guard = (
+            "#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || "
+            "CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1"
+        )
+        features = protocol.split(shared_guard, 1)[1].split("#else", 1)[0]
+        self.assertIn('"strict_playback_ack", true', features)
+        self.assertIn('"device_stage_telemetry", true', features)
+        self.assertIn('"pcm_mouth_sync", false', features)
+        application = self.read_required(ROOT / "main/application.cc")
+        for stage in ("speaker_pcm_started", "capture_started", "playback_drained"):
+            before_stage = application.split(f'"{stage}"', 1)[0]
+            self.assertEqual(before_stage.rsplit("#if", 1)[1].splitlines()[0],
+                             shared_guard.removeprefix("#if"))
+
     def test_has_isolated_selfhosted_build_identity(self):
         config = json.loads(self.read_required(BOARD / "config.json"))
 

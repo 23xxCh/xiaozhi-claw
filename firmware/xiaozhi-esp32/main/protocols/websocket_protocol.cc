@@ -206,8 +206,15 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON_AddBoolToObject(features, "aec", true);
 #endif
     cJSON_AddBoolToObject(features, "mcp", true);
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
     cJSON_AddBoolToObject(features, "strict_playback_ack", true);
+    cJSON_AddBoolToObject(features, "device_stage_telemetry", true);
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+    // The No-CAM GIF renderer has no PCM-driven mouth renderer.
+    cJSON_AddBoolToObject(features, "pcm_mouth_sync", false);
+#else
+    cJSON_AddBoolToObject(features, "pcm_mouth_sync", true);
+#endif
 #endif
     cJSON_AddItemToObject(root, "features", features);
     AddTextFontCapabilities(root);
