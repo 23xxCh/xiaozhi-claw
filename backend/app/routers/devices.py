@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -12,6 +13,7 @@ from ..models import (
     Agent,
     Claim,
     Device,
+    DeviceCommand,
     DeviceLifecycle,
     DeviceSession,
     Entitlement,
@@ -371,6 +373,13 @@ async def unbind_device(
     device.lifecycle = DeviceLifecycle.FACTORY_UNCLAIMED.value
     device.memory_consent = False
     device.reset_epoch += 1
+    session.add(
+        DeviceCommand(
+            device_id=device.id,
+            command_type="ownership-revoked",
+            payload_json=json.dumps({"reset_epoch": device.reset_epoch}),
+        )
+    )
     add_audit_event(
         session,
         actor_type="user",

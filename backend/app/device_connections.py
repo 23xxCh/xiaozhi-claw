@@ -1,6 +1,6 @@
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import WebSocket
 
@@ -12,6 +12,8 @@ class ConnectionLease:
     session_id: str
     generation: int
     send_lock: asyncio.Lock
+    reset_epoch: int = 0
+    revoked: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class DeviceConnectionManager:
@@ -23,7 +25,7 @@ class DeviceConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(
-        self, serial_number: str, websocket: WebSocket, session_id: str
+        self, serial_number: str, websocket: WebSocket, session_id: str, *, reset_epoch: int = 0
     ) -> ConnectionLease:
         async with self._lock:
             previous = self._connections.get(serial_number)
@@ -35,14 +37,17 @@ class DeviceConnectionManager:
                 session_id=session_id,
                 generation=generation,
                 send_lock=asyncio.Lock(),
+                reset_epoch=reset_epoch,
             )
             self._connections[serial_number] = lease
         if previous is not None and previous.websocket is not websocket:
+            previous.revoked.set()
             with contextlib.suppress(RuntimeError):
                 await previous.websocket.close(code=1012, reason="device reconnected")
         return lease
 
     async def disconnect(self, lease: ConnectionLease) -> None:
+        lease.revoked.set()
         async with self._lock:
             current = self._connections.get(lease.serial_number)
             if current is lease:
@@ -55,9 +60,18 @@ class DeviceConnectionManager:
             if current is not lease:
                 return False
             self._connections.pop(lease.serial_number, None)
+            lease.revoked.set()
         with contextlib.suppress(RuntimeError):
             await lease.websocket.close(code=code, reason=reason)
         return True
+
+    async def revoke_ownership(self, serial_number: str, reset_epoch: int) -> bool:
+        """A delayed Outbox command must never revoke a newly claimed connection."""
+        async with self._lock:
+            lease = self._connections.get(serial_number)
+        if lease is None or lease.reset_epoch >= reset_epoch:
+            return False
+        return await self.retire(lease, code=4403, reason="device ownership revoked")
 
     async def is_current(self, lease: ConnectionLease) -> bool:
         async with self._lock:

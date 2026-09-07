@@ -62,3 +62,17 @@ async def test_retire_closes_only_the_matching_current_lease() -> None:
     assert await manager.retire(second, code=1011, reason="tts ready timeout") is True
     assert second_socket.closed == (1011, "tts ready timeout")
     assert not await manager.is_current(second)
+
+
+async def test_delayed_ownership_revocation_does_not_close_reclaimed_device() -> None:
+    manager = DeviceConnectionManager()
+    old_socket = _WebSocket()
+    old = await manager.connect("DEVICE-4", old_socket, "old", reset_epoch=0)
+    assert await manager.revoke_ownership("DEVICE-4", 1)
+    assert old.revoked.is_set()
+    assert not await manager.send_bytes_for_lease(old, b"late-audio")
+    new_socket = _WebSocket()
+    new = await manager.connect("DEVICE-4", new_socket, "new", reset_epoch=1)
+    assert not await manager.revoke_ownership("DEVICE-4", 1)
+    assert await manager.is_current(new)
+    assert not new.revoked.is_set()

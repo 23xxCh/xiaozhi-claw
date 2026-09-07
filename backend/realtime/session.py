@@ -434,26 +434,30 @@ async def _receive_device_message(
     *,
     timeout_seconds: float,
     stop_event: asyncio.Event | None = None,
+    revoked_event: asyncio.Event | None = None,
 ) -> dict[str, object] | None:
-    if stop_event is None:
+    if stop_event is None and revoked_event is None:
         try:
             return await asyncio.wait_for(websocket.receive(), timeout=timeout_seconds)
         except TimeoutError:
             return None
 
     receive_task = asyncio.create_task(websocket.receive())
-    stop_task = asyncio.create_task(stop_event.wait())
+    stop_tasks = {
+        asyncio.create_task(event.wait())
+        for event in (stop_event, revoked_event) if event is not None
+    }
     try:
         done, _ = await asyncio.wait(
-            {receive_task, stop_task},
+            {receive_task, *stop_tasks},
             timeout=timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if not done or stop_task in done:
+        if not done or done.intersection(stop_tasks):
             return None
         return receive_task.result()
     finally:
-        for task in (receive_task, stop_task):
+        for task in (receive_task, *stop_tasks):
             if not task.done():
                 task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1072,7 +1076,6 @@ async def _process_turn(
         reply_parts: list[str] = []
         spoken_parts: list[str] = []
         spoken_chars = 0
-        spoken_segments = 0
         llm_started = time.perf_counter()
         first_sentence_at: float | None = None
         tts_started_at: float | None = None
@@ -1087,11 +1090,13 @@ async def _process_turn(
         async def speak(sentence: str) -> None:
             nonlocal encoder, first_sentence_at, packet_task, tts, tts_started
             nonlocal batch_tts, first_audio_latency_ms, tts_started_at, reply_id
-            nonlocal spoken_chars, spoken_segments
+            nonlocal spoken_chars
             nonlocal playback_ready
             first_realtime_segment = False
             sentence = sanitize_spoken_text(sentence)
-            if not sentence or spoken_segments >= reply_policy.max_spoken_segments:
+            # Transport chunks are not sentences; only the total text budget
+            # may truncate synthesis, independent of the LLM's token grouping.
+            if not sentence:
                 return
             sentence = sentence[: reply_policy.max_spoken_chars - spoken_chars].strip()
             if not sentence:
@@ -1119,7 +1124,6 @@ async def _process_turn(
                 tts_started_at = time.perf_counter()
             spoken_parts.append(sentence)
             spoken_chars += len(sentence)
-            spoken_segments += 1
             if batch_tts:
                 assert fallback is not None
                 assert reply_id is not None
@@ -1693,6 +1697,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         await session.commit()
         device_id = device.id
         user_id = device.owner_user_id
+        reset_epoch = device.reset_epoch
         device_session_id = device_session.id
 
     await websocket.accept()
@@ -1703,7 +1708,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         "token" if valid_token else "secret",
     )
     connection_lease = await websocket.app.state.device_connections.connect(
-        serial, websocket, connection_id
+        serial, websocket, connection_id, reset_epoch=reset_epoch
     )
     active_asr: RealtimeAsrSession | None = None
     active_task: asyncio.Task[bool] | None = None
@@ -1733,7 +1738,24 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         detector = getattr(asr, "endpoint_detected", None)
         return bool(detector and detector())
 
+    async def require_current_ownership(session: AsyncSession) -> Device:
+        current = await session.get(Device, device_id)
+        if (
+            current is None
+            or current.owner_user_id != user_id
+            or current.reset_epoch != reset_epoch
+            or current.lifecycle != DeviceLifecycle.OWNED.value
+            or not await websocket.app.state.device_connections.is_current(connection_lease)
+        ):
+            await websocket.app.state.device_connections.retire(
+                connection_lease, code=4403, reason="device ownership revoked"
+            )
+            raise WebSocketDisconnect(code=4403)
+        return current
+
     async def open_asr_for_turn() -> RealtimeAsrSession:
+        async with session_factory() as session:
+            await require_current_ownership(session)
         try:
             return await websocket.app.state.realtime_providers.open_asr()
         except Exception as exc:
@@ -1813,6 +1835,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         nonlocal active_timeline, first_turn_pending
         if active_asr is None or audio_bytes == 0:
             return False
+        async with session_factory() as session:
+            await require_current_ownership(session)
         active_conversation_id = await ensure_logical_conversation()
         turn_asr = active_asr
         turn_audio_duration_ms = audio_frames * 60
@@ -1854,7 +1878,10 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 websocket,
                 timeout_seconds=settings.device_ws_activity_timeout_seconds,
                 stop_event=user_exit_event,
+                revoked_event=connection_lease.revoked,
             )
+            if connection_lease.revoked.is_set():
+                break
             if user_exit_event.is_set():
                 await finalize_logical_conversation("user-exit")
                 user_exit_event.clear()
@@ -2118,10 +2145,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         await finalize_logical_conversation("user-exit")
                         user_exit_event.clear()
                 async with session_factory() as session:
-                    current_device = await session.get(Device, device_id)
-                    if current_device is None:
-                        await websocket.close(code=4404, reason="device removed")
-                        break
+                    current_device = await require_current_ownership(session)
                     next_snapshot = await _load_snapshot(session, current_device)
                     if conversation_id is not None and (
                         next_snapshot.agent_id != snapshot.agent_id

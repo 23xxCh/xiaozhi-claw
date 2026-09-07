@@ -72,6 +72,18 @@ class DeviceCommandDispatcher:
                     command.status = DeviceCommandStatus.FAILED.value
                     command.error_code = "invalid-payload"
                     continue
+                if command.command_type == "ownership-revoked":
+                    epoch = payload.get("reset_epoch") if isinstance(payload, dict) else None
+                    if type(epoch) is not int or epoch < 1:
+                        command.status = DeviceCommandStatus.FAILED.value
+                        command.error_code = "invalid-reset-epoch"
+                        continue
+                    if await self.connections.revoke_ownership(serial, epoch):
+                        command.status = DeviceCommandStatus.DELIVERED.value
+                        command.delivered_at = now
+                    # Other gateway processes still need to observe this command
+                    # when the device is not connected to this process.
+                    continue
                 if await self.connections.send_json(serial, payload):
                     command.status = DeviceCommandStatus.DELIVERED.value
                     command.delivered_at = now
