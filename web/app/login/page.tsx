@@ -8,13 +8,10 @@ import { useRouter } from "next/navigation";
 import { BrandFace } from "@/components/brand-face";
 import { ErrorMessage, InlineResult } from "@/components/page-state";
 import { api } from "@/lib/api";
+import { safeNext } from "@/lib/onboarding";
 
 type RequestCodeResponse = { expires_in: number; resend_after: number; debug_code?: string };
 type VerifyCodeResponse = { agreements_complete: boolean };
-
-function safeNext(value: string | null) {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/console";
-}
 
 export default function LoginPage() {
   const router = useRouter();

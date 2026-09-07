@@ -6,9 +6,9 @@ import { useRouter } from "next/navigation";
 
 import { ErrorMessage } from "@/components/page-state";
 import { api } from "@/lib/api";
+import { safeNext } from "@/lib/onboarding";
 
 type Me = { adult_confirmed: boolean; agreements_complete: boolean };
-function safeNext(value: string | null) { return value?.startsWith("/") && !value.startsWith("//") ? value : "/console"; }
 
 export default function AuthCompletePage() {
   const router = useRouter();
