@@ -55,7 +55,7 @@ private:
     std::vector<int> ParseVersion(const std::string& version);
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);
     std::string GetActivationPayload();
-    std::unique_ptr<Http> SetupHttp();
+    std::unique_ptr<Http> SetupHttp(const std::string& destination);
 };
 
 #endif // _OTA_H

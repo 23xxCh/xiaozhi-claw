@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "hensun_bootstrap_policy.h"
 #include "system_info.h"
 #include "settings.h"
 #include "assets/lang_config.h"
@@ -29,6 +30,7 @@
 #define TAG "Ota"
 
 #if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+static constexpr bool kHensunIdentityBuild = true;
 static std::string GetHensunDeviceSecret() {
     auto err = nvs_flash_init_partition("hensun_keys");
     if (err != ESP_OK) {
@@ -57,6 +59,8 @@ static std::string GetHensunDeviceSecret() {
     }
     return secret;
 }
+#else
+static constexpr bool kHensunIdentityBuild = false;
 #endif
 
 
@@ -84,10 +88,18 @@ std::string Ota::GetCheckVersionUrl() {
     if (url.empty()) {
         url = CONFIG_OTA_URL;
     }
+    if (kHensunIdentityBuild && !HensunSameBootstrapOrigin(url, CONFIG_OTA_URL)) {
+        ESP_LOGW(TAG, "Ignoring untrusted saved bootstrap destination");
+        url = CONFIG_OTA_URL;
+    }
     return url;
 }
 
-std::unique_ptr<Http> Ota::SetupHttp() {
+std::unique_ptr<Http> Ota::SetupHttp(const std::string& destination) {
+    if (kHensunIdentityBuild && !HensunSameBootstrapOrigin(destination, CONFIG_OTA_URL)) {
+        ESP_LOGE(TAG, "Refusing untrusted bootstrap destination");
+        return nullptr;
+    }
     auto& board = Board::GetInstance();
     auto network = board.GetNetwork();
     auto http = network->CreateHttp(0);
@@ -132,7 +144,10 @@ esp_err_t Ota::CheckVersion() {
         return ESP_ERR_INVALID_ARG;
     }
 
-    auto http = SetupHttp();
+    auto http = SetupHttp(url);
+    if (!http) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     std::string data = board.GetSystemInfoJson();
     std::string method = data.length() > 0 ? "POST" : "GET";
@@ -565,7 +580,10 @@ esp_err_t Ota::Activate() {
         url += "activate";
     }
 
-    auto http = SetupHttp();
+    auto http = SetupHttp(url);
+    if (!http) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     std::string data = GetActivationPayload();
     http->SetContent(std::move(data));

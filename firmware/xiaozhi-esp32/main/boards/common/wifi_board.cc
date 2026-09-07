@@ -56,7 +56,11 @@ void WifiBoard::StartNetwork() {
     WifiManagerConfig config;
     config.ssid_prefix = "Xiaozhi";
     config.language = Lang::CODE;
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_DESK_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+    config.show_ota_config = false;
+#else
     config.show_ota_config = true;
+#endif
     config.show_sleep_config = true;
 
     // Set a DHCP hostname so the router shows a friendly name instead of "espressif".

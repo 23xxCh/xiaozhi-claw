@@ -11,3 +11,5 @@ idf_build_set_property(MINIMAL_BUILD ON)
 
 set(PROJECT_VER "2.4.2")
 project(xiaozhi)
+
+include(cmake/hensun_wifi_security.cmake)
