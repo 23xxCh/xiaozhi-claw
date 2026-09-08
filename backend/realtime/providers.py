@@ -452,6 +452,15 @@ class DeepSeekStreamingLlmProvider:
 
 
 class QwenRealtimeTtsSession:
+    EMOTION_INSTRUCTIONS = {
+        "neutral": "自然平静地说话。", "happy": "用开心、轻快的语气说话。",
+        "laughing": "用愉快、带笑意的语气说话。", "caring": "用温柔关心、安慰的语气说话。",
+        "affectionate": "用温暖亲切的语气说话。", "curious": "用好奇、感兴趣的语气说话。",
+        "surprised": "用惊讶的语气说话。", "confused": "用疑惑的语气说话。",
+        "concerned": "用关切担忧的语气说话。", "apologetic": "用真诚歉意的语气说话。",
+        "shy": "用害羞、轻柔的语气说话。", "sad": "用低落难过的语气说话。",
+        "angry": "用生气但克制的语气说话，不尖叫。",
+    }
     def __init__(
         self,
         websocket: ClientConnection,
@@ -461,6 +470,11 @@ class QwenRealtimeTtsSession:
         self.websocket = websocket
         self.event_timeout_seconds = event_timeout_seconds
         self.closed = False
+        self.instruction_control = False
+        self._configuration: dict[str, object] = {}
+        self._emotion: str | None = None
+        self._connect_url = ""
+        self._connect_options: dict[str, object] = {}
 
     @classmethod
     async def open(
@@ -470,38 +484,59 @@ class QwenRealtimeTtsSession:
             f"{settings.qwen_realtime_tts_url.rstrip('/')}?"
             f"{urlencode({'model': settings.qwen_realtime_tts_model})}"
         )
-        websocket = await connect(
-            url,
-            proxy=None,
-            additional_headers={
+        connect_options = {
+            "proxy": None,
+            "additional_headers": {
                 "Authorization": f"Bearer {settings.tts_api_key}",
                 "OpenAI-Beta": "realtime=v1",
             },
-            open_timeout=settings.provider_timeout_seconds,
-            max_size=2 * 1024 * 1024,
-        )
+            "open_timeout": settings.provider_timeout_seconds,
+            "max_size": 2 * 1024 * 1024,
+        }
+        websocket = await connect(url, **connect_options)
         session = cls(
             websocket,
             event_timeout_seconds=settings.provider_timeout_seconds,
         )
-        await websocket.send(
-            json.dumps(
-                {
-                    "event_id": f"event_{uuid.uuid4().hex}",
-                    "type": "session.update",
-                    "session": {
-                        "voice": voice,
-                        "mode": "commit",
-                        "language_type": "Chinese",
-                        "response_format": "pcm",
-                        "sample_rate": 24000,
-                        "speech_rate": speech_rate,
-                    },
-                }
-            )
+        session.instruction_control = settings.qwen_realtime_tts_model.startswith(
+            "qwen3-tts-instruct-flash-realtime"
         )
-        await session._wait_for("session.updated")
+        session._configuration = {
+            "voice": voice, "mode": "commit", "language_type": "Chinese",
+            "response_format": "pcm", "sample_rate": 24000, "speech_rate": speech_rate,
+        }
+        session._connect_url = url
+        session._connect_options = connect_options
+        # Instruct accepts configuration only once, after the reply emotion is known.
+        if not session.instruction_control:
+            try:
+                await websocket.send(json.dumps({
+                    "event_id": f"event_{uuid.uuid4().hex}",
+                    "type": "session.update", "session": session._configuration,
+                }))
+                await session._wait_for("session.updated")
+            except BaseException:
+                await websocket.close()
+                raise
         return session
+
+    async def set_emotion(self, emotion: str) -> None:
+        if not self.instruction_control:
+            return
+        emotion = emotion if emotion in self.EMOTION_INSTRUCTIONS else "neutral"
+        if emotion == self._emotion:
+            return
+        if self._emotion is not None:
+            await self.websocket.close()
+            self.websocket = await connect(self._connect_url, **self._connect_options)
+        await self.websocket.send(json.dumps({
+            "event_id": f"event_{uuid.uuid4().hex}", "type": "session.update",
+            "session": {**self._configuration,
+                        "instructions": self.EMOTION_INSTRUCTIONS[emotion],
+                        "optimize_instructions": False},
+        }))
+        await self._wait_for("session.updated")
+        self._emotion = emotion
 
     async def _wait_for(self, expected: str) -> dict[str, object]:
         try:
@@ -515,6 +550,8 @@ class QwenRealtimeTtsSession:
             raise RealtimeProviderTimeout("qwen-tts", expected) from exc
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        if self.instruction_control and self._emotion is None:
+            await self.set_emotion("neutral")
         await self.websocket.send(
             json.dumps(
                 {

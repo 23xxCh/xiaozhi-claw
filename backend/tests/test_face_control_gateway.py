@@ -24,6 +24,7 @@ class FaceTaggedProviders:
 
     def __init__(self) -> None:
         self.spoken_texts: list[str] = []
+        self.spoken_emotions: list[str] = []
 
         class Llm:
             async def reply_stream(inner_self, *args, **kwargs) -> AsyncIterator[str]:
@@ -36,6 +37,9 @@ class FaceTaggedProviders:
                     yield chunk
 
         class Tts:
+            async def set_emotion(inner_self, emotion: str) -> None:
+                self.spoken_emotions.append(emotion)
+
             async def synthesize(inner_self, text: str) -> AsyncIterator[bytes]:
                 del inner_self
                 self.spoken_texts.append(text)
@@ -88,4 +92,5 @@ def test_streamed_face_controls_change_expression_without_reaching_tts(
     ]
     assert llm_emotions == ["thinking", "happy", "curious"]
     assert providers.spoken_texts == ["今天会很顺利。", "还想聊点什么？"]
+    assert providers.spoken_emotions == ["happy", "curious"]
     assert not any("[[face:" in text for text in providers.spoken_texts)

@@ -32,13 +32,16 @@ export default function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [voiceSearch, setVoiceSearch] = useState("");
   const selectedModel = models.find((model) => model.id === form.model_preset_id);
   const compatibleVoices = voices.filter((voice) => selectedModel?.compatible_voice_ids.includes(voice.id));
   const selectedVoice = compatibleVoices.find((voice) => voice.id === form.voice_preset_id);
+  const visibleVoices = compatibleVoices.filter((voice) => voice.display_name.toLowerCase().includes(voiceSearch.trim().toLowerCase()));
 
   function chooseModel(id: string) {
     const model = models.find((item) => item.id === id);
     if (!model) return;
+    setVoiceSearch("");
     setForm({ ...form, model_preset_id: id, voice_preset_id: model.compatible_voice_ids.includes(form.voice_preset_id) ? form.voice_preset_id : model.default_voice_preset_id ?? "" });
     setMessage("已切换语音方案，请确认声音后保存。正在进行的对话会继续完成。");
   }
@@ -95,7 +98,9 @@ export default function AgentsPage() {
           <div className="field"><label htmlFor="personality">性格</label><select disabled={selectedModel?.capabilities.system_prompt === false} id="personality" value={personalities.find(([, prompt]) => prompt === form.system_prompt)?.[0] ?? "自定义"} onChange={(event) => { const choice = personalities.find(([name]) => name === event.target.value); if (choice) setForm({ ...form, system_prompt: choice[1] }); }}>{personalities.map(([name]) => <option key={name}>{name}</option>)}<option>自定义</option></select></div>
           <div className="field"><label htmlFor="model">语音方案</label><select id="model" value={form.model_preset_id} onChange={(event) => chooseModel(event.target.value)}>{!selectedModel ? <option value={form.model_preset_id}>请选择可用方案</option> : null}{models.map((model) => <option key={model.id} value={model.id}>{model.display_name}</option>)}</select><div className="hint">{selectedModel?.description ?? "当前方案不可用，请重新选择。"}</div></div>
           <p className="hint">{selectedModel?.capabilities.history === false ? "当前方案每轮独立，使用阿里应用的人设与云端能力，不发送 Hensun 的历史和摘要记忆，也不执行设备工具。原角色设置保留，切回后恢复。" : "切换后，当前会话最近最多 10 组问答会随下一轮发送给所选语音服务。"}</p>
-          <div className="field"><label htmlFor="voice">声音</label><select id="voice" value={form.voice_preset_id} onChange={(event) => setForm({ ...form, voice_preset_id: event.target.value })}>{compatibleVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.display_name}</option>)}</select></div>
+          <div className="field"><label htmlFor="voice-search">查找声音（当前方案可选 {compatibleVoices.length} 种）</label><input id="voice-search" type="search" placeholder="搜索名称或风格，如温柔、男声" value={voiceSearch} onChange={(event) => setVoiceSearch(event.target.value)} /></div>
+          <div className="field"><label htmlFor="voice">声音</label><select id="voice" value={form.voice_preset_id} onChange={(event) => setForm({ ...form, voice_preset_id: event.target.value })}>{selectedVoice && !visibleVoices.includes(selectedVoice) ? <option value={selectedVoice.id}>{selectedVoice.display_name}（当前选择）</option> : null}{visibleVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.display_name}</option>)}</select>{visibleVoices.length === 0 ? <div className="hint">没有匹配的声音，请更换关键词。</div> : null}</div>
+          <p className="hint">试听展示基础音色；实际语气由语音方案决定。阿里多模态应用的具体音色在阿里控制台配置。</p>
           {selectedVoice?.preview_url ? <audio controls preload="none" src={selectedVoice.preview_url}>浏览器不支持音频试听</audio> : <div className="hint">当前音色尚未配置固定试听片段，保存后可直接在设备上试听。</div>}
           <label className="check"><input type="checkbox" checked={form.memory_consent} onChange={(event) => setForm({ ...form, memory_consent: event.target.checked })} />允许保存可查看、可删除的加密摘要记忆</label>
           <p className="hint">启用记忆后，已完成对话会交给摘要服务生成记忆；摘要服务可能与所选语音服务不同。</p>

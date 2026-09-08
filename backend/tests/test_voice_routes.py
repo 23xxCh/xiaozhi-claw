@@ -53,7 +53,8 @@ def test_doubao_candidate_is_disabled_and_not_disguised_as_cascade(
     assert {item["id"] for item in models} == {"fast-chat", "rich-chat"}
     assert {item["id"] for item in client.get("/v1/voice-presets", headers=user).json()} == {
         "cherry",
-        "ethan",
+        "ethan", "serena", "chelsie", "momo", "vivian", "moon",
+        "maia", "kai", "eldric-sage", "mia", "vincent",
     }
     staff = _staff_headers(client, admin_headers)
     presets = client.get("/v1/admin/model-presets", headers=staff).json()
@@ -150,7 +151,10 @@ def test_voice_filter_and_server_compatibility_reject_mixed_routes(
     assert voices.status_code == 200
     assert [(item["id"], item["provider"]) for item in voices.json()] == [("doubao-vv", "doubao")]
     old_voices = client.get("/v1/voice-presets?model_preset_id=fast-chat", headers=user).json()
-    assert {item["id"] for item in old_voices} == {"cherry", "ethan"}
+    assert {item["id"] for item in old_voices} == {
+        "cherry", "ethan", "serena", "chelsie", "momo", "vivian",
+        "moon", "maia", "kai", "eldric-sage", "mia", "vincent",
+    }
     for model, voice in (("fast-chat", "doubao-vv"), ("doubao-realtime", "cherry")):
         response = client.post(
             "/v1/agents",

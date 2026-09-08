@@ -3,9 +3,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Agent, Device, ModelPreset, User, VoicePreset
 from .usage_profiles import ensure_adult_profile
-from .voice_routes import compatible_voices, validate_model_route
+from .voice_routes import QWEN_INSTRUCT_MODEL, compatible_voices, validate_model_route
 
 DEFAULT_MODEL_PRESETS = (
+    {
+        "id": "expressive-chat",
+        "display_name": "情绪语音（验证候选）",
+        "description": "阿里识别＋DeepSeek＋Qwen 情绪语音；声音和屏幕共享情绪，支持 12 种音色",
+        "asr_provider": "dashscope", "asr_model": "qwen3-asr-flash-realtime",
+        "llm_provider": "deepseek", "llm_model": "deepseek-v4-flash",
+        "tts_provider": "dashscope", "tts_model": QWEN_INSTRUCT_MODEL,
+        "asr_cost_micros_per_minute": 19_800,
+        "llm_input_cost_micros_per_million_tokens": 1_000_000,
+        "llm_output_cost_micros_per_million_tokens": 2_000_000,
+        "tts_cost_micros_per_10k_chars": 1_000_000,
+        "enabled": False, "is_default": False,
+    },
     {
         "id": "fast-chat",
         "display_name": "快速对话",
@@ -98,6 +111,23 @@ DEFAULT_MODEL_PRESETS = (
 )
 
 DEFAULT_VOICE_PRESETS = (
+    *(
+        {"id": id, "display_name": label, "language": "zh-CN",
+         "provider": "dashscope", "voice": voice, "is_default": False,
+         "preview_url": f"/voice-previews/{id}.wav"}
+        for id, voice, label in (
+            ("serena", "Serena", "Serena / 温柔女声"),
+            ("chelsie", "Chelsie", "Chelsie / 二次元女声"),
+            ("momo", "Momo", "Momo / 撒娇搞怪女声"),
+            ("vivian", "Vivian", "Vivian / 俏皮小暴躁女声"),
+            ("moon", "Moon", "Moon / 率性男声"),
+            ("maia", "Maia", "Maia / 知性温柔女声"),
+            ("kai", "Kai", "Kai / 舒缓男声"),
+            ("eldric-sage", "Eldric Sage", "沧明子 / 沉稳老者"),
+            ("mia", "Mia", "Mia / 乖巧女声"),
+            ("vincent", "Vincent", "Vincent / 沙哑男声"),
+        )
+    ),
     {
         "id": "cherry",
         "display_name": "Cherry / 温暖女声",

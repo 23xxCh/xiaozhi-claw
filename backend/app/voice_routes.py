@@ -21,6 +21,11 @@ CASCADE_TOOL_IDS = (
 )
 DOUBAO_MODEL = "1.2.6.1"
 DOUBAO_VOICE = "zh_female_vv_jupiter_bigtts"
+QWEN_INSTRUCT_MODEL = "qwen3-tts-instruct-flash-realtime-2026-01-22"
+QWEN_INSTRUCT_VOICES = frozenset({
+    "Cherry", "Ethan", "Serena", "Chelsie", "Momo", "Vivian", "Moon",
+    "Maia", "Kai", "Eldric Sage", "Mia", "Vincent",
+})
 
 
 def validate_model_route(model: ModelPreset) -> None:
@@ -65,6 +70,8 @@ def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
             and voice.voice == DOUBAO_VOICE
         )
     if model.route_kind == "cascade" and model.tts_provider:
+        if model.tts_model == QWEN_INSTRUCT_MODEL:
+            return voice.provider == "dashscope" and voice.voice in QWEN_INSTRUCT_VOICES
         return voice.provider == model.tts_provider.removesuffix("-batch")
     return False
 

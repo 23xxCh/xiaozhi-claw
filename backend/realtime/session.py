@@ -1257,6 +1257,9 @@ async def _process_turn(
             else:
                 try:
                     assert tts is not None
+                    set_emotion = getattr(tts, "set_emotion", None)
+                    if set_emotion is not None:
+                        await set_emotion(pending_reply_emotion or "neutral")
                     if first_realtime_segment:
                         assert encoder is not None and reply_id is not None
                         synthesis_task = asyncio.create_task(
