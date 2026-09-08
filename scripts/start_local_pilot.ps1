@@ -135,6 +135,13 @@ try {
         -Key "DEVICE_WS_URL" -Value "ws://$HostAddress`:8001/v1/device/ws"
     Set-EnvFileValue -Path (Join-Path $projectRoot ".env") `
         -Key "WEB_APP_URL" -Value "http://$HostAddress`:3000"
+    $originsLine = Get-Content -LiteralPath (Join-Path $projectRoot ".env") |
+        Where-Object { $_ -match "^CORS_ORIGINS=" } | Select-Object -Last 1
+    $origins = @("http://127.0.0.1:3000", "http://localhost:3000", "http://$HostAddress`:3000")
+    if ($originsLine) { $origins += ($originsLine -replace "^CORS_ORIGINS=", "").Split(",") }
+    $origins = $origins | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique
+    Set-EnvFileValue -Path (Join-Path $projectRoot ".env") `
+        -Key "CORS_ORIGINS" -Value ($origins -join ",")
     Set-EnvFileValue -Path (Join-Path $projectRoot "web\.env.local") `
         -Key "NEXT_PUBLIC_CONTROL_API_URL" -Value "/"
     Set-EnvFileValue -Path (Join-Path $projectRoot "web\.env.local") `

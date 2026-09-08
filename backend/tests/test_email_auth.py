@@ -208,3 +208,16 @@ def test_duplicate_registration_and_binding_do_not_merge_accounts(client):
     conflict = client.post("/v1/auth/email/bind", headers=headers, json={"email": email, "code": code})
     assert conflict.status_code == 409
     assert client.get("/v1/auth/me", headers=headers).json()["email"] is None
+
+
+def test_cookie_origin_allows_configured_lan_and_rejects_foreign_origin(client):
+    code = request_code(client, "origin-check@example.com")
+    client.post("/v1/auth/email/verify-code", json={"email": "origin-check@example.com", "code": code})
+    origin = "http://192.168.1.20:3000"
+    client.app.state.settings.cors_origins += "," + origin
+    payload = {"confirmed": True, "accepted_terms": True, "accepted_privacy": True, "acknowledged_ai": True}
+    rejected = client.post("/v1/auth/adult-confirmation", headers={"Origin": "https://untrusted.invalid"}, json=payload)
+    assert rejected.status_code == 403
+    assert rejected.json()["code"] == "INVALID_ORIGIN"
+    accepted = client.post("/v1/auth/adult-confirmation", headers={"Origin": origin}, json=payload)
+    assert accepted.status_code == 200
