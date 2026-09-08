@@ -760,6 +760,8 @@ async def _speak_fixed_message(
 
     try:
         try:
+            if getattr(providers, "tts_provider", None) == "volc-tts":
+                fallback = None
             tts = await providers.open_tts(voice, speech_rate)
         except Exception:
             if fallback is None:
@@ -1217,7 +1219,7 @@ async def _process_turn(
                 try:
                     tts = await tts_open_task
                 except Exception:
-                    if fallback is None:
+                    if fallback is None or snapshot.tts_provider == "volc-tts":
                         raise
                     logger.warning("realtime TTS failed for %s; using batch fallback", serial)
                     fallback_operations.add("tts")
@@ -1308,7 +1310,8 @@ async def _process_turn(
                 except PlaybackReadyTimeout:
                     raise
                 except Exception:
-                    if fallback is None or "gateway_first_packet" in timeline.marks:
+                    if (fallback is None or snapshot.tts_provider == "volc-tts"
+                            or "gateway_first_packet" in timeline.marks):
                         raise
                     if authorize is not None:
                         await authorize()

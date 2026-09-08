@@ -629,12 +629,80 @@ class QwenRealtimeTtsSession:
             self.closed = True
 
 
+class VolcTtsSession:
+    """V3 SSE audio output, one request per existing sentence boundary."""
+
+    def __init__(self, settings: Settings, voice: str, speech_rate: float) -> None:
+        if not settings.volc_tts_api_key:
+            raise RealtimeProviderError("volc-tts", "missing-credential")
+        if not 0.5 <= speech_rate <= 2.0:
+            raise RealtimeProviderError("volc-tts", "invalid-speech-rate")
+        self.settings = settings
+        self.voice = voice
+        self.speech_rate = round((speech_rate - 1) * 100)
+        self.client = httpx.AsyncClient(timeout=settings.provider_timeout_seconds, trust_env=False)
+        self.closed = False
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        if self.closed:
+            raise RealtimeProviderError("volc-tts", "closed")
+        received = False
+        try:
+            async with self.client.stream(
+                "POST", self.settings.volc_tts_url,
+                headers={"X-Api-Key": self.settings.volc_tts_api_key,
+                         "X-Api-Resource-Id": "seed-tts-2.0",
+                         "X-Api-Request-Id": str(uuid.uuid4())},
+                json={"user": {"uid": "hensun"}, "req_params": {
+                    "text": text, "speaker": self.voice,
+                    "audio_params": {"format": "pcm", "sample_rate": 24000,
+                                     "speech_rate": self.speech_rate},
+                }},
+            ) as response:
+                if response.status_code != 200:
+                    raise RealtimeProviderError("volc-tts", f"http-{response.status_code}")
+                async for line in response.aiter_lines():
+                    if self.closed:
+                        return
+                    if not line.startswith("data:"):
+                        continue
+                    event = json.loads(line[5:])
+                    code = event.get("code")
+                    if code not in (0, 20000000):
+                        raise RealtimeProviderError("volc-tts", str(code))
+                    if event.get("data"):
+                        pcm = base64.b64decode(event["data"], validate=True)
+                        if len(pcm) % 2:
+                            raise RealtimeProviderError("volc-tts", "invalid-pcm")
+                        if pcm:
+                            received = True
+                            yield pcm
+                    if code == 20000000:
+                        if not received:
+                            raise RealtimeProviderError("volc-tts", "empty-audio")
+                        return
+                raise RealtimeProviderError("volc-tts", "incomplete-stream")
+        except httpx.TimeoutException as exc:
+            raise RealtimeProviderTimeout("volc-tts", "audio-stream") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RealtimeProviderError("volc-tts", "invalid-stream") from exc
+
+    async def finish(self) -> None:
+        await self.cancel()
+
+    async def cancel(self) -> None:
+        if not self.closed:
+            self.closed = True
+            await self.client.aclose()
+
+
 @dataclass(frozen=True)
 class RealtimeProviderBundle:
     settings: Settings
     llm: RealtimeLlmProvider
     mock: bool = False
     _owns_llm: bool = field(default=True, repr=False)
+    tts_provider: str = "dashscope"
 
     def for_models(
         self,
@@ -654,8 +722,10 @@ class RealtimeProviderBundle:
         """
         if asr_provider != "dashscope":
             raise RealtimeProviderError("binding", "unsupported-asr-provider")
-        if tts_provider != "dashscope":
+        if tts_provider not in {"dashscope", "volc-tts"}:
             raise RealtimeProviderError("binding", "unsupported-tts-provider")
+        if tts_provider == "volc-tts" and tts_model != "seed-tts-2.0":
+            raise RealtimeProviderError("binding", "unsupported-tts-model")
         if llm_provider not in {"deepseek", "openai-compatible"}:
             raise RealtimeProviderError("binding", "unsupported-llm-provider")
         if any(not isinstance(model, str) or not model.strip() for model in (
@@ -672,7 +742,9 @@ class RealtimeProviderBundle:
             if not isinstance(llm, DeepSeekStreamingLlmProvider):
                 raise RealtimeProviderError("binding", "unsupported-llm-implementation")
             llm = llm.for_provider(llm_provider, settings=settings)
-        return RealtimeProviderBundle(settings, llm, self.mock, _owns_llm=False)
+        return RealtimeProviderBundle(
+            settings, llm, self.mock, _owns_llm=False, tts_provider=tts_provider
+        )
 
     async def open_asr(self) -> RealtimeAsrSession:
         if self.mock:
@@ -682,6 +754,8 @@ class RealtimeProviderBundle:
     async def open_tts(self, voice: str, speech_rate: float = 1.0) -> RealtimeTtsSession:
         if self.mock:
             return MockTtsSession()
+        if self.tts_provider == "volc-tts":
+            return VolcTtsSession(self.settings, voice, speech_rate)
         return await QwenRealtimeTtsSession.open(
             self.settings, voice=voice, speech_rate=speech_rate
         )

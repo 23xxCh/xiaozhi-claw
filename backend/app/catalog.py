@@ -7,6 +7,18 @@ from .voice_routes import QWEN_INSTRUCT_MODEL, compatible_voices, validate_model
 
 DEFAULT_MODEL_PRESETS = (
     {
+        "id": "volc-tts-chat", "display_name": "火山音色（验证候选）",
+        "description": "阿里识别＋DeepSeek＋火山 TTS 2.0；独立音色，真机效果待验收",
+        "asr_provider": "dashscope", "asr_model": "qwen3-asr-flash-realtime",
+        "llm_provider": "deepseek", "llm_model": "deepseek-v4-flash",
+        "tts_provider": "volc-tts", "tts_model": "seed-tts-2.0",
+        "asr_cost_micros_per_minute": 19_800,
+        "llm_input_cost_micros_per_million_tokens": 1_000_000,
+        "llm_output_cost_micros_per_million_tokens": 2_000_000,
+        "tts_cost_micros_per_10k_chars": 5_000_000,
+        "enabled": False, "is_default": False,
+    },
+    {
         "id": "expressive-chat",
         "display_name": "情绪语音（验证候选）",
         "description": "阿里识别＋DeepSeek＋Qwen 情绪语音；声音和屏幕共享情绪，支持 12 种音色",
@@ -111,6 +123,16 @@ DEFAULT_MODEL_PRESETS = (
 )
 
 DEFAULT_VOICE_PRESETS = (
+    *(
+        {"id": f"volc-{id}", "display_name": label, "language": "zh-CN",
+         "provider": "volc-tts", "voice": voice, "is_default": False,
+         "preview_url": f"/voice-previews/volc-{id}.wav"}
+        for id, voice, label in (
+            ("vv", "zh_female_vv_uranus_bigtts", "VV 2.0 / 火山女声"),
+            ("xiaohe", "zh_female_xiaohe_uranus_bigtts", "小何 2.0 / 火山女声"),
+            ("yunzhou", "zh_male_m191_uranus_bigtts", "M191 2.0 / 火山男声"),
+        )
+    ),
     *(
         {"id": id, "display_name": label, "language": "zh-CN",
          "provider": "dashscope", "voice": voice, "is_default": False,

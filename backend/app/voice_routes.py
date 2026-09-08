@@ -70,6 +70,11 @@ def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
             and voice.voice == DOUBAO_VOICE
         )
     if model.route_kind == "cascade" and model.tts_provider:
+        if model.tts_provider == "volc-tts":
+            return (model.tts_model == "seed-tts-2.0" and voice.provider == "volc-tts"
+                    and voice.voice in {"zh_female_vv_uranus_bigtts",
+                                        "zh_female_xiaohe_uranus_bigtts",
+                                        "zh_male_m191_uranus_bigtts"})
         if model.tts_model == QWEN_INSTRUCT_MODEL:
             return voice.provider == "dashscope" and voice.voice in QWEN_INSTRUCT_VOICES
         return voice.provider == model.tts_provider.removesuffix("-batch")

@@ -321,3 +321,19 @@ async def test_fixed_policy_prompt_uses_same_first_audio_fallback_boundary(monke
         "start",
         "stop",
     ]
+
+
+def test_volc_failure_does_not_switch_to_ali(client, admin_headers, monkeypatch):
+    from dataclasses import replace
+
+    original = realtime_session._load_snapshot
+
+    async def volc_snapshot(*args):
+        return replace(await original(*args), tts_provider="volc-tts", tts_model="seed-tts-2.0")
+
+    monkeypatch.setattr(realtime_session, "_load_snapshot", volc_snapshot)
+    result = exercise_turn(client, admin_headers, monkeypatch, mode="timeout", encoded=True)
+    assert result.fallback.calls == []
+    assert result.audio == []
+    assert any(m["type"] == "error" for m in result.messages)
+    assert result.tts.cancelled

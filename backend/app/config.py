@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     tts_url: str = ""
     tts_api_key: str = ""
     tts_model: str = ""
+    volc_tts_api_key: str = Field(default="", repr=False)
+    volc_tts_url: str = "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
     tts_voice: str = ""
     tts_language_type: str = "Chinese"
     tts_response_format: str = "mp3"
