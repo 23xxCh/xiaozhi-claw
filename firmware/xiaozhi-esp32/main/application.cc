@@ -320,6 +320,9 @@ void Application::Run() {
                 if (resume_listening && GetDeviceState() == kDeviceStateIdle) {
                     SetDeviceState(kDeviceStateListening);
                 } else if (GetDeviceState() == kDeviceStateIdle) {
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+                    Board::GetInstance().GetDisplay()->SetEmotion("idle");
+#endif
                     Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::STANDBY);
                 }
             }

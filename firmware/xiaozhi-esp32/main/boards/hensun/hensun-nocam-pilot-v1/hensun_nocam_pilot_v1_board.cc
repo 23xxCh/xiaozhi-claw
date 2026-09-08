@@ -124,6 +124,7 @@ const char* StandardAssetForEmotion(const char* emotion) {
 class HensunNoCamDisplay final : public SpiLcdDisplay {
 private:
     lv_obj_t* activation_overlay_ = nullptr;
+    const char* current_asset_ = nullptr;
 
     void ClearActivationOverlay() {
         DisplayLockGuard lock(this);
@@ -149,31 +150,34 @@ public:
     using SpiLcdDisplay::SpiLcdDisplay;
 
     void SetupUI() override {
+        current_asset_ = nullptr;
         SpiLcdDisplay::SetupUI();
         DisplayLockGuard lock(this);
         ApplyFullScreenOverlayStyle();
     }
 
     void SetTheme(Theme* theme) override {
+        current_asset_ = nullptr;
         SpiLcdDisplay::SetTheme(theme);
         DisplayLockGuard lock(this);
         ApplyFullScreenOverlayStyle();
     }
 
     void SetEmotion(const char* emotion) override {
+        DisplayLockGuard lock(this);
         ClearActivationOverlay();
         const char* asset = StandardAssetForEmotion(emotion);
+        // Aliases can select the same GIF. Keep its current frame instead of
+        // destroying and restarting the animation on every repeated event.
+        if (current_asset_ != nullptr && std::strcmp(current_asset_, asset) == 0 &&
+            gif_controller_ != nullptr && gif_controller_->IsLoaded() &&
+            emoji_image_ != nullptr && !lv_obj_has_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN)) {
+            return;
+        }
         ESP_LOGI(TAG, "Display emotion route: requested=%s asset=%s",
                  emotion == nullptr ? "" : emotion, asset);
         SpiLcdDisplay::SetEmotion(asset);
-    }
-
-    void BeginReplySettle() override {
-        SetEmotion("caring");
-    }
-
-    void CompleteReplySettle() override {
-        SetEmotion("idle");
+        current_asset_ = asset;
     }
 
     void ShowActivationCode(const char* code, const char* claim_url) override {

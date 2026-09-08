@@ -24,6 +24,8 @@ bars keep their text and icons but use transparent backgrounds so the animation
 remains visible across the entire panel.
 
 Conversation states use the existing animations: standby uses `sleepy`, listening
-uses `surprised`, waiting for a reply uses `confused`, and the bounded playback
-settle uses `caring`. Replies retain cloud-selected emotions (default `neutral`);
+uses `surprised`, and waiting for a reply uses `confused`. Playback settle keeps
+the last reply expression, then goes directly to listening or standby. Repeated
+requests for the same loaded animation preserve its current frame.
+Replies retain cloud-selected emotions (default `neutral`);
 the firmware does not randomly cycle emotions or override them when speech starts.

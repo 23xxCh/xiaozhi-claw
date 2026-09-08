@@ -30,6 +30,12 @@ def test_control_marker_may_be_split_across_stream_chunks() -> None:
     assert emotions == ["happy"]
 
 
+def test_requested_angry_expression_is_allowed_without_being_spoken() -> None:
+    text, emotions = collect(FaceControlParser(), "[[face:ang", "ry]]哼，我生气啦。")
+    assert emotions == ["angry"]
+    assert "".join(text) == "哼，我生气啦。"
+
+
 def test_second_marker_is_allowed_only_after_a_sentence_boundary() -> None:
     parser = FaceControlParser()
     text, emotions = collect(

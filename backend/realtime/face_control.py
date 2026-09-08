@@ -18,6 +18,7 @@ SUPPORTED_FACE_EMOTIONS = frozenset(
         "apologetic",
         "shy",
         "sad",
+        "angry",
     }
 )
 _SENTENCE_BOUNDARIES = frozenset("。！？!?；;\n")

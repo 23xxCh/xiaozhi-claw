@@ -1117,7 +1117,9 @@ async def _process_turn(
             + reply_policy.context
             + "\n不要输出 Markdown、网址或舞台动作。根据回复的语气，在正文开头选择一个"
             "合适的表情标记；平静说明用 neutral，开心用 happy，安慰用 caring，"
-            "疑惑用 confused，惊讶用 surprised，难过用 sad。不要为了变化强行表达情绪。"
+            "疑惑用 confused，惊讶用 surprised，难过用 sad，生气用 angry。"
+            "用户明确要求表演某种表情时，选择对应标记；表演生气不需要辱骂用户。"
+            "不要为了变化强行表达情绪。"
             "如果完整句子结束后情绪明显变化，可以再输出一个标记，"
             "格式为 [[face:emotion]]，emotion 只能是 "
             + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))

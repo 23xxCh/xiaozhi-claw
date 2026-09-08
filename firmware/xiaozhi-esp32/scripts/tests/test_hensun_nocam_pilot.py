@@ -255,13 +255,15 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
 
         self.assertIn('{"idle", "sleepy"}', source)
         self.assertIn('{"sleepy", "sleepy"}', source)
-        self.assertRegex(source, r'void BeginReplySettle\(\) override \{\s*SetEmotion\("caring"\);')
+        self.assertNotIn("void BeginReplySettle() override", source)
         self.assertRegex(application, r'if \(reply_pending_\) \{(?:(?!break;)[\s\S])*SetEmotion\("thinking"\);')
         self.assertRegex(application, r'case kDeviceStateListening:(?:(?!break;)[\s\S])*SetEmotion\("listening"\);')
-        self.assertIn("void CompleteReplySettle() override", source)
+        self.assertNotIn("void CompleteReplySettle() override", source)
         self.assertRegex(
-            source,
-            r"void CompleteReplySettle\(\) override \{\s*SetEmotion\(\"idle\"\);\s*\}",
+            application,
+            r'else if \(GetDeviceState\(\) == kDeviceStateIdle\) \{\s*'
+            r'#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1\s*'
+            r'Board::GetInstance\(\).GetDisplay\(\)->SetEmotion\("idle"\);',
         )
         self.assertRegex(
             application,
@@ -269,6 +271,16 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
             r"display->SetEmotion\(\"idle\"\);\s+#else\s+"
             r"display->SetEmotion\(\"neutral\"\);",
         )
+
+    def test_repeated_asset_preserves_running_gif_and_allows_failed_load_retry(self):
+        source = self.read_required(BOARD / "hensun_nocam_pilot_v1_board.cc")
+        body = source.split("void SetEmotion(const char* emotion) override {", 1)[1].split(
+            "void ShowActivationCode", 1
+        )[0]
+        self.assertIn("std::strcmp(current_asset_, asset) == 0", body)
+        self.assertIn("gif_controller_->IsLoaded()", body)
+        self.assertIn("!lv_obj_has_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN)", body)
+        self.assertLess(body.index("return;"), body.index("SpiLcdDisplay::SetEmotion(asset)"))
 
     def test_standby_face_is_refreshed_even_when_state_is_already_idle(self):
         application = self.read_required(ROOT / "main/application.cc")
