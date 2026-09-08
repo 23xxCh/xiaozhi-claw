@@ -225,7 +225,7 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         expected_routes = {
             '"neutral", "neutral"',
             '"link", "neutral"',
-            '"listening", "neutral"',
+            '"listening", "surprised"',
             '"speaking", "neutral"',
             '"relaxed", "neutral"',
             '"happy", "silly"',
@@ -254,6 +254,10 @@ class HensunNoCamPilotBoardTests(unittest.TestCase):
         application = self.read_required(ROOT / "main/application.cc")
 
         self.assertIn('{"idle", "sleepy"}', source)
+        self.assertIn('{"sleepy", "sleepy"}', source)
+        self.assertRegex(source, r'void BeginReplySettle\(\) override \{\s*SetEmotion\("caring"\);')
+        self.assertRegex(application, r'if \(reply_pending_\) \{(?:(?!break;)[\s\S])*SetEmotion\("thinking"\);')
+        self.assertRegex(application, r'case kDeviceStateListening:(?:(?!break;)[\s\S])*SetEmotion\("listening"\);')
         self.assertIn("void CompleteReplySettle() override", source)
         self.assertRegex(
             source,

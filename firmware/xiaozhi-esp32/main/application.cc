@@ -1644,6 +1644,9 @@ void Application::HandleStateChangedEvent() {
                 // VAD has ended a real utterance, but the cloud has not produced
                 // speaker PCM yet. Preserve the current open-eyed listening face;
                 // mapping this protocol idle state to standby flashes sleep eyes.
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+                display->SetEmotion("thinking");
+#endif
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(false);
                 break;
@@ -1670,7 +1673,11 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
 #if !CONFIG_USE_EMOTE_MESSAGE_STYLE
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+            display->SetEmotion("listening");
+#else
             display->SetEmotion("neutral");
+#endif
 #endif
 
             if (post_playback_guard_active_) {

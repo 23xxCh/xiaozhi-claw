@@ -1115,11 +1115,13 @@ async def _process_turn(
             snapshot.system_prompt.rstrip()
             + "\n\n"
             + reply_policy.context
-            + "\n不要输出 Markdown、网址或舞台动作。首句表情由系统自动设置，无需在正文前"
-            "输出表情标记。如果完整句子结束后情绪明显变化，可以输出一个可选标记，"
+            + "\n不要输出 Markdown、网址或舞台动作。根据回复的语气，在正文开头选择一个"
+            "合适的表情标记；平静说明用 neutral，开心用 happy，安慰用 caring，"
+            "疑惑用 confused，惊讶用 surprised，难过用 sad。不要为了变化强行表达情绪。"
+            "如果完整句子结束后情绪明显变化，可以再输出一个标记，"
             "格式为 [[face:emotion]]，emotion 只能是 "
             + "/".join(sorted(SUPPORTED_FACE_EMOTIONS))
-            + "。标记只能出现在完整句子的边界；整次回复最多两个标记，"
+            + "。标记只能出现在正文开头或完整句子的边界；整次回复最多两个标记，"
             "标记之外不要输出其他内部标签。"
         )
         context_memories, context_summaries = await _load_context_sources(

@@ -82,7 +82,7 @@ constexpr EmotionRoute kEmotionRoutes[] = {
     {"robot_2", "neutral"},
     {"idle", "sleepy"},
     {"link", "neutral"},
-    {"listening", "neutral"},
+    {"listening", "surprised"},
     {"speaking", "neutral"},
     {"relaxed", "neutral"},
     {"happy", "silly"},
@@ -166,6 +166,10 @@ public:
         ESP_LOGI(TAG, "Display emotion route: requested=%s asset=%s",
                  emotion == nullptr ? "" : emotion, asset);
         SpiLcdDisplay::SetEmotion(asset);
+    }
+
+    void BeginReplySettle() override {
+        SetEmotion("caring");
     }
 
     void CompleteReplySettle() override {

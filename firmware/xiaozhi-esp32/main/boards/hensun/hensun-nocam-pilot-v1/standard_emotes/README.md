@@ -22,3 +22,8 @@ The board-specific display adapter maps cloud emotion aliases onto these nine
 runtime names. Unknown values fall back to `neutral`. Its status and subtitle
 bars keep their text and icons but use transparent backgrounds so the animation
 remains visible across the entire panel.
+
+Conversation states use the existing animations: standby uses `sleepy`, listening
+uses `surprised`, waiting for a reply uses `confused`, and the bounded playback
+settle uses `caring`. Replies retain cloud-selected emotions (default `neutral`);
+the firmware does not randomly cycle emotions or override them when speech starts.
