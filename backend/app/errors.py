@@ -17,6 +17,12 @@ def _http_error(status_code: int, detail: object) -> tuple[str, str]:
         return "VOICE_PRESET_INCOMPATIBLE", "此声音不适用于当前语音方案，请重新选择"
     if "selected route does not support" in text:
         return "VOICE_PARAMETER_UNSUPPORTED", "当前语音方案不支持此设置，请刷新后重新选择"
+    if text == "email already registered":
+        return "EMAIL_REGISTERED", "该邮箱已有账户，请使用邮箱登录；不会自动合并账户"
+    if text == "email not registered":
+        return "EMAIL_NOT_REGISTERED", "该邮箱尚未注册，请选择注册账号"
+    if text == "email already bound":
+        return "EMAIL_BOUND", "当前账户已绑定邮箱"
     if "invalid email code" in text:
         return "INVALID_CODE", "验证码不正确，请重新输入"
     if status_code == 429:

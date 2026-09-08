@@ -6,7 +6,8 @@ import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import add_audit_event
@@ -123,13 +124,9 @@ async def request_email_code(
     )
 
 
-@router.post("/email/verify-code", response_model=EmailLoginResponse)
-async def verify_email_code(
-    payload: EmailCodeVerifyRequest,
-    request: Request,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-) -> EmailLoginResponse:
+async def _consume_email_code(
+    payload: EmailCodeVerifyRequest, request: Request, session: AsyncSession
+) -> tuple[str, datetime]:
     settings = request.app.state.settings
     email = str(payload.email).lower()
     challenge = await session.scalar(
@@ -154,20 +151,46 @@ async def verify_email_code(
 
     expected_hash = hash_email_code(email, payload.code, settings)
     if not secrets.compare_digest(expected_hash, challenge.code_hash):
-        challenge.attempts += 1
-        if challenge.attempts >= settings.email_otp_max_attempts:
-            challenge.consumed_at = now
+        await session.execute(
+            update(EmailLoginChallenge)
+            .where(EmailLoginChallenge.id == challenge.id)
+            .values(attempts=EmailLoginChallenge.attempts + 1)
+        )
         await session.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid email code")
 
-    challenge.consumed_at = now
-    user = await session.scalar(select(User).where(User.email == email))
-    if user is None and settings.app_env not in {"staging", "production"}:
-        legacy_users = list(
-            await session.scalars(select(User).where(User.email.is_(None)).limit(2))
+    claimed = await session.execute(
+        update(EmailLoginChallenge)
+        .where(
+            EmailLoginChallenge.id == challenge.id,
+            EmailLoginChallenge.consumed_at.is_(None),
+            EmailLoginChallenge.attempts < settings.email_otp_max_attempts,
         )
-        if len(legacy_users) == 1:
-            user = legacy_users[0]
+        .values(consumed_at=now)
+    )
+    if claimed.rowcount != 1:
+        raise HTTPException(status_code=410, detail="email code expired")
+    return email, now
+
+
+@router.post("/email/verify-code", response_model=EmailLoginResponse)
+async def verify_email_code(
+    payload: EmailCodeVerifyRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> EmailLoginResponse:
+    settings = request.app.state.settings
+    email, now = await _consume_email_code(payload, request, session)
+    user = await session.scalar(select(User).where(User.email == email))
+    if (payload.intent == "register" and user is not None) or (
+        payload.intent == "login" and user is None
+    ):
+        await session.commit()
+        raise HTTPException(
+            status_code=409,
+            detail="email already registered" if user is not None else "email not registered",
+        )
     if user is None:
         user = User(
             email=email,
@@ -175,7 +198,11 @@ async def verify_email_code(
             display_name=email.split("@", 1)[0][:80],
         )
         session.add(user)
-        await session.flush()
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="email already registered") from exc
         add_audit_event(
             session,
             actor_type="user",
@@ -207,6 +234,36 @@ async def verify_email_code(
         access_token=token,
         agreements_complete=bool(user.terms_accepted_at and user.ai_disclosure_confirmed_at),
     )
+
+
+@router.post("/email/bind", response_model=UserResponse)
+async def bind_email(
+    payload: EmailCodeVerifyRequest,
+    request: Request,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> UserResponse:
+    if user.email is not None:
+        raise HTTPException(status_code=409, detail="email already bound")
+    email, now = await _consume_email_code(payload, request, session)
+    owner = await session.scalar(select(User.id).where(User.email == email))
+    if owner is not None:
+        await session.commit()
+        raise HTTPException(status_code=409, detail="email already registered")
+    try:
+        bound = await session.execute(
+            update(User).where(User.id == user.id, User.email.is_(None))
+            .values(email=email, email_verified_at=now)
+        )
+        if bound.rowcount != 1:
+            await session.commit()
+            raise HTTPException(status_code=409, detail="email already bound")
+        add_audit_event(session, actor_type="user", actor_id=user.id, action="auth.email-bound")
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="email already registered") from exc
+    return _user_response(user)
 
 
 @router.post("/dev-login", response_model=TokenResponse)

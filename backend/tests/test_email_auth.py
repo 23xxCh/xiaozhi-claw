@@ -14,7 +14,7 @@ def request_code(client: TestClient, email: str = "pilot@example.com") -> str:
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["expires_in"] == 600
-    assert payload["resend_after"] == 60
+    assert payload["resend_after"] == client.app.state.settings.email_otp_resend_seconds
     assert len(payload["debug_code"]) == 6
     assert payload["debug_code"].isdigit()
     return payload["debug_code"]
@@ -132,7 +132,7 @@ def test_expired_email_code_is_rejected(client: TestClient) -> None:
     assert response.status_code == 410
 
 
-def test_development_email_login_links_the_single_legacy_account(
+def test_authenticated_email_binding_preserves_the_legacy_account(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     owned = provision_owned_device(
@@ -141,10 +141,10 @@ def test_development_email_login_links_the_single_legacy_account(
         serial="HENSUN-EMAIL-MIGRATION",
         openid="wx-email-legacy",
     )
-    client.post("/v1/auth/logout")
     code = request_code(client, "owner@example.com")
     response = client.post(
-        "/v1/auth/email/verify-code",
+        "/v1/auth/email/bind",
+        headers={"Authorization": f"Bearer {owned['user_token']}"},
         json={"email": "owner@example.com", "code": code},
     )
     assert response.status_code == 200
@@ -159,7 +159,52 @@ def test_development_email_login_links_the_single_legacy_account(
     user = asyncio.run(load_user())
     assert user.id
     assert user.wechat_openid == "wx-email-legacy"
-    assert user.display_name == "owner"
+    assert user.email_verified_at is not None
     devices = client.get("/v1/devices")
     assert devices.status_code == 200
     assert any(item["id"] == owned["device_id"] for item in devices.json())
+
+
+def test_registration_does_not_take_over_legacy_device(client, admin_headers):
+    owned = provision_owned_device(client, admin_headers, openid="legacy-owner")
+    client.post("/v1/auth/logout")
+    code = request_code(client, "new-owner@example.com")
+    result = client.post("/v1/auth/email/verify-code", json={
+        "email": "new-owner@example.com", "code": code, "intent": "register",
+    })
+    assert result.status_code == 200
+    assert result.json()["agreements_complete"] is False
+    assert client.get("/v1/auth/me").json()["email"] == "new-owner@example.com"
+    original = client.get("/v1/devices", headers={"Authorization": f"Bearer {owned['user_token']}"})
+    assert any(device["id"] == owned["device_id"] for device in original.json())
+
+
+def test_login_does_not_register_and_consumes_code(client):
+    code = request_code(client, "unregistered@example.com")
+    payload = {"email": "unregistered@example.com", "code": code, "intent": "login"}
+    assert client.post("/v1/auth/email/verify-code", json=payload).json()["code"] == "EMAIL_NOT_REGISTERED"
+    payload["intent"] = "register"
+    assert client.post("/v1/auth/email/verify-code", json=payload).status_code == 410
+
+
+def test_binding_requires_authentication(client):
+    code = request_code(client, "bind@example.com")
+    assert client.post("/v1/auth/email/bind", json={"email": "bind@example.com", "code": code}).status_code == 401
+
+
+def test_duplicate_registration_and_binding_do_not_merge_accounts(client):
+    email = "existing@example.com"
+    code = request_code(client, email)
+    assert client.post("/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"}).status_code == 200
+    original_id = client.get("/v1/auth/me").json()["id"]
+    client.app.state.settings.email_otp_resend_seconds = 0
+    code = request_code(client, email)
+    duplicate = client.post("/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"})
+    assert duplicate.status_code == 409
+    assert client.get("/v1/auth/me").json()["id"] == original_id
+    login = client.post("/v1/auth/dev-login", json={"openid": "another-owner", "adult_confirmed": True})
+    headers = {"Authorization": "Bearer " + login.json()["access_token"]}
+    code = request_code(client, email)
+    conflict = client.post("/v1/auth/email/bind", headers=headers, json={"email": email, "code": code})
+    assert conflict.status_code == 409
+    assert client.get("/v1/auth/me", headers=headers).json()["email"] is None

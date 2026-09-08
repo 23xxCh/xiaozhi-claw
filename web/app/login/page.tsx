@@ -15,6 +15,7 @@ type VerifyCodeResponse = { agreements_complete: boolean };
 
 export default function LoginPage() {
   const router = useRouter();
+  const [intent, setIntent] = useState<"login" | "register">("login");
   const [email, setEmail] = useState(process.env.NEXT_PUBLIC_DEV_EMAIL ?? "");
   const [code, setCode] = useState("");
   const [codeRequested, setCodeRequested] = useState(false);
@@ -56,7 +57,7 @@ export default function LoginPage() {
     try {
       const result = await api<VerifyCodeResponse>("/v1/auth/email/verify-code", {
         method: "POST",
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify({ email, code, intent }),
       });
       const target = safeNext(new URLSearchParams(window.location.search).get("next"));
       router.replace(result.agreements_complete ? target : `/auth/complete?next=${encodeURIComponent(target)}`);
@@ -79,10 +80,14 @@ export default function LoginPage() {
     <main className="landing">
       <section className="hero-card stack" style={{ width: "min(480px, 100%)" }}>
         <div className="split">
-          <div><div className="eyebrow">Welcome back</div><h1 style={{ fontSize: "2.2rem", marginTop: 10 }}>登录 Hensun AI</h1></div>
+          <div><div className="eyebrow">Welcome back</div><h1 style={{ fontSize: "2.2rem", marginTop: 10 }}>{intent === "register" ? "注册 Hensun AI" : "登录 Hensun AI"}</h1></div>
           <BrandFace />
         </div>
-        <p className="muted">使用邮箱验证码安全登录。当前公开版本仅供 18 岁以上成年人使用。</p>
+        <p className="muted">使用邮箱验证码{intent === "register" ? "注册账号，无需设置密码" : "登录已有账号"}。当前公开版本仅供 18 岁以上成年人使用。</p>
+        <div className="split" aria-label="登录或注册">
+          <button type="button" className={`button ${intent === "login" ? "" : "secondary"}`} aria-pressed={intent === "login"} disabled={submitting} onClick={() => { setIntent("login"); changeEmail(); }}>已有账号登录</button>
+          <button type="button" className={`button ${intent === "register" ? "" : "secondary"}`} aria-pressed={intent === "register"} disabled={submitting} onClick={() => { setIntent("register"); changeEmail(); }}>注册账号</button>
+        </div>
         {!codeRequested ? (
           <form className="stack" onSubmit={(event) => void requestCode(event)}>
             <label className="field" htmlFor="login-email">邮箱地址
@@ -97,7 +102,7 @@ export default function LoginPage() {
             <label className="field" htmlFor="login-code">6 位验证码
               <input id="login-code" className="mono" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" />
             </label>
-            <button className="button" type="submit" disabled={submitting || code.length !== 6}>{submitting ? "正在验证…" : "验证并登录"}</button>
+            <button className="button" type="submit" disabled={submitting || code.length !== 6}>{submitting ? "正在验证…" : intent === "register" ? "验证并注册" : "验证并登录"}</button>
             <button className="button secondary" type="button" disabled={submitting || resendAfter > 0} onClick={() => void requestCode()}>{resendAfter > 0 ? `${resendAfter} 秒后可重新发送` : "重新发送验证码"}</button>
           </form>
         )}

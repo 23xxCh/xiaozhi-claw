@@ -33,6 +33,7 @@ class EmailCodeRequestResponse(BaseModel):
 
 
 class EmailCodeVerifyRequest(EmailCodeRequest):
+    intent: Literal["auto", "login", "register"] = "auto"
     code: str = Field(pattern=r"^\d{6}$")
 
 
