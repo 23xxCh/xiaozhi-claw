@@ -521,6 +521,8 @@ class QwenRealtimeTtsSession:
         return session
 
     async def set_emotion(self, emotion: str) -> None:
+        if self.closed:
+            raise RealtimeProviderError("qwen-tts", "closed")
         if not self.instruction_control:
             return
         emotion = emotion if emotion in self.EMOTION_INSTRUCTIONS else "neutral"
@@ -528,7 +530,11 @@ class QwenRealtimeTtsSession:
             return
         if self._emotion is not None:
             await self.websocket.close()
-            self.websocket = await connect(self._connect_url, **self._connect_options)
+            websocket = await connect(self._connect_url, **self._connect_options)
+            if self.closed:
+                await websocket.close()
+                raise RealtimeProviderError("qwen-tts", "closed")
+            self.websocket = websocket
         await self.websocket.send(json.dumps({
             "event_id": f"event_{uuid.uuid4().hex}", "type": "session.update",
             "session": {**self._configuration,
@@ -550,6 +556,8 @@ class QwenRealtimeTtsSession:
             raise RealtimeProviderTimeout("qwen-tts", expected) from exc
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        if self.closed:
+            raise RealtimeProviderError("qwen-tts", "closed")
         if self.instruction_control and self._emotion is None:
             await self.set_emotion("neutral")
         await self.websocket.send(
@@ -596,6 +604,8 @@ class QwenRealtimeTtsSession:
         try:
             while True:
                 item = await events.get()
+                if self.closed:
+                    raise RealtimeProviderError("qwen-tts", "closed")
                 if item is None:
                     if not received_audio:
                         raise RealtimeProviderError("qwen-tts", "empty-audio")
@@ -625,8 +635,8 @@ class QwenRealtimeTtsSession:
 
     async def cancel(self) -> None:
         if not self.closed:
-            await self.websocket.close()
             self.closed = True
+            await self.websocket.close()
 
 
 class VolcTtsSession:

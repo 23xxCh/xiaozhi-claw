@@ -138,6 +138,59 @@
         }
       }
     },
+    "/v1/auth/email/bind": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Bind Email",
+        "operationId": "bind_email_v1_auth_email_bind_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailCodeVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/dev-login": {
       "post": {
         "tags": [
@@ -1301,6 +1354,22 @@
         "summary": "Onboarding Status",
         "operationId": "onboarding_status_v1_onboarding_status_get",
         "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device Id"
+            }
+          },
           {
             "name": "authorization",
             "in": "header",
@@ -3520,7 +3589,8 @@
             "type": "string",
             "enum": [
               "cascade",
-              "realtime_s2s"
+              "realtime_s2s",
+              "managed_app"
             ],
             "title": "Route Kind"
           },
@@ -3713,7 +3783,8 @@
                 "type": "string",
                 "enum": [
                   "cascade",
-                  "realtime_s2s"
+                  "realtime_s2s",
+                  "managed_app"
                 ]
               },
               {
@@ -5065,6 +5136,16 @@
             "format": "email",
             "title": "Email"
           },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "login",
+              "register"
+            ],
+            "title": "Intent",
+            "default": "auto"
+          },
           "code": {
             "type": "string",
             "pattern": "^\\d{6}$",
@@ -5492,7 +5573,8 @@
             "type": "string",
             "enum": [
               "cascade",
-              "realtime_s2s"
+              "realtime_s2s",
+              "managed_app"
             ],
             "title": "Route Kind"
           },
@@ -5597,6 +5679,16 @@
       },
       "RouteCapabilities": {
         "properties": {
+          "system_prompt": {
+            "type": "boolean",
+            "title": "System Prompt",
+            "default": true
+          },
+          "history": {
+            "type": "boolean",
+            "title": "History",
+            "default": true
+          },
           "llm_temperature": {
             "type": "boolean",
             "title": "Llm Temperature"
@@ -5891,6 +5983,11 @@
           "tts_units": {
             "type": "integer",
             "title": "Tts Units"
+          },
+          "managed_dialog_requests": {
+            "type": "integer",
+            "title": "Managed Dialog Requests",
+            "default": 0
           },
           "realtime_s2s_requests": {
             "type": "integer",

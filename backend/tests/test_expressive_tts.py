@@ -1,10 +1,13 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from backend.app.config import Settings
 from backend.app.models import ModelPreset, VoicePreset
 from backend.app.voice_routes import QWEN_INSTRUCT_MODEL, voice_is_compatible
-from backend.realtime.providers import QwenRealtimeTtsSession
+from backend.realtime.providers import QwenRealtimeTtsSession, RealtimeProviderError
 
 
 async def test_emotion_update_is_acknowledged_deduplicated_and_reset():
@@ -49,3 +52,29 @@ async def test_instruct_defers_its_only_session_update_until_emotion_is_known():
         await tts.set_emotion("angry")
     assert ws.send.await_count == 1
     assert "生气" in json.loads(ws.send.call_args.args[0])["session"]["instructions"]
+
+
+async def test_cancel_during_emotion_reconnect_closes_late_socket():
+    old, late = AsyncMock(), AsyncMock()
+    late.recv.return_value = json.dumps({"type": "session.updated"})
+    tts = QwenRealtimeTtsSession(old)
+    tts.instruction_control = True
+    tts._emotion = "neutral"
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def connect_late(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return late
+
+    with patch("backend.realtime.providers.connect", connect_late):
+        task = asyncio.create_task(tts.set_emotion("angry"))
+        await started.wait()
+        await tts.cancel()
+        release.set()
+        with pytest.raises(RealtimeProviderError, match="closed"):
+            await asyncio.wait_for(task, 1)
+    late.close.assert_awaited_once()
+    late.send.assert_not_called()
+    with pytest.raises(RealtimeProviderError, match="closed"):
+        await tts.set_emotion("happy")
