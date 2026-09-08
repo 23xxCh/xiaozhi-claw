@@ -63,6 +63,7 @@ async def usage(
         llm_input_units=sum(item.input_units for item in usages if item.operation == "llm"),
         llm_output_units=sum(item.output_units for item in usages if item.operation == "llm"),
         tts_units=sum(item.input_units for item in usages if item.operation == "tts"),
+        managed_dialog_requests=sum(item.operation == "managed_dialog" for item in usages),
         realtime_s2s_requests=sum(item.operation == "realtime_s2s" for item in usages),
         unknown_cost_records=sum(item.cost_micros is None for item in usages),
     )

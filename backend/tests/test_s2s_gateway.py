@@ -87,6 +87,9 @@ class FakeBackend:
     def endpoint_detected(self):
         return self.endpoint_event.is_set()
 
+    async def playback_completed(self):
+        return
+
     async def send_audio(self, pcm, **_kwargs):
         self.uploaded.append(pcm)
         self.uploaded_event.set()
@@ -191,7 +194,8 @@ async def turn(client, admin_headers, monkeypatch):
         device_id=device.id,
         user_id=device.owner_user_id,
         conversation_id=conversation.id,
-        snapshot=SimpleNamespace(realtime_model="1.2.6.1"),
+        snapshot=SimpleNamespace(realtime_model="1.2.6.1",
+                                 realtime_provider="doubao", route_kind="realtime_s2s"),
         history=history,
         timeline=timeline,
         playback=playback,

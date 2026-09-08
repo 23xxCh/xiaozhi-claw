@@ -79,6 +79,9 @@ def _validate_parameters(
     model: ModelPreset, payload: AgentCreateRequest | AgentUpdateRequest, agent: Agent | None = None
 ) -> None:
     capabilities = route_capabilities(model)
+    if not capabilities.system_prompt and "system_prompt" in payload.model_fields_set:
+        if agent is None or payload.system_prompt != agent.system_prompt:
+            raise HTTPException(status_code=422, detail="selected route uses application persona")
     for field, default in (("llm_temperature", 0.6), ("tts_speech_rate", 1.0)):
         value = getattr(payload, field)
         previous = getattr(agent, field) if agent else default

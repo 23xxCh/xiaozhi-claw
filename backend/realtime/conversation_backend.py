@@ -34,9 +34,16 @@ class ConversationEvent:
     usage: dict[str, object] | None = None
 
 
+class ConversationConfig(Protocol):
+    @property
+    def timeout_seconds(self) -> float: ...
+
+
 class ConversationBackend(Protocol):
     # One controlled provider session per turn initially. Open/selection belongs
     # to the concrete factory; existing ASR/LLM/TTS Protocols remain unchanged.
+    config: ConversationConfig
+    session_id: str
     endpoint_event: asyncio.Event
 
     def begin_turn(self, turn_id: str) -> int: ...
@@ -56,5 +63,7 @@ class ConversationBackend(Protocol):
     async def cancel(self, *, generation: int) -> None: ...
 
     def events(self) -> AsyncIterator[ConversationEvent]: ...
+
+    async def playback_completed(self) -> None: ...
 
     async def close(self) -> None: ...

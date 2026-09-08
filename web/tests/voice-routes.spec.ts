@@ -6,11 +6,13 @@ const toolIds = ["current_time", "calculator", "weather", "web_search", "self.au
 const models: ModelPreset[] = [
   { id: "fast-chat", display_name: "快速对话", description: "经典语音方案", is_default: false, route_kind: "cascade", capabilities: { llm_temperature: true, tts_speech_rate: true, tools: true, supported_tool_ids: toolIds }, compatible_voice_ids: ["cherry", "ethan"], default_voice_preset_id: "cherry" },
   { id: "doubao-realtime", display_name: "豆包实时语音", description: "表达灵活度和语速固定", is_default: true, route_kind: "realtime_s2s", capabilities: { llm_temperature: false, tts_speech_rate: false, tools: true, supported_tool_ids: toolIds }, compatible_voice_ids: ["doubao-vv"], default_voice_preset_id: "doubao-vv" },
+  { id: "aliyun-dialog", display_name: "阿里应用", description: "阿里应用配置", is_default: false, route_kind: "managed_app", capabilities: { system_prompt: false, history: false, llm_temperature: false, tts_speech_rate: false, tools: false, supported_tool_ids: [] }, compatible_voice_ids: ["aliyun-app-default"], default_voice_preset_id: "aliyun-app-default" },
 ];
 const voices: VoicePreset[] = [
   { id: "cherry", display_name: "Cherry", language: "zh-CN", provider: "dashscope", voice: "Cherry", preview_url: null, is_default: true },
   { id: "ethan", display_name: "Ethan", language: "zh-CN", provider: "dashscope", voice: "Ethan", preview_url: null, is_default: false },
   { id: "doubao-vv", display_name: "VV", language: "zh-CN", provider: "doubao", voice: "zh_female_vv_jupiter_bigtts", preview_url: null, is_default: false },
+  { id: "aliyun-app-default", display_name: "应用默认", language: "zh-CN", provider: "aliyun-dialog", voice: "application-default", preview_url: null, is_default: false },
 ];
 
 async function mockCatalog(page: Page) {
@@ -60,7 +62,7 @@ test("switch filters voices and omits fixed parameters while preserving cascade 
   expect(patches[0]).toMatchObject({ model_preset_id: "doubao-realtime", voice_preset_id: "doubao-vv", tools: { current_time: true, calculator: true } });
   expect(patches[0]).not.toHaveProperty("llm_temperature");
   expect(patches[0]).not.toHaveProperty("tts_speech_rate");
-  await expect(page.getByText(/已保存。新的语音方案/)).toBeVisible();
+  await expect(page.getByText(/已保存。新设置/)).toBeVisible();
   await page.getByLabel("语音方案", { exact: true }).selectOption("fast-chat");
   await expect(page.getByLabel("声音", { exact: true }).locator("option")).toHaveText(["Cherry", "Ethan"]);
   await expect(page.getByRole("slider", { name: /表达灵活度/ })).toHaveValue("0.85");
@@ -75,4 +77,19 @@ test("new assistant leaves route and voice to the current server default", async
   expect(creates[0]).not.toHaveProperty("voice_preset_id");
   await expect(page.getByLabel("语音方案", { exact: true })).toHaveValue("doubao-realtime");
   await expect(page.getByLabel("声音", { exact: true })).toHaveValue("doubao-vv");
+});
+
+
+test("managed application disables local persona without losing previous configuration", async ({ page }) => {
+  const { patches } = await mockCatalog(page);
+  await page.getByLabel("语音方案", { exact: true }).selectOption("aliyun-dialog");
+  await expect(page.getByLabel("性格", { exact: true })).toBeDisabled();
+  await expect(page.getByText(/当前方案每轮独立/)).toBeVisible();
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toMatchObject({ model_preset_id: "aliyun-dialog", voice_preset_id: "aliyun-app-default" });
+  expect(patches[0]).not.toHaveProperty("system_prompt");
+  expect(patches[0]).not.toHaveProperty("tools");
+  await page.getByLabel("语音方案", { exact: true }).selectOption("fast-chat");
+  await expect(page.getByLabel("性格", { exact: true })).toBeEnabled();
 });

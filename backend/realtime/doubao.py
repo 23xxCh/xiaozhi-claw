@@ -528,6 +528,10 @@ class DoubaoRealtimeBackend:
                 await self._request({"type": "response.cancel"}, "response.canceled")
             await self.mute()
 
+    async def playback_completed(self) -> None:
+        # Doubao has no device playback acknowledgment directive.
+        return
+
     async def close(self) -> None:
         async with self._close_lock:
             if self._closed:

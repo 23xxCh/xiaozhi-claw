@@ -75,6 +75,26 @@ DEFAULT_MODEL_PRESETS = (
         "enabled": False,
         "is_default": False,
     },
+    {
+        "id": "aliyun-dialog",
+        "display_name": "阿里多模态应用（验证候选）",
+        "description": "使用阿里应用的人设、模型和默认音色；暂不传入本地人设及历史，每轮独立",
+        "route_kind": "managed_app",
+        "realtime_provider": "aliyun-dialog",
+        "realtime_model": "multimodal-dialog",
+        "asr_provider": None,
+        "asr_model": None,
+        "llm_provider": None,
+        "llm_model": None,
+        "tts_provider": None,
+        "tts_model": None,
+        "asr_cost_micros_per_minute": 0,
+        "llm_input_cost_micros_per_million_tokens": 0,
+        "llm_output_cost_micros_per_million_tokens": 0,
+        "tts_cost_micros_per_10k_chars": 0,
+        "enabled": False,
+        "is_default": False,
+    },
 )
 
 DEFAULT_VOICE_PRESETS = (
@@ -102,6 +122,14 @@ DEFAULT_VOICE_PRESETS = (
         "language": "zh-CN",
         "provider": "doubao",
         "voice": "zh_female_vv_jupiter_bigtts",
+        "is_default": False,
+    },
+    {
+        "id": "aliyun-app-default",
+        "display_name": "阿里应用默认音色",
+        "language": "zh-CN",
+        "provider": "aliyun-dialog",
+        "voice": "application-default",
         "is_default": False,
     },
 )

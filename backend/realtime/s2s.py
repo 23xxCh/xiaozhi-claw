@@ -15,7 +15,7 @@ from backend.app.models import ConversationSession, ProviderUsage, UsageEvent
 from backend.app.safety import evaluate_text
 from backend.app.schemas import ProviderUsageDetails
 
-from .doubao import DoubaoRealtimeBackend
+from .conversation_backend import ConversationBackend
 from .media import OpusPacketPacer, StreamingOpusToPcm, StreamingPcmToOpus
 from .playback import PlaybackReadyTimeout
 from .providers import RealtimeProviderError, RealtimeProviderTimeout
@@ -28,7 +28,7 @@ class SpeechToSpeechInput:
     """Bridge one device input to one provider session; never switch providers on failure."""
 
     def __init__(
-        self, backend: DoubaoRealtimeBackend, decoder: StreamingOpusToPcm, turn_id: str,
+        self, backend: ConversationBackend, decoder: StreamingOpusToPcm, turn_id: str,
         input_accepted: asyncio.Event | None = None,
     ):
         self.backend = backend
@@ -80,11 +80,11 @@ class SpeechToSpeechInput:
             elif self._upload_task in done:
                 await self._upload_task
                 if not self._ended and not self.backend.endpoint_detected():
-                    raise RealtimeProviderError("doubao", "audio-upload-ended")
+                    raise RealtimeProviderError("voice-route", "audio-upload-ended")
             # A cloud endpoint is normal. Return to the device receive loop so
             # it can process the transcript/error already waiting in events().
         except TimeoutError:
-            raise RealtimeProviderTimeout("doubao", "input-write") from None
+            raise RealtimeProviderTimeout("voice-route", "input-write") from None
         finally:
             for task in (write, endpoint):
                 task.cancel()
@@ -124,10 +124,11 @@ async def record_s2s_usage(
     session_factory, *, conversation_id: str, user_id: str, device_id: str,
     model: str, provider_session_id: str, response_id: str, turn_id: str,
     usage: dict[str, object], completed: bool, latency_ms: int | None, error_code: str | None,
+    provider: str = "doubao", operation: str = "realtime_s2s",
 ) -> None:
     """Unknown supplier cost is nullable, never an invented zero-cost ASR/LLM/TTS bill."""
     identity = f"{provider_session_id}:{response_id or turn_id}"
-    event_key = "doubao:" + hashlib.sha256(identity.encode()).hexdigest()
+    event_key = provider + ":" + hashlib.sha256(identity.encode()).hexdigest()
     details = ProviderUsageDetails(provider_usage=usage).model_dump_json()
     async with session_factory() as session:
         if await session.scalar(select(ProviderUsage.id).where(
@@ -139,7 +140,7 @@ async def record_s2s_usage(
             return
         session.add(ProviderUsage(
             session_id=conversation_id, user_id=user_id, device_id=device_id,
-            provider="doubao", model=model, operation="realtime_s2s",
+            provider=provider, model=model, operation=operation,
             billing_event_key=event_key,
             provider_request_id=(response_id or provider_session_id)[:160],
             usage_details_json=details, pricing_version=None,
@@ -266,7 +267,7 @@ async def process_s2s_turn(
                 elif event.type in {"text_delta", "text_final"}:
                     reply = reply + event.text if event.type == "text_delta" else event.text
                     if len(reply) > 8000:
-                        raise RealtimeProviderError("doubao", "reply-too-large")
+                        raise RealtimeProviderError("voice-route", "reply-too-large")
                     safety = evaluate_text(reply)
                     if safety.fixed_response:
                         error_code = "safety-blocked"
@@ -281,7 +282,7 @@ async def process_s2s_turn(
                     else:
                         pending_audio_bytes += len(event.audio)
                         if pending_audio_bytes > 192000:
-                            raise RealtimeProviderError("doubao", "transcript-order-timeout")
+                            raise RealtimeProviderError("voice-route", "transcript-order-timeout")
                         pending_audio.append(event.audio)
                 elif event.type == "usage":
                     usage = event.usage or {}
@@ -290,7 +291,7 @@ async def process_s2s_turn(
                     break
             await finish_task
             if not provider_done or not transcript_ready or not audio_bytes:
-                raise RealtimeProviderError("doubao", "empty-response")
+                raise RealtimeProviderError("voice-route", "empty-response")
             await encoder.finish()
             await packet_task
             drained = await playback.stop(
@@ -298,7 +299,9 @@ async def process_s2s_turn(
             )
             stopped = True
             if not drained:
-                raise RealtimeProviderError("doubao", "tts-drained-timeout")
+                raise RealtimeProviderError("voice-route", "tts-drained-timeout")
+            if playback.last_drain_acknowledged:
+                await source.backend.playback_completed()
             if transcript and reply:
                 history.extend([{"role": "user", "content": transcript},
                                 {"role": "assistant", "content": reply}])
@@ -316,7 +319,7 @@ async def process_s2s_turn(
         error_code = getattr(exc, "code", "s2s-unavailable")
         with contextlib.suppress(Exception):
             await send({"type": "error", "code": error_code,
-                        "message": "豆包语音暂时不可用，请重试或手动更换语音方案。"})
+                        "message": "当前语音方案暂时不可用，请重试或手动更换语音方案。"})
         if isinstance(exc, PlaybackReadyTimeout):
             await manager.retire(lease, code=1011, reason="tts ready timeout")
         return False
@@ -339,6 +342,8 @@ async def process_s2s_turn(
             user_id=user_id, device_id=device_id, model=snapshot.realtime_model,
             provider_session_id=source.backend.session_id, response_id=response_id,
             turn_id=turn_id, usage=usage, completed=completed,
+            provider=snapshot.realtime_provider,
+            operation="managed_dialog" if snapshot.route_kind == "managed_app" else "realtime_s2s",
             latency_ms=timeline.elapsed_ms("gateway_first_packet"), error_code=error_code,
         ))
         telemetry_tasks.add(task)

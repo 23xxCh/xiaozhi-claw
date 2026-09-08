@@ -219,6 +219,8 @@ class AgentResponse(BaseModel):
 
 
 class RouteCapabilities(BaseModel):
+    system_prompt: bool = True
+    history: bool = True
     llm_temperature: bool
     tts_speech_rate: bool
     tools: bool
@@ -230,7 +232,7 @@ class ModelPresetResponse(BaseModel):
     display_name: str
     description: str
     is_default: bool
-    route_kind: Literal["cascade", "realtime_s2s"]
+    route_kind: Literal["cascade", "realtime_s2s", "managed_app"]
     capabilities: RouteCapabilities
     compatible_voice_ids: list[str]
     default_voice_preset_id: str | None
@@ -255,7 +257,7 @@ class AdminModelPresetResponse(ModelPresetResponse):
 class AdminModelPresetUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=240)
-    route_kind: Literal["cascade", "realtime_s2s"] | None = None
+    route_kind: Literal["cascade", "realtime_s2s", "managed_app"] | None = None
     realtime_provider: str | None = Field(default=None, min_length=1, max_length=40)
     realtime_model: str | None = Field(default=None, min_length=1, max_length=120)
     asr_provider: str | None = Field(default=None, min_length=1, max_length=40)
@@ -393,6 +395,7 @@ class UsageSummaryResponse(BaseModel):
     llm_input_units: int
     llm_output_units: int
     tts_units: int
+    managed_dialog_requests: int = 0
     realtime_s2s_requests: int = 0
     unknown_cost_records: int = 0
 

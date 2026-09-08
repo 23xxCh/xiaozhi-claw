@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     qwen_realtime_asr_model: str = "qwen3-asr-flash-realtime"
     qwen_realtime_vad_silence_ms: int = 700
     qwen_realtime_tts_model: str = "qwen3-tts-flash-realtime"
+    aliyun_dialog_enabled: bool = False
+    aliyun_dialog_validated: bool = False
+    aliyun_dialog_api_key: str = Field(default="", repr=False)
+    aliyun_dialog_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    aliyun_dialog_workspace_id: str = ""
+    aliyun_dialog_app_id: str = ""
     doubao_realtime_enabled: bool = False
     doubao_realtime_validated: bool = False
     doubao_api_key: str = Field(default="", repr=False)
@@ -112,6 +118,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_production_defaults(self) -> "Settings":
+        if self.aliyun_dialog_enabled:
+            if not (self.aliyun_dialog_api_key.strip() and self.aliyun_dialog_workspace_id.strip()
+                    and self.aliyun_dialog_app_id.strip()):
+                raise ValueError("Aliyun dialog requires key, workspace and application")
+            if not self.aliyun_dialog_url.startswith("wss://"):
+                raise ValueError("ALIYUN_DIALOG_URL must use WSS")
+            if self.app_env == "production" and not self.aliyun_dialog_validated:
+                raise ValueError("Aliyun dialog requires real-device release validation")
         if self.doubao_realtime_enabled:
             if not self.doubao_api_key.strip():
                 raise ValueError("DOUBAO_API_KEY is required when the route is enabled")

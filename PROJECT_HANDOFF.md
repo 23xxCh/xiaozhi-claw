@@ -1,5 +1,7 @@
 # Hensun Desk 项目交接说明
 
+> 2026-09-08：新增阿里托管应用软件候选，目录/服务开关保持关闭，未变更真机配置。真实供应商经 Opus 网关与模拟播放回执通过一轮；见 [候选报告](docs/reports/2026-09-08-aliyun-candidate.md) 和 [ADR 0007](docs/adr/0007-aliyun-managed-dialog.md)。不能据此宣称实机、多轮记忆或日常入口已可用。
+
 > 当前状态补充：2026-09-07（Asia/Hong_Kong）。本轮候选为 ESP32-S3 NOCAM、Wi-Fi、轮流讲话；保留经典 ASR/LLM/TTS，并新增可选豆包端到端实时语音。本轮已形成独立本地逻辑提交和候选包，完整版本见最新报告，不能仅用下方旧提交或 CAM 记录判断版本。
 > 真实豆包鉴权及一轮 16kHz 合成 PCM 输入已取得 365252 字节 24kHz PCM 输出；完整网关双向 Opus 真实复测已通过（模拟设备回执），麦克风、扬声器、表情及整机验收仍待完成。本地验证库已迁移到 `20260907_10`，正式环境未迁移；豆包目录候选仍禁用，原默认路线保留。本地 NOCAM 已按最新产品化批次完成应用区烧录，尚未生产部署。
 > 当前入口：[ADR 0006](docs/adr/0006-selectable-voice-routes.md)、[豆包验收手册](docs/runbooks/doubao-acceptance.md)、[候选证据报告](docs/reports/2026-09-07-doubao-candidate.md)。完整阶段与放行条件见[开发路线图](docs/plans/2026-09-07-hensun-development-roadmap.md)。

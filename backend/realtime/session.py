@@ -58,6 +58,7 @@ from backend.app.security import (
 )
 from backend.app.voice_routes import validate_model_route, voice_is_compatible
 
+from .aliyun_dialog import AliyunDialogBackend, AliyunDialogConfig
 from .conversation_backend import ConversationMessage
 from .doubao import DoubaoConfig, DoubaoRealtimeBackend
 from .emotion import EmotionRouter
@@ -1927,6 +1928,37 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             await _send_error(websocket, connection_lease, "quota-exhausted",
                               "monthly voice quota exhausted")
             return None
+        if snapshot.route_kind == "managed_app":
+            from backend.app.voice_routes import managed_route_available
+
+            if (not managed_route_available(settings)
+                    or snapshot.usage_profile_kind != UsageProfileKind.ADULT.value):
+                await _send_error(websocket, connection_lease, "s2s-not-enabled",
+                                  "阿里应用尚未开放，请手动选择其他语音方案。")
+                return None
+            backend = None
+            decoder = None
+            try:
+                backend = await AliyunDialogBackend.open(AliyunDialogConfig(
+                    api_key=settings.aliyun_dialog_api_key, url=settings.aliyun_dialog_url,
+                    workspace_id=settings.aliyun_dialog_workspace_id,
+                    app_id=settings.aliyun_dialog_app_id,
+                    timeout_seconds=settings.provider_timeout_seconds,
+                ))
+                decoder = StreamingOpusToPcm(settings.ffmpeg_path)
+                await decoder.start()
+                return SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()))
+            except BaseException as exc:
+                if decoder is not None:
+                    await decoder.cancel()
+                if backend is not None:
+                    await backend.close()
+                if not isinstance(exc, Exception):
+                    raise
+                await _send_error(websocket, connection_lease,
+                                  getattr(exc, "code", "s2s-unavailable"),
+                                  "阿里应用暂时不可用，请重试或手动更换语音方案。")
+                return None
         if snapshot.route_kind == "realtime_s2s":
             if (
                 not settings.doubao_realtime_enabled or not settings.doubao_api_key
@@ -2101,6 +2133,9 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                         provider_session_id=source.backend.session_id, response_id="",
                         turn_id=source.turn_id, usage={}, completed=False,
                         latency_ms=None, error_code="input-cancelled",
+                        provider=snapshot.realtime_provider,
+                        operation=("managed_dialog" if snapshot.route_kind == "managed_app"
+                                   else "realtime_s2s"),
                     )
                 except Exception:
                     logger.error("S2S input usage recording failed turn_id=%s", source.turn_id)

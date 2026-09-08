@@ -1,6 +1,6 @@
 """One bounded S2S gateway turn using an explicitly authorized diagnostic WAV.
 
---input-wav is required and authorizes sending that file to configured Doubao.
+--input-wav authorizes sending that file to the explicitly selected supplier.
 --offline replaces only the supplier socket; both FFmpeg bridges and the gateway
 still run. TestClient is an in-process ASGI transport, not a network/TLS test.
 All device ACKs are synthetic_device events, never physical audio acceptance.
@@ -235,6 +235,9 @@ def _worker(args, result) -> dict[str, object]:
     from backend.app.config import Settings
 
     logging.disable(logging.CRITICAL)
+    ali = getattr(args, "provider", "doubao") == "aliyun-dialog"
+    if ali and args.offline:
+        raise ProbeFailure("aliyun-offline-use-protocol-tests")
     options = dict(
         _env_file=ROOT / ".env",
         app_env="test",
@@ -250,7 +253,9 @@ def _worker(args, result) -> dict[str, object]:
         provider_timeout_seconds=18,
         web_search_mcp_enabled=False,
         web_search_qwen_enabled=False,
-        doubao_realtime_enabled=True,
+        doubao_realtime_enabled=not ali,
+        aliyun_dialog_enabled=ali,
+        aliyun_dialog_validated=False,
         doubao_realtime_validated=False,
     )
     if args.offline:
@@ -276,11 +281,11 @@ def _worker(args, result) -> dict[str, object]:
 
         from backend.app.main import create_app
         from backend.app.models import Agent, Device, ModelPreset, ProviderUsage, VoicePreset
-        from backend.realtime import doubao
+        from backend.realtime import aliyun_dialog, doubao
         from backend.tests.conftest import provision_owned_device
 
         supplier = _offline_socket() if args.offline else None
-        original_connect = doubao.connect
+        original_connect = aliyun_dialog.connect if ali else doubao.connect
         open_attempts = 0
 
         async def connect_once(*connect_args, **connect_kwargs):
@@ -294,7 +299,8 @@ def _worker(args, result) -> dict[str, object]:
             return await original_connect(*connect_args, **connect_kwargs)
 
         stack.enter_context(
-            patch("backend.realtime.doubao.connect", AsyncMock(side_effect=connect_once))
+            patch(f"backend.realtime.{'aliyun_dialog' if ali else 'doubao'}.connect",
+                  AsyncMock(side_effect=connect_once))
         )
         client = stack.enter_context(TestClient(create_app(settings)))
         client.app.state.realtime_providers = _NoCascade()
@@ -307,8 +313,8 @@ def _worker(args, result) -> dict[str, object]:
 
         async def configure():
             async with client.app.state.session_factory() as db:
-                model = await db.get(ModelPreset, "doubao-realtime")
-                voice = await db.get(VoicePreset, "doubao-vv")
+                model = await db.get(ModelPreset, "aliyun-dialog" if ali else "doubao-realtime")
+                voice = await db.get(VoicePreset, "aliyun-app-default" if ali else "doubao-vv")
                 model.enabled = voice.enabled = True
                 device = await db.get(Device, owned["device_id"])
                 agent = await db.get(Agent, device.active_agent_id)
@@ -435,7 +441,8 @@ def _worker(args, result) -> dict[str, object]:
                     if rows:
                         _require(
                             len(rows) == 1
-                            and rows[0].operation == "realtime_s2s"
+                            and rows[0].operation == ("managed_dialog" if ali else "realtime_s2s")
+                            and rows[0].provider == ("aliyun-dialog" if ali else "doubao")
                             and rows[0].error_code is None,
                             "unexpected-provider-usage",
                         )
@@ -502,6 +509,7 @@ def main(argv=None) -> int:
         required=True,
         help="Explicitly authorized mono 16kHz int16 WAV, 0 < duration <= 15s",
     )
+    parser.add_argument("--provider", choices=["doubao", "aliyun-dialog"], default="doubao")
     parser.add_argument("--offline", action="store_true", help="No external supplier call")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--worker-directory", type=Path, help=argparse.SUPPRESS)
@@ -527,8 +535,8 @@ def main(argv=None) -> int:
 
     started = time.monotonic()
     result = {
-        "provider": "doubao",
-        "model": "1.2.6.1",
+        "provider": args.provider,
+        "model": "multimodal-dialog" if args.provider == "aliyun-dialog" else "1.2.6.1",
         "synthetic_device": True,
         "physical_audio_verified": False,
         "transport": "testclient-asgi",
@@ -545,6 +553,7 @@ def main(argv=None) -> int:
         str(Path(__file__).resolve()),
         "--input-wav",
         str(args.input_wav.resolve()),
+        "--provider", args.provider,
     ]
     if args.offline:
         command.append("--offline")

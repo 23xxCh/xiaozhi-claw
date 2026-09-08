@@ -29,6 +29,11 @@ def validate_model_route(model: ModelPreset) -> None:
             raise ValueError("cascade route requires ASR, LLM and TTS provider/model")
         if model.realtime_provider is not None or model.realtime_model is not None:
             raise ValueError("cascade route cannot contain a realtime provider/model")
+    elif model.route_kind == "managed_app":
+        if (model.realtime_provider != "aliyun-dialog"
+                or model.realtime_model != "multimodal-dialog"
+                or any(getattr(model, field) is not None for field in CASCADE_FIELDS)):
+            raise ValueError("managed application route is unsupported")
     elif model.route_kind == "realtime_s2s":
         if model.realtime_provider != "doubao" or model.realtime_model != DOUBAO_MODEL:
             raise ValueError("realtime route provider/model is unsupported")
@@ -43,12 +48,16 @@ def route_capabilities(model: ModelPreset) -> RouteCapabilities:
     return RouteCapabilities(
         llm_temperature=cascade,
         tts_speech_rate=cascade,
-        tools=True,
-        supported_tool_ids=list(CASCADE_TOOL_IDS),
+        tools=model.route_kind != "managed_app",
+        system_prompt=model.route_kind != "managed_app",
+        history=model.route_kind != "managed_app",
+        supported_tool_ids=list(CASCADE_TOOL_IDS) if model.route_kind != "managed_app" else [],
     )
 
 
 def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
+    if model.route_kind == "managed_app":
+        return voice.provider == "aliyun-dialog" and voice.voice == "application-default"
     if model.route_kind == "realtime_s2s":
         return (
             model.realtime_provider == voice.provider == "doubao"
@@ -64,4 +73,12 @@ def compatible_voices(model: ModelPreset, voices: list[VoicePreset]) -> list[Voi
     return sorted(
         (voice for voice in voices if voice.enabled and voice_is_compatible(model, voice)),
         key=lambda voice: (not voice.is_default, voice.id),
+    )
+
+
+def managed_route_available(settings) -> bool:
+    return bool(
+        settings.aliyun_dialog_enabled and settings.aliyun_dialog_api_key
+        and settings.aliyun_dialog_workspace_id and settings.aliyun_dialog_app_id
+        and (settings.app_env != "production" or settings.aliyun_dialog_validated)
     )
