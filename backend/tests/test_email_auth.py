@@ -182,41 +182,69 @@ def test_registration_does_not_take_over_legacy_device(client, admin_headers):
 def test_login_does_not_register_and_consumes_code(client):
     code = request_code(client, "unregistered@example.com")
     payload = {"email": "unregistered@example.com", "code": code, "intent": "login"}
-    assert client.post("/v1/auth/email/verify-code", json=payload).json()["code"] == "EMAIL_NOT_REGISTERED"
+    assert (
+        client.post("/v1/auth/email/verify-code", json=payload).json()["code"]
+        == "EMAIL_NOT_REGISTERED"
+    )
     payload["intent"] = "register"
     assert client.post("/v1/auth/email/verify-code", json=payload).status_code == 410
 
 
 def test_binding_requires_authentication(client):
     code = request_code(client, "bind@example.com")
-    assert client.post("/v1/auth/email/bind", json={"email": "bind@example.com", "code": code}).status_code == 401
+    assert (
+        client.post(
+            "/v1/auth/email/bind", json={"email": "bind@example.com", "code": code}
+        ).status_code
+        == 401
+    )
 
 
 def test_duplicate_registration_and_binding_do_not_merge_accounts(client):
     email = "existing@example.com"
     code = request_code(client, email)
-    assert client.post("/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"}).status_code == 200
+    assert (
+        client.post(
+            "/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"}
+        ).status_code
+        == 200
+    )
     original_id = client.get("/v1/auth/me").json()["id"]
     client.app.state.settings.email_otp_resend_seconds = 0
     code = request_code(client, email)
-    duplicate = client.post("/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"})
+    duplicate = client.post(
+        "/v1/auth/email/verify-code", json={"email": email, "code": code, "intent": "register"}
+    )
     assert duplicate.status_code == 409
     assert client.get("/v1/auth/me").json()["id"] == original_id
-    login = client.post("/v1/auth/dev-login", json={"openid": "another-owner", "adult_confirmed": True})
+    login = client.post(
+        "/v1/auth/dev-login", json={"openid": "another-owner", "adult_confirmed": True}
+    )
     headers = {"Authorization": "Bearer " + login.json()["access_token"]}
     code = request_code(client, email)
-    conflict = client.post("/v1/auth/email/bind", headers=headers, json={"email": email, "code": code})
+    conflict = client.post(
+        "/v1/auth/email/bind", headers=headers, json={"email": email, "code": code}
+    )
     assert conflict.status_code == 409
     assert client.get("/v1/auth/me", headers=headers).json()["email"] is None
 
 
 def test_cookie_origin_allows_configured_lan_and_rejects_foreign_origin(client):
     code = request_code(client, "origin-check@example.com")
-    client.post("/v1/auth/email/verify-code", json={"email": "origin-check@example.com", "code": code})
+    client.post(
+        "/v1/auth/email/verify-code", json={"email": "origin-check@example.com", "code": code}
+    )
     origin = "http://192.168.1.20:3000"
     client.app.state.settings.cors_origins += "," + origin
-    payload = {"confirmed": True, "accepted_terms": True, "accepted_privacy": True, "acknowledged_ai": True}
-    rejected = client.post("/v1/auth/adult-confirmation", headers={"Origin": "https://untrusted.invalid"}, json=payload)
+    payload = {
+        "confirmed": True,
+        "accepted_terms": True,
+        "accepted_privacy": True,
+        "acknowledged_ai": True,
+    }
+    rejected = client.post(
+        "/v1/auth/adult-confirmation", headers={"Origin": "https://untrusted.invalid"}, json=payload
+    )
     assert rejected.status_code == 403
     assert rejected.json()["code"] == "INVALID_ORIGIN"
     accepted = client.post("/v1/auth/adult-confirmation", headers={"Origin": origin}, json=payload)
