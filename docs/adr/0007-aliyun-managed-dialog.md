@@ -49,3 +49,15 @@
 旧后端不识别 `managed_app`，不能直接回退旧二进制而假定禁用记录不会影响管理接口。
 
 协议依据：https://help.aliyun.com/zh/model-studio/multimodal-interaction-protocol
+
+## 本地验证进展（2026-09-08）
+
+- 使用本地配置凭据完成真实 `Start` → `Listening` 握手，随后主动关闭连接；
+  该探测没有发送录音，不代表整机语音验收通过。
+- 本地开启 `ALIYUN_DIALOG_ENABLED` 和候选目录，`ALIYUN_DIALOG_VALIDATED` 保持 false。
+- 为当前无摄像头设备的账户新建“阿里多模态测试”角色并选中；原角色保留。
+  原角色标识及切换记录保存在忽略的 `run/local-pilot/aliyun-test-role.json`。
+- 5 项阿里协议/目录测试通过。测试须显式设置 `ALIYUN_DIALOG_ENABLED=false`，
+  避免本地启用配置污染“默认关闭”测试前提。
+- 当前串联路线网页提供 Cherry、Ethan 两个音色；阿里候选只提供应用默认音色。
+- 真机收音、完整回复及连续多轮仍待用户实测，不做生产放行。
