@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.realtime.commands import DeviceCommandDispatcher
 from backend.realtime.providers import create_realtime_providers
 
-from .catalog import ensure_catalog
+from .catalog import ensure_catalog, validate_release_catalog
 from .config import Settings, get_settings
 from .db import Base, create_engine, create_session_factory
 from .device_connections import DeviceConnectionManager
@@ -52,6 +52,7 @@ def create_app(settings: Settings | None = None, *, include_device_gateway: bool
                 await connection.run_sync(Base.metadata.create_all)
         async with app.state.session_factory() as session:
             await ensure_catalog(session)
+            await validate_release_catalog(session, resolved)
             await ensure_all_adult_profiles(session)
             await backfill_unpriced_provider_usage(session)
             await session.commit()

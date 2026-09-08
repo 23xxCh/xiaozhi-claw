@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     tts_url: str = ""
     tts_api_key: str = ""
     tts_model: str = ""
+    volc_tts_validated: bool = False
+    qwen_instruct_validated: bool = False
+    provider_audio_buffer_bytes: int = Field(default=2 * 1024 * 1024, ge=48000, le=16 * 1024 * 1024)
+    provider_event_buffer_size: int = Field(default=256, ge=8, le=1024)
     volc_tts_api_key: str = Field(default="", repr=False)
     volc_tts_url: str = "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
     tts_voice: str = ""

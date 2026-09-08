@@ -56,7 +56,11 @@ from backend.app.security import (
     verify_device_session_token,
     verify_secret,
 )
-from backend.app.voice_routes import validate_model_route, voice_is_compatible
+from backend.app.voice_routes import (
+    validate_model_route,
+    validate_route_admission,
+    voice_is_compatible,
+)
 
 from .aliyun_dialog import AliyunDialogBackend, AliyunDialogConfig
 from .conversation_backend import ConversationMessage
@@ -1938,11 +1942,14 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             await _send_error(websocket, connection_lease, "quota-exhausted",
                               "monthly voice quota exhausted")
             return None
+        try:
+            validate_route_admission(snapshot, settings)
+        except ValueError:
+            await _send_error(websocket, connection_lease, "s2s-not-enabled",
+                              "所选语音方案尚未开放，请手动选择其他方案。")
+            return None
         if snapshot.route_kind == "managed_app":
-            from backend.app.voice_routes import managed_route_available
-
-            if (not managed_route_available(settings)
-                    or snapshot.usage_profile_kind != UsageProfileKind.ADULT.value):
+            if snapshot.usage_profile_kind != UsageProfileKind.ADULT.value:
                 await _send_error(websocket, connection_lease, "s2s-not-enabled",
                                   "阿里应用尚未开放，请手动选择其他语音方案。")
                 return None
@@ -1970,11 +1977,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                                   "阿里应用暂时不可用，请重试或手动更换语音方案。")
                 return None
         if snapshot.route_kind == "realtime_s2s":
-            if (
-                not settings.doubao_realtime_enabled or not settings.doubao_api_key
-                or (settings.app_env == "production" and not settings.doubao_realtime_validated)
-                or snapshot.usage_profile_kind != UsageProfileKind.ADULT.value
-            ):
+            if snapshot.usage_profile_kind != UsageProfileKind.ADULT.value:
                 await _send_error(websocket, connection_lease, "s2s-not-enabled",
                                   "豆包语音尚未开放，请手动选择其他语音方案。")
                 return None

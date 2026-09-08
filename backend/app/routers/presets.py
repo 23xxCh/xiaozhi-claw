@@ -18,6 +18,7 @@ from ..voice_routes import (
     compatible_voices,
     route_capabilities,
     validate_model_route,
+    validate_route_admission,
 )
 
 router = APIRouter(prefix="/v1", tags=["presets"])
@@ -153,24 +154,11 @@ async def update_model_preset(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if preset.is_default and not preset.enabled:
         raise HTTPException(status_code=422, detail="default model preset must be enabled")
-    if preset.route_kind == "managed_app" and preset.enabled:
-        from ..voice_routes import managed_route_available
-
-        if not managed_route_available(request.app.state.settings):
-            raise HTTPException(status_code=422, detail="Aliyun route has not passed validation")
-    if preset.route_kind == "realtime_s2s" and preset.enabled:
-        settings = request.app.state.settings
-        if (
-            not getattr(settings, "doubao_realtime_enabled", False)
-            or not getattr(settings, "doubao_api_key", "")
-            or (
-                settings.app_env == "production"
-                and not getattr(settings, "doubao_realtime_validated", False)
-            )
-        ):
-            raise HTTPException(
-                status_code=422, detail="doubao route has not passed release validation"
-            )
+    if preset.enabled:
+        try:
+            validate_route_admission(preset, request.app.state.settings)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     voices = list(await session.scalars(select(VoicePreset).where(VoicePreset.enabled.is_(True))))
     if preset.enabled and not compatible_voices(preset, voices):
         raise HTTPException(

@@ -94,3 +94,33 @@ def managed_route_available(settings) -> bool:
         and settings.aliyun_dialog_workspace_id and settings.aliyun_dialog_app_id
         and (settings.app_env != "production" or settings.aliyun_dialog_validated)
     )
+
+
+def validate_tts_admission(settings, provider: str, model: str) -> None:
+    if provider == "volc-tts":
+        if model != "seed-tts-2.0" or not settings.volc_tts_api_key.strip():
+            raise ValueError("volc TTS requires a supported model and credential")
+        if not settings.volc_tts_url.startswith("https://"):
+            raise ValueError("volc TTS endpoint must use HTTPS")
+        if settings.app_env == "production" and not settings.volc_tts_validated:
+            raise ValueError("volc TTS has not passed release validation")
+    elif model.startswith("qwen3-tts-instruct-flash-realtime"):
+        if provider != "dashscope" or not settings.tts_api_key.strip():
+            raise ValueError("instruct TTS requires a supported provider and credential")
+        if not settings.qwen_realtime_tts_url.startswith("wss://"):
+            raise ValueError("instruct TTS endpoint must use WSS")
+        if settings.app_env == "production" and not settings.qwen_instruct_validated:
+            raise ValueError("instruct TTS has not passed release validation")
+
+
+def validate_route_admission(model, settings) -> None:
+    if model.route_kind == "cascade":
+        validate_tts_admission(settings, model.tts_provider, model.tts_model)
+    elif model.route_kind == "managed_app":
+        if not managed_route_available(settings) or not settings.aliyun_dialog_url.startswith("wss://"):
+            raise ValueError("Aliyun route has not passed validation")
+    elif model.route_kind == "realtime_s2s":
+        if (not settings.doubao_realtime_enabled or not settings.doubao_api_key.strip()
+                or not settings.doubao_realtime_url.startswith("wss://")
+                or (settings.app_env == "production" and not settings.doubao_realtime_validated)):
+            raise ValueError("doubao route has not passed release validation")

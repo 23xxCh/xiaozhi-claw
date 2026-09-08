@@ -272,3 +272,17 @@ async def resolve_agent_presets(
     if voice is None:
         raise ValueError("voice preset is unavailable or incompatible with the selected model")
     return model, voice
+
+
+async def validate_release_catalog(session: AsyncSession, settings) -> None:
+    from .voice_routes import validate_route_admission
+
+    if settings.app_env not in {"staging", "production"}:
+        return
+    models = list(await session.scalars(select(ModelPreset).where(ModelPreset.enabled.is_(True))))
+    voices = list(await session.scalars(select(VoicePreset).where(VoicePreset.enabled.is_(True))))
+    for model in models:
+        validate_model_route(model)
+        validate_route_admission(model, settings)
+        if not compatible_voices(model, voices):
+            raise ValueError("enabled model has no compatible voice")

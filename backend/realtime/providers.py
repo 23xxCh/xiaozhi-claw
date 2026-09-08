@@ -16,6 +16,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from backend.ai.context import LlmRequest
 from backend.app.audio_formats import IncrementalOggOpusMuxer
 from backend.app.config import Settings
+from backend.app.voice_routes import validate_tts_admission
 
 logger = logging.getLogger(__name__)
 ASR_BACKGROUND_CLOSE_TIMEOUT_SECONDS = 2.0
@@ -130,14 +131,19 @@ class MockTtsSession:
 
 
 class QwenRealtimeAsrSession:
-    def __init__(self, websocket: ClientConnection) -> None:
+    def __init__(self, websocket: ClientConnection, *, buffer_events: int = 256,
+                 buffer_bytes: int = 2 * 1024 * 1024) -> None:
+        self.buffer_bytes = buffer_bytes
+        self._queued_bytes = 0
         self.websocket = websocket
         self.closed = False
         self.ogg_muxer = IncrementalOggOpusMuxer(
             input_sample_rate=16000, frame_duration_ms=60
         )
         self._endpoint = asyncio.Event()
-        self._events: asyncio.Queue[dict[str, object] | BaseException] = asyncio.Queue()
+        self._events: asyncio.Queue[dict[str, object] | BaseException] = asyncio.Queue(
+            maxsize=buffer_events
+        )
         self._reader_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
 
@@ -157,7 +163,8 @@ class QwenRealtimeAsrSession:
             open_timeout=settings.provider_timeout_seconds,
             max_size=2 * 1024 * 1024,
         )
-        session = cls(websocket)
+        session = cls(websocket, buffer_events=settings.provider_event_buffer_size,
+                      buffer_bytes=settings.provider_audio_buffer_bytes)
         await websocket.send(
             json.dumps(
                 {
@@ -179,19 +186,28 @@ class QwenRealtimeAsrSession:
     async def _read_events(self) -> None:
         try:
             while True:
-                event = json.loads(await self.websocket.recv())
+                raw = await self.websocket.recv()
+                size = len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw)
+                if self._events.full() or self._queued_bytes + size > self.buffer_bytes:
+                    raise RealtimeProviderError("qwen-asr", "buffer-overflow")
+                event = json.loads(raw)
+                event["_buffer_bytes"] = size
                 event["_gateway_received_at"] = time.perf_counter()
                 _raise_if_provider_error(event, "qwen-asr")
                 if event.get("type") == "input_audio_buffer.speech_stopped":
                     self._endpoint.set()
-                await self._events.put(event)
+                self._events.put_nowait(event)
+                self._queued_bytes += size
                 if event.get("type") == "session.finished":
                     return
         except BaseException as exc:
             # Wake the gateway immediately so finish() can surface the stable
             # provider error and use its bounded batch fallback.
             self._endpoint.set()
-            await self._events.put(exc)
+            while not self._events.empty():
+                self._events.get_nowait()
+            self._queued_bytes = 0
+            self._events.put_nowait(exc)
 
     def endpoint_detected(self) -> bool:
         return self._endpoint.is_set()
@@ -247,6 +263,7 @@ class QwenRealtimeAsrSession:
                         raise RealtimeProviderTimeout("qwen-asr", "session-finish") from event
                     if isinstance(event, BaseException):
                         raise event
+                    self._queued_bytes -= int(event.pop("_buffer_bytes", 0))
                     event_type = event.get("type")
                     if event_type in {
                         "conversation.item.input_audio_transcription.text",
@@ -466,7 +483,11 @@ class QwenRealtimeTtsSession:
         websocket: ClientConnection,
         *,
         event_timeout_seconds: float = 30.0,
+        buffer_events: int = 256,
+        buffer_bytes: int = 2 * 1024 * 1024,
     ) -> None:
+        self.buffer_events = buffer_events
+        self.buffer_bytes = buffer_bytes
         self.websocket = websocket
         self.event_timeout_seconds = event_timeout_seconds
         self.closed = False
@@ -480,6 +501,7 @@ class QwenRealtimeTtsSession:
     async def open(
         cls, settings: Settings, *, voice: str, speech_rate: float
     ) -> "QwenRealtimeTtsSession":
+        validate_tts_admission(settings, "dashscope", settings.qwen_realtime_tts_model)
         url = (
             f"{settings.qwen_realtime_tts_url.rstrip('/')}?"
             f"{urlencode({'model': settings.qwen_realtime_tts_model})}"
@@ -497,6 +519,8 @@ class QwenRealtimeTtsSession:
         session = cls(
             websocket,
             event_timeout_seconds=settings.provider_timeout_seconds,
+            buffer_events=settings.provider_event_buffer_size,
+            buffer_bytes=settings.provider_audio_buffer_bytes,
         )
         session.instruction_control = settings.qwen_realtime_tts_model.startswith(
             "qwen3-tts-instruct-flash-realtime"
@@ -574,9 +598,13 @@ class QwenRealtimeTtsSession:
                 {"event_id": f"event_{uuid.uuid4().hex}", "type": "input_text_buffer.commit"}
             )
         )
-        events: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
+        events: asyncio.Queue[bytes | Exception | None] = asyncio.Queue(
+            maxsize=self.buffer_events + 1
+        )
+        queued_bytes = 0
 
         async def receive_response() -> None:
+            nonlocal queued_bytes
             try:
                 while True:
                     # Drain provider events independently from FFmpeg and the
@@ -587,15 +615,21 @@ class QwenRealtimeTtsSession:
                     event_type = event.get("type")
                     _raise_if_provider_error(event, "qwen-tts")
                     if event_type == "response.audio.delta":
-                        events.put_nowait(base64.b64decode(str(event.get("delta") or "")))
+                        pcm = base64.b64decode(str(event.get("delta") or ""), validate=True)
+                        if (events.qsize() >= self.buffer_events
+                                or queued_bytes + len(pcm) > self.buffer_bytes):
+                            raise RealtimeProviderError("qwen-tts", "buffer-overflow")
+                        queued_bytes += len(pcm)
+                        events.put_nowait(pcm)
                     if event_type == "response.done":
                         return
-            except TimeoutError:
-                events.put_nowait(
-                    RealtimeProviderTimeout("qwen-tts", "response-event")
-                )
             except Exception as exc:
-                events.put_nowait(exc)
+                while not events.empty():
+                    events.get_nowait()
+                queued_bytes = 0
+                error = (RealtimeProviderTimeout("qwen-tts", "response-event")
+                         if isinstance(exc, TimeoutError) else exc)
+                events.put_nowait(error)
             finally:
                 events.put_nowait(None)
 
@@ -612,6 +646,7 @@ class QwenRealtimeTtsSession:
                     return
                 if isinstance(item, Exception):
                     raise item
+                queued_bytes -= len(item)
                 if not item:
                     continue
                 received_audio = True
@@ -643,8 +678,7 @@ class VolcTtsSession:
     """V3 SSE audio output, one request per existing sentence boundary."""
 
     def __init__(self, settings: Settings, voice: str, speech_rate: float) -> None:
-        if not settings.volc_tts_api_key:
-            raise RealtimeProviderError("volc-tts", "missing-credential")
+        validate_tts_admission(settings, "volc-tts", "seed-tts-2.0")
         if not 0.5 <= speech_rate <= 2.0:
             raise RealtimeProviderError("volc-tts", "invalid-speech-rate")
         self.settings = settings

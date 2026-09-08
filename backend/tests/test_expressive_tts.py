@@ -45,7 +45,9 @@ def test_instruct_voice_compatibility_rejects_other_model_voices():
 async def test_instruct_defers_its_only_session_update_until_emotion_is_known():
     ws = AsyncMock()
     ws.recv.return_value = json.dumps({"type": "session.updated"})
-    settings = Settings(qwen_realtime_tts_model=QWEN_INSTRUCT_MODEL)
+    settings = Settings(
+        _env_file=None, qwen_realtime_tts_model=QWEN_INSTRUCT_MODEL, tts_api_key="test-key"
+    )
     with patch("backend.realtime.providers.connect", AsyncMock(return_value=ws)):
         tts = await QwenRealtimeTtsSession.open(settings, voice="Cherry", speech_rate=1.0)
         ws.send.assert_not_called()
