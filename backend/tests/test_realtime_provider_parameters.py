@@ -36,6 +36,12 @@ def test_news_reply_has_room_for_three_complete_items():
     assert build_voice_reply_policy("你好").max_spoken_chars == 60
 
 
+@pytest.mark.parametrize("marker", ["[face:happy]", "[natural]", "[[happy]]", "(happy)", "（natural）"])
+def test_emotion_labels_do_not_reach_tts(marker):
+    assert sanitize_spoken_text(marker + "你好。") == "你好。"
+    assert sanitize_spoken_text("happy 表示开心，natural 表示自然。") == "happy 表示开心，natural 表示自然。"
+
+
 @pytest.mark.asyncio
 async def test_deepseek_streaming_request_uses_fast_non_thinking_mode(monkeypatch) -> None:
     captured: dict[str, object] = {}

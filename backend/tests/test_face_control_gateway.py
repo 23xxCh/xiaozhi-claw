@@ -31,8 +31,9 @@ class FaceTaggedProviders:
                 del inner_self, args, kwargs
                 for chunk in (
                     "[[fa",
-                    "ce:happy]]今天会很顺利。",
-                    "[[face:curious]]还想聊点什么？",
+                    "ce:happy]](nat",
+                    "ural)今天会很顺利。",
+                    "[[face:curious]][happy]还想聊点什么？",
                 ):
                     yield chunk
 

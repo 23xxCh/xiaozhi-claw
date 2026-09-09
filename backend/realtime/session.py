@@ -88,7 +88,13 @@ PLAYBACK_STARTUP_PACKETS = 5
 
 _SPOKEN_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _SPOKEN_INTERNAL_TAG_RE = re.compile(
-    r"\[(?:mood|emotion|state|tool|system)\s*:[^\]]*\]", re.IGNORECASE
+    r"\[(?:face|mood|emotion|state|tool|system)\s*:[^\]]*\]", re.IGNORECASE
+)
+_SPOKEN_EMOTION_LABEL_RE = re.compile(
+    r"(?:\[\[?\s*(?:" + "|".join(sorted(SUPPORTED_FACE_EMOTIONS | {"natural"}))
+    + r")\s*\]\]?|[（(]\s*(?:"
+    + "|".join(sorted(SUPPORTED_FACE_EMOTIONS | {"natural"})) + r")\s*[）)])",
+    re.IGNORECASE,
 )
 _SPOKEN_FACE_CONTROL_RE = re.compile(r"\[\[face:[^\]\r\n]*(?:\]\]|\])?", re.IGNORECASE)
 _SPOKEN_STAGE_DIRECTION_RE = re.compile(
@@ -180,6 +186,7 @@ def sanitize_spoken_text(text: str) -> str:
     text = _SPOKEN_URL_RE.sub("", text)
     text = _SPOKEN_FACE_CONTROL_RE.sub("", text)
     text = _SPOKEN_INTERNAL_TAG_RE.sub("", text)
+    text = _SPOKEN_EMOTION_LABEL_RE.sub("", text)
     text = _SPOKEN_STAGE_DIRECTION_RE.sub("", text)
     text = re.sub(r"[*_#>`~]", "", text)
     text = re.sub(r"\s+", " ", text).strip()
