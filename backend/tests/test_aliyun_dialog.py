@@ -101,6 +101,28 @@ async def test_started_alone_does_not_allow_upload(monkeypatch):
     assert socket.closed and not any(isinstance(x, bytes) for x in socket.sent)
 
 
+async def test_completed_dialog_can_resume_after_transport_close(monkeypatch):
+    first = AliSocket()
+    monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=first))
+    backend = await AliyunDialogBackend.open(config(client_id="private-client"))
+    generation = backend.begin_turn("first")
+    await backend.send_audio(b"\0\0", generation=generation)
+    await backend.end_input(generation=generation)
+    _ = [event async for event in backend.events()]
+    assert backend.completed_dialog_id == ""
+    await backend.playback_completed()
+    await backend.close()
+    second = AliSocket()
+    monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=second))
+    resumed = await AliyunDialogBackend.open(config(
+        dialog_id=backend.completed_dialog_id, client_id="private-client"))
+    start = json.loads(second.sent[0])["payload"]
+    assert start["input"]["dialog_id"] == "ali-session"
+    assert start["parameters"]["client_info"]["user_id"] == "private-client"
+    assert resumed.completed_dialog_id == ""
+    await resumed.close()
+
+
 async def test_malformed_output_is_redacted_and_stops_input(monkeypatch):
     socket = AliSocket()
     monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=socket))
@@ -155,8 +177,9 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
 
     owned = provision_owned_device(client, admin_headers)
     enable_settings(client.app.state.settings)
-    socket = AliSocket()
-    monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=socket))
+    sockets = [AliSocket() for _ in range(3)]
+    socket = sockets[0]
+    monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(side_effect=sockets))
     monkeypatch.setattr(realtime_session, "StreamingOpusToPcm", FakeDecoder)
     monkeypatch.setattr(s2s, "StreamingPcmToOpus", FakeEncoder)
 
@@ -181,6 +204,28 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
         device.send_bytes(b"fake-opus")
         device.send_json({"type": "listen", "state": "stop"})
         _, packets = receive_one_turn(device)
+        device.send_json({"type": "listen", "state": "start"})
+        device.send_bytes(b"fake-opus")
+        device.send_json({"type": "listen", "state": "stop"})
+        receive_one_turn(device)
+        first_start = json.loads(sockets[0].sent[0])["payload"]
+        second_start = json.loads(sockets[1].sent[0])["payload"]
+        assert "dialog_id" not in first_start["input"]
+        assert second_start["input"]["dialog_id"] == "ali-session"
+        assert first_start["parameters"]["client_info"] == second_start["parameters"]["client_info"]
+
+        async def change_configuration():
+            async with client.app.state.session_factory() as db:
+                row = await db.get(Device, owned["device_id"])
+                agent = await db.get(Agent, row.active_agent_id)
+                agent.config_version += 1
+                await db.commit()
+        client.portal.call(change_configuration)
+        device.send_json({"type": "listen", "state": "start"})
+        device.send_bytes(b"fake-opus")
+        device.send_json({"type": "listen", "state": "stop"})
+        receive_one_turn(device)
+        assert "dialog_id" not in json.loads(sockets[2].sent[0])["payload"]["input"]
     assert packets
     assert socket.directives().index("LocalRespondingEnded") < socket.directives().index("Stop")
 
@@ -189,6 +234,7 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
             return list(await db.scalars(select(ProviderUsage)))
 
     rows = client.portal.call(usages)
+    # The fake deliberately repeats the same provider round ID; usage is deduplicated.
     assert len(rows) == 1
     assert rows[0].provider == "aliyun-dialog"
     assert rows[0].operation == "managed_dialog"

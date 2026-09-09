@@ -1906,6 +1906,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     conversation_id: str | None = None
     conversation_started_at: datetime | None = None
     history: list[dict[str, str]] = []
+    aliyun_previous: AliyunDialogBackend | None = None
     connected_at = time.perf_counter()
     cancelled = False
     heartbeat_timed_out = False
@@ -1949,10 +1950,16 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         """One entry for explicit and early-binary input, including policy and route selection."""
         nonlocal snapshot, active_task, continuous_reminder_sent, turn_providers
         nonlocal last_input_closed
+        nonlocal aliyun_previous
         last_input_closed = False
         async with session_factory() as session:
             current_device = await require_current_ownership(session)
             next_snapshot = await _load_snapshot(session, current_device)
+            if (next_snapshot.agent_id != snapshot.agent_id
+                    or next_snapshot.usage_profile_id != snapshot.usage_profile_id
+                    or next_snapshot.config_version != snapshot.config_version
+                    or next_snapshot.memory_epoch != snapshot.memory_epoch):
+                aliyun_previous = None
             if conversation_id is not None and (
                 next_snapshot.agent_id != snapshot.agent_id
                 or next_snapshot.usage_profile_id != snapshot.usage_profile_id
@@ -2008,7 +2015,12 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                     workspace_id=settings.aliyun_dialog_workspace_id,
                     app_id=settings.aliyun_dialog_app_id,
                     timeout_seconds=settings.provider_timeout_seconds,
+                    dialog_id=(aliyun_previous.completed_dialog_id
+                               if aliyun_previous is not None and history else ""),
+                    client_id=(aliyun_previous.config.client_id
+                               if aliyun_previous is not None and history else uuid.uuid4().hex),
                 ))
+                aliyun_previous = backend
                 decoder = StreamingOpusToPcm(settings.ffmpeg_path)
                 await decoder.start()
                 return SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()))
@@ -2135,6 +2147,8 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
         return conversation_id
 
     async def finalize_logical_conversation(reason: str) -> None:
+        nonlocal aliyun_previous
+        aliyun_previous = None
         nonlocal conversation_id, conversation_started_at
         nonlocal continuous_reminder_sent, last_summary_task
         if conversation_id is None:

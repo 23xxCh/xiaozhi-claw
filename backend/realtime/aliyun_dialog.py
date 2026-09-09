@@ -1,7 +1,8 @@
 """Managed Aliyun application: one push-to-talk turn per upstream session.
 
 The application owns persona, voice and cloud tools. Hensun never forwards
-device commands from this provider. No history/persona overrides are implied.
+device commands from this provider. Completed dialogs can resume by ID without
+overriding the application's persona or uploading transcript history.
 """
 
 import asyncio
@@ -27,12 +28,15 @@ class AliyunDialogConfig:
     workspace_id: str
     app_id: str
     timeout_seconds: float = 15.0
+    dialog_id: str = ""
+    client_id: str = ""
 
 
 class AliyunDialogBackend:
     def __init__(self, websocket, config: AliyunDialogConfig):
         self.websocket, self.config = websocket, config
         self.session_id = ""
+        self.completed_dialog_id = ""
         self.task_id = str(uuid4())
         self.endpoint_event = asyncio.Event()
         self._listening = asyncio.Event()
@@ -73,13 +77,14 @@ class AliyunDialogBackend:
                 "task_group": "aigc", "task": "multimodal-generation",
                 "function": "generation", "model": "multimodal-dialog",
                 "input": {"directive": "Start", "workspace_id": config.workspace_id,
-                          "app_id": config.app_id},
+                          "app_id": config.app_id,
+                          **({"dialog_id": config.dialog_id} if config.dialog_id else {})},
                 "parameters": {
                     "upstream": {"type": "AudioOnly", "mode": "push2talk",
                                  "audio_format": "pcm", "sample_rate": 16000},
                     "downstream": {"audio_format": "pcm", "sample_rate": 24000},
-                    "client_info": {"user_id": backend.task_id.replace("-", ""),
-                                    "device": {"uuid": backend.task_id}},
+                    "client_info": {"user_id": config.client_id or backend.task_id.replace("-", ""),
+                                    "device": {"uuid": config.client_id or backend.task_id}},
                 },
             }, action="run-task")
             async with asyncio.timeout(config.timeout_seconds):
@@ -252,6 +257,7 @@ class AliyunDialogBackend:
         # Only the gateway's device drain acknowledgment may trigger this.
         if self._finished and not self._closed:
             await self._directive("LocalRespondingEnded")
+            self.completed_dialog_id = self.session_id
 
     def invalidate(self, *, generation: int):
         if generation != self._generation:
