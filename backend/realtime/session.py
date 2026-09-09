@@ -1180,14 +1180,12 @@ async def _process_turn(
         # first sentence. The device stays in thinking state until real PCM is
         # sent, so this hides connection setup without faking speech.
         async def open_tts_with_timing() -> RealtimeTtsSession:
-            nonlocal reply_id
             opened_tts = await providers.open_tts(
                 snapshot.voice, snapshot.tts_speech_rate
             )
             timeline.mark("tts_connected")
-            if reply_id is None:
-                reply_id = await playback.initiate(websocket, lease, turn_id)
-                timeline.bind_reply(reply_id)
+            # Preconnect upstream only. Device start arms its first-PCM watchdog;
+            # speak() starts playback once there is actual text to synthesize.
             return opened_tts
 
         async def start_encoder_with_timing() -> StreamingPcmToOpus:

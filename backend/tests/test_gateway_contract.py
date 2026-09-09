@@ -421,10 +421,10 @@ class FailingFallbackProviders:
     speech = Speech()
 
 
-def test_playback_handshake_starts_before_llm_first_token(
+def test_playback_handshake_waits_for_speakable_text(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
-    providers = TtsPrewarmProbeProviders(gate_first_token=True)
+    providers = TtsPrewarmProbeProviders()
     client.app.state.realtime_providers = providers
     owned = provision_owned_device(client, admin_headers, serial="HENSUN-PLAYBACK-PREWARM")
     headers = {
@@ -444,10 +444,7 @@ def test_playback_handshake_starts_before_llm_first_token(
                 start = message
 
         assert providers.tts_open_started is True
-        assert providers.first_token_emitted is False
-
-        assert providers.allow_first_token is not None
-        providers.allow_first_token.set()
+        assert providers.first_token_emitted is True
         websocket.send_json({**start, "state": "ready"})
         while True:
             message = websocket.receive()
@@ -460,7 +457,7 @@ def test_playback_handshake_starts_before_llm_first_token(
         assert websocket.receive_json()["state"] == "completed"
 
 
-def test_empty_llm_reply_stops_prewarmed_playback(
+def test_empty_llm_reply_does_not_start_playback(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     client.app.state.realtime_providers = EmptyReplyAfterTtsPrewarmProviders()
@@ -475,21 +472,15 @@ def test_empty_llm_reply_stops_prewarmed_playback(
         websocket.send_bytes(b"audio")
         websocket.send_json({"type": "listen", "state": "stop"})
 
-        start = None
-        while start is None:
+        while True:
             message = websocket.receive_json()
-            if message.get("type") == "tts" and message.get("state") == "start":
-                start = message
-        websocket.send_json({**start, "state": "ready"})
-
-        stop = websocket.receive_json()
-        error = websocket.receive_json()
-        assert stop == {**start, "state": "stop"}
-        assert error["type"] == "error"
-        assert error["code"] == "empty-reply"
+            assert not (message.get("type") == "tts" and message.get("state") == "start")
+            if message.get("type") == "error":
+                assert message["code"] == "empty-reply"
+                break
 
 
-def test_abort_stops_prewarmed_playback_before_resetting_device(
+def test_abort_before_text_does_not_start_playback(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
     client.app.state.realtime_providers = SlowReplyAfterTtsPrewarmProviders()
@@ -504,17 +495,14 @@ def test_abort_stops_prewarmed_playback_before_resetting_device(
         websocket.send_bytes(b"audio")
         websocket.send_json({"type": "listen", "state": "stop"})
 
-        start = None
-        while start is None:
+        while True:
             message = websocket.receive_json()
-            if message.get("type") == "tts" and message.get("state") == "start":
-                start = message
+            assert message.get("type") != "tts"
+            if message.get("type") == "llm":
+                break
         websocket.send_json({"type": "abort"})
-
-        stop = websocket.receive_json()
         aborted = websocket.receive_json()
         interrupted = websocket.receive_json()
-        assert stop == {**start, "state": "stop"}
         assert aborted["type"] == "system"
         assert aborted["state"] == "aborted"
         assert interrupted["type"] == "llm"
