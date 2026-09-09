@@ -43,6 +43,10 @@ class SpeechToSpeechInput:
         self._opus_packets = 0
         self._opus_bytes = 0
         self._pcm_bytes = 0
+        self._started_at = time.monotonic()
+        self._first_packet_at: float | None = None
+        self._send_seconds = 0.0
+        self._pacing_seconds = 0.0
 
     @property
     def endpoint_event(self) -> asyncio.Event:
@@ -55,11 +59,17 @@ class SpeechToSpeechInput:
         target = time.monotonic()
         try:
             async for pcm in self.decoder.chunks():
+                if not self._pcm_bytes:
+                    telemetry_logger.info("voice input turn=%s first_pcm_ready elapsed_ms=%d",
+                                          self.turn_id, round((time.monotonic()-self._started_at)*1000))
                 self._pcm_bytes += len(pcm)
                 now = time.monotonic()
                 if target > now:
                     await asyncio.sleep(target - now)
+                    self._pacing_seconds += time.monotonic() - now
+                send_started = time.monotonic()
                 await self.backend.send_audio(pcm, generation=self.generation)
+                self._send_seconds += time.monotonic() - send_started
                 # Keep the audio clock independent of send/scheduler overhead.
                 # Catch up at most 100 ms after a stall, never burst an entire turn.
                 target = max(target + len(pcm) / 32000, time.monotonic() - .1)
@@ -76,7 +86,9 @@ class SpeechToSpeechInput:
         self._opus_packets += 1
         self._opus_bytes += len(packet)
         if self._opus_packets == 1:
-            telemetry_logger.info("voice input turn=%s first_device_packet bytes=%d", self.turn_id, len(packet))
+            self._first_packet_at = time.monotonic()
+            telemetry_logger.info("voice input turn=%s first_device_packet bytes=%d elapsed_ms=%d",
+                                  self.turn_id, len(packet), round((self._first_packet_at-self._started_at)*1000))
         write = asyncio.create_task(self.decoder.write(packet))
         endpoint = asyncio.create_task(self.endpoint_event.wait())
         try:
@@ -110,6 +122,9 @@ class SpeechToSpeechInput:
             return
         self._ended = True
         ended_at = time.monotonic()
+        telemetry_logger.info("voice input turn=%s receive_span_ms=%d audio_ms=%d",
+                              self.turn_id, round((ended_at-self._first_packet_at)*1000)
+                              if self._first_packet_at is not None else 0, self._opus_packets*60)
         telemetry_logger.info("voice input turn=%s device_input_ended opus_packets=%d opus_bytes=%d pcm_bytes=%d",
                               self.turn_id, self._opus_packets, self._opus_bytes, self._pcm_bytes)
         async with asyncio.timeout(self.backend.config.timeout_seconds):
@@ -120,6 +135,8 @@ class SpeechToSpeechInput:
             await self.backend.end_input(generation=self.generation)
             telemetry_logger.info("voice input turn=%s upstream_input_ended drain_ms=%d pcm_bytes=%d",
                                   self.turn_id, round((time.monotonic()-ended_at)*1000), self._pcm_bytes)
+            telemetry_logger.info("voice input turn=%s upload_send_ms=%d upload_pacing_ms=%d",
+                                  self.turn_id, round(self._send_seconds*1000), round(self._pacing_seconds*1000))
 
     async def cancel(self) -> None:
         if self._closed:

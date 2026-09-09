@@ -2010,6 +2010,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             backend = None
             decoder = None
             try:
+                opening_at = time.monotonic()
                 backend = await AliyunDialogBackend.open(AliyunDialogConfig(
                     api_key=settings.aliyun_dialog_api_key, url=settings.aliyun_dialog_url,
                     workspace_id=settings.aliyun_dialog_workspace_id,
@@ -2023,7 +2024,10 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 aliyun_previous = backend
                 decoder = StreamingOpusToPcm(settings.ffmpeg_path)
                 await decoder.start()
-                return SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()))
+                source = SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()))
+                telemetry_logger.info("voice input turn=%s upstream_open_ms=%d", source.turn_id,
+                            round((time.monotonic()-opening_at)*1000))
+                return source
             except BaseException as exc:
                 if decoder is not None:
                     await decoder.cancel()
