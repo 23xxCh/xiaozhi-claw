@@ -1,8 +1,11 @@
+from hashlib import sha256
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Agent, Device, ModelPreset, User, VoicePreset
 from .usage_profiles import ensure_adult_profile
+from .voice_inventory import VOICE_CATALOG
 from .voice_routes import (
     DOUBAO_VOICE_CANDIDATES,
     QWEN_INSTRUCT_MODEL,
@@ -197,6 +200,19 @@ DEFAULT_VOICE_PRESETS = (
 )
 
 
+_existing_voice_keys = {(v["provider"], v["voice"]) for v in DEFAULT_VOICE_PRESETS}
+DEFAULT_VOICE_PRESETS += tuple(
+    {"id": f"{provider}-{sha256(item['voice'].encode()).hexdigest()[:16]}",
+     "display_name": item["name"],
+     "language": "多语种" if provider == "dashscope" else item["languages"],
+     "provider": provider, "voice": item["voice"], "enabled": False, "is_default": False}
+    for provider, items in (("dashscope", VOICE_CATALOG["qwen"]),
+                            ("volc-tts", VOICE_CATALOG["volc"]),
+                            ("doubao", [v for v in VOICE_CATALOG["volc"] if v["s2s"]]))
+    for item in items if (provider, item["voice"]) not in _existing_voice_keys
+)
+
+
 async def ensure_catalog(session: AsyncSession) -> None:
     for values in DEFAULT_MODEL_PRESETS:
         preset = await session.get(ModelPreset, values["id"])
@@ -218,8 +234,9 @@ async def ensure_catalog(session: AsyncSession) -> None:
                 "llm_output_cost_micros_per_million_tokens"
             ]
             preset.tts_cost_micros_per_10k_chars = values["tts_cost_micros_per_10k_chars"]
+    voice_ids = set(await session.scalars(select(VoicePreset.id)))
     for values in DEFAULT_VOICE_PRESETS:
-        if await session.get(VoicePreset, values["id"]) is None:
+        if values["id"] not in voice_ids:
             session.add(VoicePreset(**values))
     await session.flush()
 

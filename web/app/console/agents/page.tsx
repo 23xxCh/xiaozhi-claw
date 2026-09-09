@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { ErrorMessage, InlineResult, Loading } from "@/components/page-state";
+import { VoiceLibrary } from "@/components/voice-library";
 import { api } from "@/lib/api";
 import type { Agent, ModelPreset, VoicePreset } from "@/lib/types";
 
@@ -101,6 +102,7 @@ export default function AgentsPage() {
           <div className="field"><label htmlFor="voice-search">查找声音（当前方案可选 {compatibleVoices.length} 种）</label><input id="voice-search" type="search" placeholder="搜索名称或风格，如温柔、男声" value={voiceSearch} onChange={(event) => setVoiceSearch(event.target.value)} /></div>
           <div className="field"><label htmlFor="voice">声音</label><select id="voice" value={form.voice_preset_id} onChange={(event) => setForm({ ...form, voice_preset_id: event.target.value })}>{selectedVoice && !visibleVoices.includes(selectedVoice) ? <option value={selectedVoice.id}>{selectedVoice.display_name}（当前选择）</option> : null}{visibleVoices.map((voice) => <option key={voice.id} value={voice.id}>{voice.display_name}</option>)}</select>{visibleVoices.length === 0 ? <div className="hint">没有匹配的声音，请更换关键词。</div> : null}</div>
           <p className="hint">试听展示基础音色；实际语气由语音方案决定。阿里多模态应用的具体音色在阿里控制台配置。</p>
+          <VoiceLibrary modelId={form.model_preset_id} onChoose={(id) => { setVoiceSearch(""); setForm({ ...form, voice_preset_id: id }); setMessage("已选择音色，请保存设置。"); }} />
           {selectedVoice?.preview_url ? <audio controls preload="none" src={selectedVoice.preview_url}>浏览器不支持音频试听</audio> : <div className="hint">当前音色尚未配置固定试听片段，保存后可直接在设备上试听。</div>}
           <label className="check"><input type="checkbox" checked={form.memory_consent} onChange={(event) => setForm({ ...form, memory_consent: event.target.checked })} />允许保存可查看、可删除的加密摘要记忆</label>
           <p className="hint">启用记忆后，已完成对话会交给摘要服务生成记忆；摘要服务可能与所选语音服务不同。</p>

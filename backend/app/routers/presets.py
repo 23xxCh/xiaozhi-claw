@@ -13,15 +13,40 @@ from ..schemas import (
     ModelPresetResponse,
     VoicePresetResponse,
 )
+from ..voice_inventory import VOICE_CATALOG
 from ..voice_routes import (
     CASCADE_FIELDS,
     compatible_voices,
     route_capabilities,
     validate_model_route,
     validate_route_admission,
+    voice_is_compatible,
 )
 
 router = APIRouter(prefix="/v1", tags=["presets"])
+
+
+@router.get("/voice-library")
+async def voice_library(
+    _: User = Depends(require_adult_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await ensure_catalog(session)
+    await session.commit()
+    models = list(await session.scalars(select(ModelPreset)))
+    voices = list(await session.scalars(select(VoicePreset).order_by(VoicePreset.display_name)))
+    return {
+        "checked_at": VOICE_CATALOG["checked_at"],
+        "sources": VOICE_CATALOG["sources"],
+        "voices": [
+            {"id": v.id, "name": v.display_name, "voice": v.voice, "provider": v.provider,
+             "language": v.language,
+             "models": [{"id": m.id, "name": m.display_name,
+                         "available": bool(v.enabled and m.enabled)}
+                        for m in models if voice_is_compatible(m, v)]}
+            for v in voices
+        ],
+    }
 
 
 def _model_response(item: ModelPreset, voices: list[VoicePreset]) -> ModelPresetResponse:

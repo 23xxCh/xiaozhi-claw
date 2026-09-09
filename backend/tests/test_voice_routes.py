@@ -233,6 +233,36 @@ def test_doubao_voice_candidates_require_explicit_enable_and_preserve_old_voice(
         }).status_code == expected
 
 
+def test_complete_voice_library_keeps_candidates_gated_and_models_separate(client: TestClient):
+    from collections import Counter
+
+    from backend.app.voice_inventory import QWEN_VOICE_MODELS, VOLC_S2S_VOICES, VOLC_TTS_VOICES
+
+    assert client.get("/v1/voice-library").status_code == 401
+    user = _user_headers(client)
+    response = client.get("/v1/voice-library", headers=user)
+    assert response.status_code == 200
+    voices = response.json()["voices"]
+    assert Counter(v["provider"] for v in voices) == {
+        "dashscope": 48, "volc-tts": 444, "doubao": 294, "aliyun-dialog": 1,
+    }
+    assert len({v["id"] for v in voices}) == len(voices)
+    assert len(VOLC_S2S_VOICES) == 293 and len(VOLC_TTS_VOICES) == 444
+    assert sum("qwen3-tts-instruct-flash-realtime" in m for m in QWEN_VOICE_MODELS.values()) == 24
+    jennifer = next(v for v in voices if v["voice"] == "Jennifer")
+    assert "fast-chat" in {m["id"] for m in jennifer["models"]}
+    assert "expressive-chat" not in {m["id"] for m in jennifer["models"]}
+    assert all(not m["available"] for m in jennifer["models"])
+    assert client.post("/v1/agents", headers=user, json={
+        "name": "未验证音色", "model_preset_id": "fast-chat",
+        "voice_preset_id": jennifer["id"],
+    }).status_code == 422
+    assert "ar_female_dina_uranus_bigtts" in VOLC_TTS_VOICES - VOLC_S2S_VOICES
+    assert next(v for v in voices if v["id"] == "cherry")["voice"] == "Cherry"
+    # Repeated reads never duplicate rows or open candidates.
+    assert client.get("/v1/voice-library", headers=user).json() == response.json()
+
+
 def test_unknown_s2s_cost_is_preserved_and_billing_event_is_unique(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:

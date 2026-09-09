@@ -2,6 +2,7 @@
 
 from .models import ModelPreset, VoicePreset
 from .schemas import RouteCapabilities
+from .voice_inventory import QWEN_VOICE_MODELS, VOLC_S2S_VOICES, VOLC_TTS_VOICES
 
 CASCADE_FIELDS = (
     "asr_provider",
@@ -28,12 +29,11 @@ DOUBAO_VOICE_CANDIDATES = (
     ("doubao-yunzhou-2", "zh_male_m191_uranus_bigtts", "云舟 2.0 / 豆包男声"),
     ("doubao-xiaotian-2", "zh_male_taocheng_uranus_bigtts", "小天 2.0 / 豆包男声"),
 )
-DOUBAO_VOICES = frozenset({DOUBAO_VOICE, *(voice for _, voice, _ in DOUBAO_VOICE_CANDIDATES)})
+DOUBAO_VOICES = VOLC_S2S_VOICES | {DOUBAO_VOICE}
 QWEN_INSTRUCT_MODEL = "qwen3-tts-instruct-flash-realtime-2026-01-22"
-QWEN_INSTRUCT_VOICES = frozenset({
-    "Cherry", "Ethan", "Serena", "Chelsie", "Momo", "Vivian", "Moon",
-    "Maia", "Kai", "Eldric Sage", "Mia", "Vincent",
-})
+QWEN_INSTRUCT_VOICES = frozenset(
+    voice for voice, models in QWEN_VOICE_MODELS.items() if QWEN_INSTRUCT_MODEL in models
+)
 
 
 def validate_model_route(model: ModelPreset) -> None:
@@ -80,11 +80,12 @@ def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
     if model.route_kind == "cascade" and model.tts_provider:
         if model.tts_provider == "volc-tts":
             return (model.tts_model == "seed-tts-2.0" and voice.provider == "volc-tts"
-                    and voice.voice in {"zh_female_vv_uranus_bigtts",
-                                        "zh_female_xiaohe_uranus_bigtts",
-                                        "zh_male_m191_uranus_bigtts"})
+                    and voice.voice in VOLC_TTS_VOICES)
         if model.tts_model == QWEN_INSTRUCT_MODEL:
             return voice.provider == "dashscope" and voice.voice in QWEN_INSTRUCT_VOICES
+        if model.tts_provider in {"dashscope", "dashscope-batch"}:
+            return (voice.provider == "dashscope"
+                    and model.tts_model in QWEN_VOICE_MODELS.get(voice.voice, ()))
         return voice.provider == model.tts_provider.removesuffix("-batch")
     return False
 
