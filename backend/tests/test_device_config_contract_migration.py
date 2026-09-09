@@ -8,7 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260813_05"
 CONTRACT_REVISION = "20260829_07"
-CURRENT_HEAD = "20260907_10"
+CURRENT_HEAD = "20260909_11"
 
 
 def _alembic(database: Path, *args: str) -> None:

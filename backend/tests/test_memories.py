@@ -1,5 +1,7 @@
 import asyncio
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -116,3 +118,74 @@ def test_account_delete_all_memories_removes_legacy_and_new_storage_only_for_own
             assert await session.scalar(select(func.count()).select_from(ConversationSession)) == 2
 
     asyncio.run(check_remaining())
+
+
+@pytest.mark.parametrize("mutation", ["clear", "off-on", "edit", "unbind", "voice"])
+def test_delayed_summary_cannot_recreate_invalidated_memory(
+    client: TestClient, admin_headers: dict[str, str], mutation: str,
+) -> None:
+    from backend.realtime.session import _load_snapshot, _save_session_summary
+
+    owned = provision_owned_device(client, admin_headers)
+    headers = {"Authorization": f"Bearer {owned['user_token']}"}
+    agent_id = client.get("/v1/agents", headers=headers).json()[0]["id"]
+    path = f"/v1/agents/{agent_id}"
+    assert client.patch(path, headers=headers, json={"memory_consent": True}).status_code == 200
+
+    async def scenario() -> None:
+        async with client.app.state.session_factory() as session:
+            device = await session.get(Device, owned["device_id"])
+            snapshot = await _load_snapshot(session, device)
+            user_id = device.owner_user_id
+            conversation = ConversationSession(
+                user_id=user_id, device_id=device.id, agent_id=agent_id,
+                usage_profile_id=device.active_profile_id,
+            )
+            session.add(conversation)
+            await session.commit()
+            conversation_id = conversation.id
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def reply_stream(request):
+            started.set()
+            await release.wait()
+            yield "旧的偏好，不应在清除后重新出现"
+
+        client.app.state.realtime_providers = SimpleNamespace(
+            llm=SimpleNamespace(reply_stream=reply_stream)
+        )
+        task = asyncio.create_task(_save_session_summary(
+            SimpleNamespace(app=client.app), conversation_id, user_id, snapshot,
+            [{"role": "user", "content": "我喜欢旧口味"},
+             {"role": "assistant", "content": "知道了"}],
+        ))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=3)
+            if mutation == "clear":
+                assert client.delete("/v1/memories", headers=headers).status_code == 204
+            elif mutation == "off-on":
+                for enabled in (False, True):
+                    assert client.patch(path, headers=headers, json={
+                        "memory_consent": enabled,
+                    }).status_code == 200
+            elif mutation == "edit":
+                assert client.put(f"{path}/memories/preference", headers=headers, json={
+                    "key": "preference", "value": "我现在喜欢新口味",
+                }).status_code == 200
+            elif mutation == "unbind":
+                assert client.post(
+                    f"/v1/devices/{owned['device_id']}/unbind", headers=headers,
+                ).status_code == 200
+            else:
+                assert client.patch(path, headers=headers, json={
+                    "voice_preset_id": "serena", "memory_consent": True,
+                }).status_code == 200
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=3)
+        async with client.app.state.session_factory() as session:
+            assert await session.scalar(
+                select(func.count()).select_from(EncryptedSessionSummary)
+            ) == (1 if mutation == "voice" else 0)
+
+    asyncio.run(scenario())

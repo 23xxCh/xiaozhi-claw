@@ -8,6 +8,7 @@ from ..audit import add_audit_event
 from ..catalog import ensure_catalog, ensure_default_agent, resolve_agent_presets
 from ..db import get_session
 from ..dependencies import require_adult_user
+from ..memory_lifecycle import invalidate_memory
 from ..models import (
     Agent,
     AgentMemory,
@@ -199,6 +200,8 @@ async def update_agent(
     if payload.voice_preset_id is not None:
         agent.voice_preset_id = payload.voice_preset_id
     if payload.memory_consent is not None:
+        if payload.memory_consent != agent.memory_consent:
+            await invalidate_memory(session, user.id, agent.id)
         agent.memory_consent = payload.memory_consent
         if not payload.memory_consent:
             await session.execute(delete(AgentMemory).where(AgentMemory.agent_id == agent.id))

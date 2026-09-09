@@ -326,6 +326,7 @@ async def test_fixed_policy_prompt_uses_same_first_audio_fallback_boundary(monke
 def test_volc_failure_does_not_switch_to_ali(client, admin_headers, monkeypatch):
     from dataclasses import replace
 
+    monkeypatch.setattr(client.app.state.settings, "volc_tts_api_key", "test-volc-key")
     original = realtime_session._load_snapshot
 
     async def volc_snapshot(*args):

@@ -194,6 +194,7 @@ class Agent(Base):
     )
     voice_preset_id: Mapped[str] = mapped_column(ForeignKey("voice_presets.id"), default="cherry")
     memory_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    memory_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     tools_json: Mapped[str] = mapped_column(Text, default="{}")
     llm_temperature: Mapped[float] = mapped_column(Float, default=0.6)
     tts_speech_rate: Mapped[float] = mapped_column(Float, default=1.0)

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..audit import add_audit_event
 from ..db import get_session
 from ..dependencies import require_adult_user
+from ..memory_lifecycle import invalidate_memory
 from ..models import Agent, AgentMemory, User
 from ..schemas import AgentMemoryResponse, AgentMemoryUpsertRequest
 from ..security import decrypt_memory, encrypt_memory
@@ -56,6 +57,8 @@ async def upsert_agent_memory(
     if key != payload.key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="memory key mismatch")
     agent = await _agent(session, user, agent_id)
+    await invalidate_memory(session, user.id, agent_id)
+    await session.refresh(agent)
     if not agent.memory_consent:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="memory consent is disabled"
@@ -94,6 +97,7 @@ async def delete_agent_memory(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await _agent(session, user, agent_id)
+    await invalidate_memory(session, user.id, agent_id)
     result = await session.execute(
         delete(AgentMemory).where(AgentMemory.agent_id == agent_id, AgentMemory.key == key)
     )

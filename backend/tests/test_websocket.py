@@ -537,6 +537,24 @@ def test_new_logical_conversation_loads_summary_without_reconnecting_websocket(
     assert any("最近会话摘要" in str(message.get("content")) for message in main_contexts[1])
 
 
+def test_memory_clear_resets_history_without_reconnecting_websocket(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    providers = MultiTurnProviders()
+    client.app.state.realtime_providers = providers
+    owned = provision_owned_device(client, admin_headers)
+    headers = {"Authorization": f"Bearer {owned['user_token']}"}
+    with client.websocket_connect("/v1/device/ws", headers=_device_headers(owned)) as websocket:
+        for index in range(2):
+            if index:
+                assert client.delete("/v1/memories", headers=headers).status_code == 204
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.send_bytes(b"mock-audio")
+            websocket.send_json({"type": "listen", "state": "stop"})
+            _receive_mock_turn(websocket)
+    assert providers.llm.histories == [[], []]
+
+
 def test_server_vad_finishes_turn_without_device_listen_stop(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:

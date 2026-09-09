@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.ai.context import (
@@ -219,6 +219,7 @@ class AgentSnapshot:
     route_kind: str = "cascade"
     realtime_provider: str | None = None
     realtime_model: str | None = None
+    memory_epoch: int = 0
 
 
 class _UnavailableRealtimeAsrSession:
@@ -324,6 +325,7 @@ async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot
         usage_profile_id=profile.id,
         usage_profile_kind=profile.kind,
         config_version=agent.config_version,
+        memory_epoch=agent.memory_epoch,
         system_prompt=agent.system_prompt,
         memory_consent=agent.memory_consent and profile_memory_allowed,
         asr_provider=model.asr_provider,
@@ -1628,6 +1630,16 @@ async def _save_session_summary(
 ) -> None:
     if not snapshot.memory_consent or not history:
         return
+    async with websocket.app.state.session_factory() as session:
+        current = await session.get(Agent, snapshot.agent_id)
+        conversation = await session.get(ConversationSession, conversation_id)
+        device = await session.get(Device, conversation.device_id) if conversation else None
+        if (current is None or not current.memory_consent
+                or current.owner_user_id != user_id
+                or current.memory_epoch != snapshot.memory_epoch
+                or conversation is None or conversation.user_id != user_id
+                or device is None or device.owner_user_id != user_id):
+            return
     prompt = "请把这次对话概括为不超过120字的偏好和待办摘要，不要记录敏感原文。"
     parts: list[str] = []
     try:
@@ -1653,7 +1665,18 @@ async def _save_session_summary(
         if not summary:
             return
         async with websocket.app.state.session_factory() as session:
+            fence = await session.execute(
+                update(Agent).where(
+                    Agent.id == snapshot.agent_id,
+                    Agent.owner_user_id == user_id,
+                    Agent.memory_consent.is_(True),
+                    Agent.memory_epoch == snapshot.memory_epoch,
+                ).values(memory_epoch=Agent.memory_epoch)
+            )
+            if fence.rowcount != 1:
+                return
             conversation = await session.get(ConversationSession, conversation_id)
+            device = await session.get(Device, conversation.device_id) if conversation else None
             agent = await session.get(Agent, snapshot.agent_id)
             profile = await session.get(UsageProfile, snapshot.usage_profile_id)
             profile_memory_allowed = bool(
@@ -1662,6 +1685,9 @@ async def _save_session_summary(
             )
             if (
                 conversation is None
+                or conversation.user_id != user_id
+                or device is None
+                or device.owner_user_id != user_id
                 or agent is None
                 or not agent.memory_consent
                 or not profile_memory_allowed
@@ -1910,6 +1936,7 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             if conversation_id is not None and (
                 next_snapshot.agent_id != snapshot.agent_id
                 or next_snapshot.usage_profile_id != snapshot.usage_profile_id
+                or next_snapshot.memory_epoch != snapshot.memory_epoch
             ):
                 await finalize_logical_conversation("configuration-changed")
             snapshot = next_snapshot

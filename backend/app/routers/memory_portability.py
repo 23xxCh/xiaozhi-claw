@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..audit import add_audit_event
 from ..db import get_session
 from ..dependencies import require_adult_user
+from ..memory_lifecycle import invalidate_memory
 from ..models import (
     Agent,
     AgentMemory,
@@ -64,6 +65,7 @@ async def delete_all_account_memories(
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    await invalidate_memory(session, user.id)
     await session.execute(delete(MemorySummary).where(MemorySummary.user_id == user.id))
     await session.execute(delete(AgentMemory).where(AgentMemory.user_id == user.id))
     await session.execute(
@@ -103,6 +105,7 @@ async def update_session_summary(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
     conversation, summary = await _owned_summary(session, user, conversation_id)
+    await invalidate_memory(session, user.id, conversation.agent_id)
     agent = await session.get(Agent, conversation.agent_id)
     if agent is None or not agent.memory_consent:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="memory is disabled")
@@ -128,6 +131,7 @@ async def delete_session_summary(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     conversation, summary = await _owned_summary(session, user, conversation_id)
+    await invalidate_memory(session, user.id, conversation.agent_id)
     await session.delete(summary)
     add_audit_event(
         session,

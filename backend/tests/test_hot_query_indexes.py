@@ -14,7 +14,7 @@ from backend.app.models import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_REVISION = "20260829_07"
-CURRENT_HEAD = "20260907_10"
+CURRENT_HEAD = "20260909_11"
 EXPECTED_INDEXES = {
     "usage_events": {
         "ix_usage_events_user_kind_created_at",
