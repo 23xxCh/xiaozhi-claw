@@ -28,3 +28,17 @@ Local gateway restarted with this code; API and gateway live/ready return 200.
 No firmware change or flash.
 
 Protocol reference: https://help.aliyun.com/zh/model-studio/web-search
+
+## Hubei follow-up
+
+Device turn af7e203a-0860-43f1-94e5-f569c121c47c recorded a weather
+ToolError and played its response at 10.95 seconds. The log did not retain
+the exception detail, so the exact tool failure is not proven.
+Weather tool instructions now ask for a city when only a province is given.
+Controlled live LLM tests asked for a city in 1.27 seconds for Hubei,
+and completed Wuhan weather in 4.48 seconds (tool 2.06 seconds).
+The local search auxiliary model was changed from qwen-plus to qwen-flash
+after these probes; primary dialogue model is unchanged. Prior setting is
+backed up under run/backups. Five tool regression tests pass.
+Source claims in model text were not independently verified; these are
+functional/latency checks, not weather accuracy acceptance.

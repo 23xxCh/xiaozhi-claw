@@ -366,8 +366,10 @@ class ToolRegistry:
         for name, description, properties in (
             (
                 "weather",
-                "查询指定城市的天气；未配置服务时应如实说明。",
-                {"city": {"type": "string", "maxLength": 40}},
+                "查询指定城市的天气。用户只说省份或地区而未指定城市时，"
+                "先追问具体城市，不要擅自选择省会。查询失败不代表该地区没有天气数据。",
+                {"city": {"type": "string", "maxLength": 40,
+                          "description": "用户指定的城市或区县，不是省份"}},
             ),
             (
                 "web_search",
