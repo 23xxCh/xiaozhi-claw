@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +42,7 @@ class DeviceConnectionManager:
             self._connections[serial_number] = lease
         if previous is not None and previous.websocket is not websocket:
             previous.revoked.set()
-            with contextlib.suppress(RuntimeError):
+            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                 await previous.websocket.close(code=1012, reason="device reconnected")
         return lease
 
@@ -61,7 +61,7 @@ class DeviceConnectionManager:
                 return False
             self._connections.pop(lease.serial_number, None)
             lease.revoked.set()
-        with contextlib.suppress(RuntimeError):
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
             await lease.websocket.close(code=code, reason=reason)
         return True
 
@@ -88,7 +88,7 @@ class DeviceConnectionManager:
                 if not await self.is_current(lease):
                     return False
                 await lease.websocket.send_json(message)
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             await self.disconnect(lease)
             return False
         return True
@@ -101,7 +101,7 @@ class DeviceConnectionManager:
                 if not await self.is_current(lease):
                     return False
                 await lease.websocket.send_bytes(payload)
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             await self.disconnect(lease)
             return False
         return True

@@ -1,3 +1,6 @@
+import pytest
+from fastapi import WebSocketDisconnect
+
 from backend.app.device_connections import DeviceConnectionManager
 
 
@@ -15,6 +18,36 @@ class _WebSocket:
 
     async def close(self, *, code: int, reason: str) -> None:
         self.closed = (code, reason)
+
+
+class _DisconnectedWebSocket(_WebSocket):
+    async def close(self, *, code: int, reason: str) -> None:
+        raise WebSocketDisconnect(1006)
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        raise WebSocketDisconnect(1006)
+
+    async def send_bytes(self, payload: bytes) -> None:
+        raise WebSocketDisconnect(1006)
+
+
+@pytest.mark.parametrize("operation", ["reconnect", "retire", "json", "bytes"])
+async def test_transport_disconnect_does_not_break_lease_cleanup(operation: str) -> None:
+    manager = DeviceConnectionManager()
+    old = await manager.connect("DEVICE", _DisconnectedWebSocket(), "old")
+    if operation == "reconnect":
+        new = await manager.connect("DEVICE", _WebSocket(), "new")
+        await manager.disconnect(old)
+        assert await manager.is_current(new)
+        assert await manager.send_json_for_lease(new, {"type": "hello"})
+    elif operation == "retire":
+        assert await manager.retire(old, code=4403, reason="revoked")
+    elif operation == "json":
+        assert not await manager.send_json_for_lease(old, {"type": "hello"})
+    else:
+        assert not await manager.send_bytes_for_lease(old, b"audio")
+    assert old.revoked.is_set()
+    assert not await manager.is_current(old)
 
 
 async def test_reconnect_retires_old_lease_without_redirecting_old_turn() -> None:
