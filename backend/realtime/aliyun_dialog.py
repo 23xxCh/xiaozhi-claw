@@ -61,35 +61,64 @@ class AliyunDialogBackend:
     @classmethod
     async def open(cls, config: AliyunDialogConfig):
         url = urlsplit(config.url)
-        if (url.scheme != "wss" or not url.hostname or url.username or url.password
-                or url.query or url.fragment or config.timeout_seconds <= 0
-                or not all(x.strip() and "\n" not in x and "\r" not in x
-                           for x in (config.api_key, config.workspace_id, config.app_id))):
+        if (
+            url.scheme != "wss"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or config.timeout_seconds <= 0
+            or not all(
+                x.strip() and "\n" not in x and "\r" not in x
+                for x in (config.api_key, config.workspace_id, config.app_id)
+            )
+        ):
             raise RealtimeProviderError(PROVIDER, "invalid-config")
         try:
-            ws = await connect(config.url, additional_headers={
-                "Authorization": "Bearer " + config.api_key,
-            }, proxy=None, open_timeout=config.timeout_seconds,
-                close_timeout=2, max_size=1024 * 1024)
+            ws = await connect(
+                config.url,
+                additional_headers={
+                    "Authorization": "Bearer " + config.api_key,
+                },
+                proxy=None,
+                open_timeout=config.timeout_seconds,
+                close_timeout=2,
+                max_size=1024 * 1024,
+            )
         except Exception:
             raise RealtimeProviderError(PROVIDER, "connect-failed") from None
         backend = cls(ws, config)
         backend._reader = asyncio.create_task(backend._read())
         try:
-            await backend._send({
-                "task_group": "aigc", "task": "multimodal-generation",
-                "function": "generation", "model": "multimodal-dialog",
-                "input": {"directive": "Start", "workspace_id": config.workspace_id,
-                          "app_id": config.app_id,
-                          **({"dialog_id": config.dialog_id} if config.dialog_id else {})},
-                "parameters": {
-                    "upstream": {"type": "AudioOnly", "mode": "push2talk",
-                                 "audio_format": "pcm", "sample_rate": 16000},
-                    "downstream": {"audio_format": "pcm", "sample_rate": 24000},
-                    "client_info": {"user_id": config.client_id or backend.task_id.replace("-", ""),
-                                    "device": {"uuid": config.client_id or backend.task_id}},
+            await backend._send(
+                {
+                    "task_group": "aigc",
+                    "task": "multimodal-generation",
+                    "function": "generation",
+                    "model": "multimodal-dialog",
+                    "input": {
+                        "directive": "Start",
+                        "workspace_id": config.workspace_id,
+                        "app_id": config.app_id,
+                        **({"dialog_id": config.dialog_id} if config.dialog_id else {}),
+                    },
+                    "parameters": {
+                        "upstream": {
+                            "type": "AudioOnly",
+                            "mode": "push2talk",
+                            "audio_format": "pcm",
+                            "sample_rate": 16000,
+                        },
+                        "downstream": {"audio_format": "pcm", "sample_rate": 24000},
+                        "client_info": {
+                            "user_id": config.client_id or backend.task_id.replace("-", ""),
+                            "device": {"uuid": config.client_id or backend.task_id},
+                        },
+                    },
                 },
-            }, action="run-task")
+                action="run-task",
+            )
             async with asyncio.timeout(config.timeout_seconds):
                 await backend._listening.wait()
             if backend._failure:
@@ -102,19 +131,33 @@ class AliyunDialogBackend:
     async def _send(self, payload, *, action="continue-task"):
         try:
             async with self._send_lock, asyncio.timeout(self.config.timeout_seconds):
-                await self.websocket.send(json.dumps({"header": {
-                    "action": action, "task_id": self.task_id, "streaming": "duplex",
-                }, "payload": payload}))
+                await self.websocket.send(
+                    json.dumps(
+                        {
+                            "header": {
+                                "action": action,
+                                "task_id": self.task_id,
+                                "streaming": "duplex",
+                            },
+                            "payload": payload,
+                        }
+                    )
+                )
         except TimeoutError:
             raise RealtimeProviderTimeout(PROVIDER, "send") from None
         except Exception:
             raise RealtimeProviderError(PROVIDER, "send-failed") from None
 
     async def _directive(self, name, *, action="continue-task"):
-        await self._send({"input": {"directive": name, "dialog_id": self.session_id}},
-                         action=action)
-        telemetry_logger.info("aliyun input turn=%s directive=%s pcm_bytes=%d",
-                              self._turn_id, name, self._sent_pcm_bytes)
+        await self._send(
+            {"input": {"directive": name, "dialog_id": self.session_id}}, action=action
+        )
+        telemetry_logger.info(
+            "aliyun input turn=%s directive=%s pcm_bytes=%d",
+            self._turn_id,
+            name,
+            self._sent_pcm_bytes,
+        )
 
     def begin_turn(self, turn_id: str) -> int:
         if self._turn_id or self._closed or self._failure or not turn_id:
@@ -141,8 +184,9 @@ class AliyunDialogBackend:
                     await self.websocket.send(pcm)
                     self._sent_pcm_bytes += len(pcm)
                     if self._sent_pcm_bytes == len(pcm):
-                        telemetry_logger.info("aliyun input turn=%s first_pcm_sent bytes=%d",
-                                              self._turn_id, len(pcm))
+                        telemetry_logger.info(
+                            "aliyun input turn=%s first_pcm_sent bytes=%d", self._turn_id, len(pcm)
+                        )
         except Exception:
             raise RealtimeProviderError(PROVIDER, "audio-send-failed") from None
 
@@ -171,8 +215,13 @@ class AliyunDialogBackend:
         self._buffered_bytes = 0
 
     def _emit(self, kind, **data):
-        event = ConversationEvent(type=kind, generation=self._generation,
-                                  turn_id=self._turn_id, response_id=self._response_id, **data)
+        event = ConversationEvent(
+            type=kind,
+            generation=self._generation,
+            turn_id=self._turn_id,
+            response_id=self._response_id,
+            **data,
+        )
         if self._events.full() or self._buffered_bytes + len(event.audio) > 2 * 1024 * 1024:
             raise RealtimeProviderError(PROVIDER, "event-buffer-full")
         self._buffered_bytes += len(event.audio)
@@ -199,10 +248,18 @@ class AliyunDialogBackend:
                     raise RealtimeProviderError(PROVIDER, "provider-rejected")
                 output = message.get("payload", {}).get("output", {})
                 kind = output.get("event")
-                if kind in {"Started", "DialogStateChanged", "SpeechContent", "SpeechEnded", "RespondingEnded"}:
+                if kind in {
+                    "Started",
+                    "DialogStateChanged",
+                    "SpeechContent",
+                    "SpeechEnded",
+                    "RespondingEnded",
+                }:
                     telemetry_logger.info(
                         "aliyun event turn=%s kind=%s finished=%s text_chars=%d pcm_sent=%d",
-                        self._turn_id, kind, output.get("finished") is True,
+                        self._turn_id,
+                        kind,
+                        output.get("finished") is True,
                         len(output.get("text", "")) if isinstance(output.get("text"), str) else 0,
                         self._sent_pcm_bytes,
                     )
@@ -248,8 +305,11 @@ class AliyunDialogBackend:
         except Exception as exc:
             if self._closed:
                 return
-            self._failure = (exc if isinstance(exc, RealtimeProviderError)
-                             else RealtimeProviderError(PROVIDER, "receive-failed"))
+            self._failure = (
+                exc
+                if isinstance(exc, RealtimeProviderError)
+                else RealtimeProviderError(PROVIDER, "receive-failed")
+            )
             self._active = False
             self._clear()
             self._events.put_nowait(self._failure)

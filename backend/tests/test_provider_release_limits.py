@@ -22,7 +22,9 @@ from backend.realtime.providers import (
 ])
 def test_candidate_production_admission(provider, model, key, url, flag):
     settings = Settings(_env_file=None)
-    route = SimpleNamespace(route_kind="cascade", tts_provider=provider, tts_model=model)
+    route = SimpleNamespace(
+        route_kind="cascade", asr_provider="dashscope", tts_provider=provider, tts_model=model,
+    )
     with pytest.raises(ValueError, match="credential"):
         validate_route_admission(route, settings)
     setattr(settings, key, "test-key")
