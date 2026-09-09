@@ -3,7 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Agent, Device, ModelPreset, User, VoicePreset
 from .usage_profiles import ensure_adult_profile
-from .voice_routes import QWEN_INSTRUCT_MODEL, compatible_voices, validate_model_route
+from .voice_routes import (
+    DOUBAO_VOICE_CANDIDATES,
+    QWEN_INSTRUCT_MODEL,
+    compatible_voices,
+    validate_model_route,
+)
 
 DEFAULT_MODEL_PRESETS = (
     {
@@ -123,6 +128,11 @@ DEFAULT_MODEL_PRESETS = (
 )
 
 DEFAULT_VOICE_PRESETS = (
+    *(
+        {"id": id, "display_name": label, "language": "zh-CN",
+         "provider": "doubao", "voice": voice, "is_default": False, "enabled": False}
+        for id, voice, label in DOUBAO_VOICE_CANDIDATES
+    ),
     *(
         {"id": f"volc-{id}", "display_name": label, "language": "zh-CN",
          "provider": "volc-tts", "voice": voice, "is_default": False,

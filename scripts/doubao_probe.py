@@ -16,19 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from backend.app.config import Settings  # noqa: E402
+from backend.app.voice_routes import DOUBAO_VOICE, DOUBAO_VOICES  # noqa: E402
 from backend.realtime.doubao import DoubaoConfig, DoubaoRealtimeBackend  # noqa: E402
 
 
 async def probe(args):
     settings = Settings()
     backend = None
-    result = {"provider": "doubao", "model": args.model, "authenticated_session": False,
+    result = {"provider": "doubao", "model": args.model, "voice": args.voice,
+              "authenticated_session": False,
               "audio_tested": False, "device_tested": False}
     started = time.monotonic()
     try:
         backend = await DoubaoRealtimeBackend.open(
             DoubaoConfig(api_key=settings.doubao_api_key, url=settings.doubao_realtime_url,
-                         model=args.model, timeout_seconds=10),
+                         model=args.model, voice=args.voice, timeout_seconds=10),
             instructions="你是语音接口测试助手，请用简短中文回答，不调用工具。",
         )
         result["authenticated_session"] = True
@@ -101,6 +103,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audio", type=Path)
     parser.add_argument("--model", default="1.2.6.1")
+    parser.add_argument("--voice", choices=sorted(DOUBAO_VOICES), default=DOUBAO_VOICE)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--save-audio", type=Path,
                         help="Save diagnostic response WAV; use only with approved test audio")

@@ -193,6 +193,46 @@ def test_doubao_enable_requires_deployment_and_production_validation(
     assert client.patch(path, headers=staff, json=payload).status_code == 200
 
 
+def test_doubao_voice_candidates_require_explicit_enable_and_preserve_old_voice(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    from backend.app.models import ModelPreset, VoicePreset
+    from backend.app.voice_routes import DOUBAO_VOICE_CANDIDATES, voice_is_compatible
+
+    user = _user_headers(client)
+    _enable_doubao(client, _staff_headers(client, admin_headers))
+    path = "/v1/voice-presets?model_preset_id=doubao-realtime"
+    assert [v["id"] for v in client.get(path, headers=user).json()] == ["doubao-vv"]
+    assert client.post("/v1/agents", headers=user, json={
+        "name": "未开放", "model_preset_id": "doubao-realtime",
+        "voice_preset_id": "doubao-xiaohe-2",
+    }).status_code == 422
+
+    async def enable_candidate():
+        async with client.app.state.session_factory() as session:
+            model = await session.get(ModelPreset, "doubao-realtime")
+            for id, voice_id, _ in DOUBAO_VOICE_CANDIDATES:
+                voice = await session.get(VoicePreset, id)
+                assert not voice.enabled and not voice.is_default
+                assert voice.voice == voice_id and voice_is_compatible(model, voice)
+            unknown = VoicePreset(provider="doubao", voice="unknown")
+            assert not voice_is_compatible(model, unknown)
+            voice = await session.get(VoicePreset, "doubao-xiaohe-2")
+            voice.enabled = True
+            await session.commit()
+
+    asyncio.run(enable_candidate())
+    # Listing reseeds the catalog: it must preserve the explicit enable decision.
+    assert {v["id"] for v in client.get(path, headers=user).json()} == {
+        "doubao-vv", "doubao-xiaohe-2",
+    }
+    for model_id, expected in (("doubao-realtime", 200), ("fast-chat", 422)):
+        assert client.post("/v1/agents", headers=user, json={
+            "name": "候选验证", "model_preset_id": model_id,
+            "voice_preset_id": "doubao-xiaohe-2",
+        }).status_code == expected
+
+
 def test_unknown_s2s_cost_is_preserved_and_billing_event_is_unique(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:

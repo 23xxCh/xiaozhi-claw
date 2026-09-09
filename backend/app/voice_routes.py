@@ -21,6 +21,14 @@ CASCADE_TOOL_IDS = (
 )
 DOUBAO_MODEL = "1.2.6.1"
 DOUBAO_VOICE = "zh_female_vv_jupiter_bigtts"
+# Official full-duplex catalog: docs.volcengine.com/docs/6561/1257544 (2026-09-09).
+DOUBAO_VOICE_CANDIDATES = (
+    ("doubao-vv-2", "zh_female_vv_uranus_bigtts", "Vivi 2.0 / 豆包女声"),
+    ("doubao-xiaohe-2", "zh_female_xiaohe_uranus_bigtts", "小何 2.0 / 豆包女声"),
+    ("doubao-yunzhou-2", "zh_male_m191_uranus_bigtts", "云舟 2.0 / 豆包男声"),
+    ("doubao-xiaotian-2", "zh_male_taocheng_uranus_bigtts", "小天 2.0 / 豆包男声"),
+)
+DOUBAO_VOICES = frozenset({DOUBAO_VOICE, *(voice for _, voice, _ in DOUBAO_VOICE_CANDIDATES)})
 QWEN_INSTRUCT_MODEL = "qwen3-tts-instruct-flash-realtime-2026-01-22"
 QWEN_INSTRUCT_VOICES = frozenset({
     "Cherry", "Ethan", "Serena", "Chelsie", "Momo", "Vivian", "Moon",
@@ -67,7 +75,7 @@ def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
         return (
             model.realtime_provider == voice.provider == "doubao"
             and model.realtime_model == DOUBAO_MODEL
-            and voice.voice == DOUBAO_VOICE
+            and voice.voice in DOUBAO_VOICES
         )
     if model.route_kind == "cascade" and model.tts_provider:
         if model.tts_provider == "volc-tts":
