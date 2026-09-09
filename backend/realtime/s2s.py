@@ -60,7 +60,9 @@ class SpeechToSpeechInput:
                 if target > now:
                     await asyncio.sleep(target - now)
                 await self.backend.send_audio(pcm, generation=self.generation)
-                target = max(target, time.monotonic()) + len(pcm) / 32000
+                # Keep the audio clock independent of send/scheduler overhead.
+                # Catch up at most 100 ms after a stall, never burst an entire turn.
+                target = max(target + len(pcm) / 32000, time.monotonic() - .1)
         except Exception as exc:
             self._upload_error = exc
             telemetry_logger.warning("voice input turn=%s upload_error=%s", self.turn_id, type(exc).__name__)
@@ -107,6 +109,7 @@ class SpeechToSpeechInput:
         if self._ended:
             return
         self._ended = True
+        ended_at = time.monotonic()
         telemetry_logger.info("voice input turn=%s device_input_ended opus_packets=%d opus_bytes=%d pcm_bytes=%d",
                               self.turn_id, self._opus_packets, self._opus_bytes, self._pcm_bytes)
         async with asyncio.timeout(self.backend.config.timeout_seconds):
@@ -115,6 +118,8 @@ class SpeechToSpeechInput:
             if self._upload_error is not None:
                 raise self._upload_error
             await self.backend.end_input(generation=self.generation)
+            telemetry_logger.info("voice input turn=%s upstream_input_ended drain_ms=%d pcm_bytes=%d",
+                                  self.turn_id, round((time.monotonic()-ended_at)*1000), self._pcm_bytes)
 
     async def cancel(self) -> None:
         if self._closed:
