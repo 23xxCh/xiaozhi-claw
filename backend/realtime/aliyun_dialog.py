@@ -8,6 +8,7 @@ overriding the application's persona or uploading transcript history.
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from .conversation_backend import ConversationEvent
 from .providers import RealtimeProviderError, RealtimeProviderTimeout
 
 PROVIDER = "aliyun-dialog"
+telemetry_logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class AliyunDialogBackend:
         self._failure = None
         self._reader = None
         self._send_lock = asyncio.Lock()
+        self._sent_pcm_bytes = 0
 
     @classmethod
     async def open(cls, config: AliyunDialogConfig):
@@ -110,6 +113,8 @@ class AliyunDialogBackend:
     async def _directive(self, name, *, action="continue-task"):
         await self._send({"input": {"directive": name, "dialog_id": self.session_id}},
                          action=action)
+        telemetry_logger.info("aliyun input turn=%s directive=%s pcm_bytes=%d",
+                              self._turn_id, name, self._sent_pcm_bytes)
 
     def begin_turn(self, turn_id: str) -> int:
         if self._turn_id or self._closed or self._failure or not turn_id:
@@ -134,6 +139,10 @@ class AliyunDialogBackend:
             async with self._send_lock, asyncio.timeout(self.config.timeout_seconds):
                 if self._current(generation):
                     await self.websocket.send(pcm)
+                    self._sent_pcm_bytes += len(pcm)
+                    if self._sent_pcm_bytes == len(pcm):
+                        telemetry_logger.info("aliyun input turn=%s first_pcm_sent bytes=%d",
+                                              self._turn_id, len(pcm))
         except Exception:
             raise RealtimeProviderError(PROVIDER, "audio-send-failed") from None
 
@@ -190,6 +199,13 @@ class AliyunDialogBackend:
                     raise RealtimeProviderError(PROVIDER, "provider-rejected")
                 output = message.get("payload", {}).get("output", {})
                 kind = output.get("event")
+                if kind in {"Started", "DialogStateChanged", "SpeechContent", "SpeechEnded", "RespondingEnded"}:
+                    telemetry_logger.info(
+                        "aliyun event turn=%s kind=%s finished=%s text_chars=%d pcm_sent=%d",
+                        self._turn_id, kind, output.get("finished") is True,
+                        len(output.get("text", "")) if isinstance(output.get("text"), str) else 0,
+                        self._sent_pcm_bytes,
+                    )
                 if kind == "Started":
                     if not isinstance(output.get("dialog_id"), str) or not output["dialog_id"]:
                         raise ValueError("missing session")

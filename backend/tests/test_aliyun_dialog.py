@@ -64,7 +64,8 @@ def config(**kwargs):
                              "test-workspace", "test-app", **kwargs)
 
 
-async def test_protocol_audio_dedup_completion_and_cancellation(monkeypatch):
+async def test_protocol_audio_dedup_completion_and_cancellation(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="uvicorn.error")
     socket = AliSocket()
     monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=socket))
     backend = await AliyunDialogBackend.open(config())
@@ -85,6 +86,11 @@ async def test_protocol_audio_dedup_completion_and_cancellation(monkeypatch):
     assert [e async for e in backend.events()] == []
     assert socket.closed and socket.directives()[-1] == "Stop"
     assert "test-secret" not in repr(config())
+    assert "first_pcm_sent bytes=640" in caplog.text
+    assert "directive=StopSpeech pcm_bytes=640" in caplog.text
+    assert "kind=SpeechContent finished=True text_chars=2" in caplog.text
+    assert "你好" not in caplog.text
+    assert "test-secret" not in caplog.text
 
 
 async def test_started_alone_does_not_allow_upload(monkeypatch):

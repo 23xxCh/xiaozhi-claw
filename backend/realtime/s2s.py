@@ -40,6 +40,9 @@ class SpeechToSpeechInput:
         self._upload_error: Exception | None = None
         self._ended = False
         self._closed = False
+        self._opus_packets = 0
+        self._opus_bytes = 0
+        self._pcm_bytes = 0
 
     @property
     def endpoint_event(self) -> asyncio.Event:
@@ -52,6 +55,7 @@ class SpeechToSpeechInput:
         target = time.monotonic()
         try:
             async for pcm in self.decoder.chunks():
+                self._pcm_bytes += len(pcm)
                 now = time.monotonic()
                 if target > now:
                     await asyncio.sleep(target - now)
@@ -59,6 +63,7 @@ class SpeechToSpeechInput:
                 target = max(target, time.monotonic()) + len(pcm) / 32000
         except Exception as exc:
             self._upload_error = exc
+            telemetry_logger.warning("voice input turn=%s upload_error=%s", self.turn_id, type(exc).__name__)
             self.backend.endpoint_event.set()
 
     async def send_audio(self, packet: bytes) -> None:
@@ -66,6 +71,10 @@ class SpeechToSpeechInput:
             raise self._upload_error
         if self._closed or self._ended or self.backend.endpoint_detected():
             return
+        self._opus_packets += 1
+        self._opus_bytes += len(packet)
+        if self._opus_packets == 1:
+            telemetry_logger.info("voice input turn=%s first_device_packet bytes=%d", self.turn_id, len(packet))
         write = asyncio.create_task(self.decoder.write(packet))
         endpoint = asyncio.create_task(self.endpoint_event.wait())
         try:
@@ -98,6 +107,8 @@ class SpeechToSpeechInput:
         if self._ended:
             return
         self._ended = True
+        telemetry_logger.info("voice input turn=%s device_input_ended opus_packets=%d opus_bytes=%d pcm_bytes=%d",
+                              self.turn_id, self._opus_packets, self._opus_bytes, self._pcm_bytes)
         async with asyncio.timeout(self.backend.config.timeout_seconds):
             await self.decoder.finish()
             await self._upload_task
@@ -109,6 +120,8 @@ class SpeechToSpeechInput:
         if self._closed:
             return
         self._closed = True
+        telemetry_logger.info("voice input turn=%s closed opus_packets=%d opus_bytes=%d pcm_bytes=%d input_ended=%s",
+                              self.turn_id, self._opus_packets, self._opus_bytes, self._pcm_bytes, self._ended)
         self.invalidate()
         try:
             with contextlib.suppress(Exception):
