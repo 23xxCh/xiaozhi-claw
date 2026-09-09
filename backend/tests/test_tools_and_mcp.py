@@ -193,6 +193,10 @@ async def test_dashscope_qwen_search_forces_real_web_search(monkeypatch) -> None
     assert len(requests) == 1
     assert requests[0]["model"] == "qwen-plus"
     assert requests[0]["enable_search"] is True
+    assert requests[0]["enable_thinking"] is False
+    assert requests[0]["max_tokens"] == 400
+    assert "当前 UTC 时间" in requests[0]["messages"][0]["content"]
+    assert requests[0]["messages"][1] == {"role": "user", "content": "Hensun"}
     assert requests[0]["search_options"] == {
         "forced_search": True,
         "enable_source": True,

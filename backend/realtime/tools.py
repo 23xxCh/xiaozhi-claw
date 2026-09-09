@@ -187,7 +187,16 @@ class DashScopeQwenSearchProvider:
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json={
                         "model": self.model,
-                        "messages": [{"role": "user", "content": query}],
+                        "messages": [
+                            {"role": "system", "content": (
+                                f"当前 UTC 时间：{datetime.now(UTC).isoformat()}。"
+                                "查询真实最新信息，最多150字，保留信息日期和来源；"
+                                "查不到明确说明，禁止推测。"
+                            )},
+                            {"role": "user", "content": query},
+                        ],
+                        "max_tokens": 400,
+                        "enable_thinking": False,
                         "enable_search": True,
                         "search_options": {
                             "forced_search": True,

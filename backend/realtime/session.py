@@ -879,6 +879,8 @@ async def _process_turn(
     tool_schemas = tool_registry.definitions(enabled_tools)
     if mcp_client is not None:
         tool_schemas.extend(mcp_client.openai_tools(enabled_tools))
+    telemetry_logger.info("turn tools turn_id=%s names=%s", turn_id,
+                          [item["function"]["name"] for item in tool_schemas])
 
     async def execute_tool(name: str, arguments: dict[str, object]) -> str:
         if authorize is not None:
@@ -888,7 +890,16 @@ async def _process_turn(
             raise RuntimeError("tool is not enabled")
         if mcp_client is not None and mcp_client.can_call(name):
             return await mcp_client.call(name, arguments)
-        return await tool_registry.execute(name, arguments)
+        started = time.monotonic()
+        try:
+            result = await tool_registry.execute(name, arguments)
+        except Exception as exc:
+            telemetry_logger.info("turn tool failed turn_id=%s name=%s error=%s",
+                                  turn_id, name, type(exc).__name__)
+            raise
+        telemetry_logger.info("turn tool completed turn_id=%s name=%s elapsed_ms=%d",
+                              turn_id, name, (time.monotonic() - started) * 1000)
+        return result
 
     tts: RealtimeTtsSession | None = None
     tts_open_task: asyncio.Task[RealtimeTtsSession] | None = None
