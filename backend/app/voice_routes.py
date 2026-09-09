@@ -125,6 +125,11 @@ def validate_tts_admission(settings, provider: str, model: str) -> None:
 def validate_route_admission(model, settings) -> None:
     if model.route_kind == "cascade":
         validate_tts_admission(settings, model.tts_provider, model.tts_model)
+        if model.asr_provider == "volc-asr":
+            if (model.asr_model != "bigmodel" or not settings.volc_asr_api_key.strip()
+                    or not settings.volc_asr_url.startswith("wss://")
+                    or (settings.app_env == "production" and not settings.volc_asr_validated)):
+                raise ValueError("volc ASR has not passed validation")
     elif model.route_kind == "managed_app":
         if not managed_route_available(settings) or not settings.aliyun_dialog_url.startswith("wss://"):
             raise ValueError("Aliyun route has not passed validation")

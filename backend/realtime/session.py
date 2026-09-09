@@ -576,8 +576,8 @@ async def _record_turn(
                     input_units=audio_duration_ms,
                     output_units=len(transcript),
                     latency_ms=asr_latency_ms,
-                    cost_micros=(None if "asr" in fallback_operations else asr_cost),
-                    cost_status=("unknown" if "asr" in fallback_operations else "estimated"),
+                    cost_micros=(None if "asr" in fallback_operations or snapshot.asr_provider == "volc-asr" else asr_cost),
+                    cost_status=("unknown" if "asr" in fallback_operations or snapshot.asr_provider == "volc-asr" else "estimated"),
                     error_code=("fallback-batch" if "asr" in fallback_operations else None),
                 ),
                 ProviderUsage(
@@ -1023,7 +1023,7 @@ async def _process_turn(
                         len(audio_frames),
                     )
             if asr_error is not None:
-                if fallback is None:
+                if fallback is None or snapshot.asr_provider == "volc-asr":
                     turn_error_code = "asr-realtime-invalid"
                     await _send_turn_error_and_reset(
                         websocket,

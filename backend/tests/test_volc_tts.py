@@ -23,6 +23,7 @@ async def test_sse_completion_and_errors(case):
     def handle(request):
         assert request.headers["X-Api-Resource-Id"] == "seed-tts-2.0"
         body = json.loads(request.content)["req_params"]
+        assert json.loads(body["additions"])["section_id"] == tts.section_id
         assert body["audio_params"] == {
             "format": "pcm", "sample_rate": 24000, "speech_rate": 20,
         }
@@ -37,6 +38,7 @@ async def test_sse_completion_and_errors(case):
     try:
         if case == "ok":
             assert b"".join([x async for x in tts.synthesize("你好")]) == b"\x00\x01" * 20
+            assert b"".join([x async for x in tts.synthesize("我们继续聊。")]) == b"\x00\x01" * 20
         else:
             with pytest.raises(RealtimeProviderError) as exc:
                 _ = [x async for x in tts.synthesize("你好")]

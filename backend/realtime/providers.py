@@ -684,6 +684,7 @@ class VolcTtsSession:
         self.settings = settings
         self.voice = voice
         self.speech_rate = round((speech_rate - 1) * 100)
+        self.section_id = str(uuid.uuid4())
         self.client = httpx.AsyncClient(timeout=settings.provider_timeout_seconds, trust_env=False)
         self.closed = False
 
@@ -699,6 +700,7 @@ class VolcTtsSession:
                          "X-Api-Request-Id": str(uuid.uuid4())},
                 json={"user": {"uid": "hensun"}, "req_params": {
                     "text": text, "speaker": self.voice,
+                    "additions": json.dumps({"section_id": self.section_id}),
                     "audio_params": {"format": "pcm", "sample_rate": 24000,
                                      "speech_rate": self.speech_rate},
                 }},
@@ -747,6 +749,7 @@ class RealtimeProviderBundle:
     mock: bool = False
     _owns_llm: bool = field(default=True, repr=False)
     tts_provider: str = "dashscope"
+    asr_provider: str = "dashscope"
 
     def for_models(
         self,
@@ -764,8 +767,10 @@ class RealtimeProviderBundle:
         remain application configuration; unsupported choices never fall through
         to an unrelated implementation. Only the application bundle owns its LLM.
         """
-        if asr_provider != "dashscope":
+        if asr_provider not in {"dashscope", "volc-asr"}:
             raise RealtimeProviderError("binding", "unsupported-asr-provider")
+        if asr_provider == "volc-asr" and asr_model != "bigmodel":
+            raise RealtimeProviderError("binding", "unsupported-asr-model")
         if tts_provider not in {"dashscope", "volc-tts"}:
             raise RealtimeProviderError("binding", "unsupported-tts-provider")
         if tts_provider == "volc-tts" and tts_model != "seed-tts-2.0":
@@ -787,12 +792,16 @@ class RealtimeProviderBundle:
                 raise RealtimeProviderError("binding", "unsupported-llm-implementation")
             llm = llm.for_provider(llm_provider, settings=settings)
         return RealtimeProviderBundle(
-            settings, llm, self.mock, _owns_llm=False, tts_provider=tts_provider
+            settings, llm, self.mock, _owns_llm=False, tts_provider=tts_provider,
+            asr_provider=asr_provider,
         )
 
     async def open_asr(self) -> RealtimeAsrSession:
         if self.mock:
             return MockAsrSession()
+        if self.asr_provider == "volc-asr":
+            from .volc_asr import VolcAsrSession
+            return await VolcAsrSession.open(self.settings)
         return await QwenRealtimeAsrSession.open(self.settings)
 
     async def open_tts(self, voice: str, speech_rate: float = 1.0) -> RealtimeTtsSession:

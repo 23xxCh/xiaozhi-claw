@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     tts_api_key: str = ""
     tts_model: str = ""
     volc_tts_validated: bool = False
+    volc_asr_validated: bool = False
+    volc_asr_api_key: str = Field(default="", repr=False)
+    volc_asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
     qwen_instruct_validated: bool = False
     provider_audio_buffer_bytes: int = Field(default=2 * 1024 * 1024, ge=48000, le=16 * 1024 * 1024)
     provider_event_buffer_size: int = Field(default=256, ge=8, le=1024)

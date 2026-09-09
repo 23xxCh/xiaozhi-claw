@@ -15,6 +15,19 @@ from .voice_routes import (
 
 DEFAULT_MODEL_PRESETS = (
     {
+        "id": "volc-chat", "display_name": "火山识别＋火山音色",
+        "description": "火山流式 ASR 1.0＋DeepSeek＋火山 TTS 2.0；真机效果待验收",
+        "asr_provider": "volc-asr", "asr_model": "bigmodel",
+        "llm_provider": "deepseek", "llm_model": "deepseek-v4-flash",
+        "tts_provider": "volc-tts", "tts_model": "seed-tts-2.0",
+        # ASR supplier cost is recorded as unknown until billing reconciliation.
+        "asr_cost_micros_per_minute": 0,
+        "llm_input_cost_micros_per_million_tokens": 1_000_000,
+        "llm_output_cost_micros_per_million_tokens": 2_000_000,
+        "tts_cost_micros_per_10k_chars": 5_000_000,
+        "enabled": False, "is_default": False,
+    },
+    {
         "id": "volc-tts-chat", "display_name": "火山音色（验证候选）",
         "description": "阿里识别＋DeepSeek＋火山 TTS 2.0；独立音色，真机效果待验收",
         "asr_provider": "dashscope", "asr_model": "qwen3-asr-flash-realtime",
@@ -41,8 +54,8 @@ DEFAULT_MODEL_PRESETS = (
     },
     {
         "id": "fast-chat",
-        "display_name": "快速对话",
-        "description": "低延迟日常对话",
+        "display_name": "阿里识别＋阿里音色",
+        "description": "阿里流式 ASR＋DeepSeek＋阿里 TTS；日常对话",
         "asr_provider": "dashscope",
         "asr_model": "qwen3-asr-flash-realtime",
         "llm_provider": "deepseek",
