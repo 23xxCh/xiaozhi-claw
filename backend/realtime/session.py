@@ -244,9 +244,9 @@ class _UnavailableRealtimeAsrSession:
 class SentenceBuffer:
     def __init__(
         self,
-        max_chars: int = 32,
-        min_clause_chars: int = 8,
-        first_chunk_chars: int = 8,
+        max_chars: int = 120,
+        min_clause_chars: int = 40,
+        first_chunk_chars: int = 120,
     ) -> None:
         self._text = ""
         self._max_chars = max_chars

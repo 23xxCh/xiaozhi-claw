@@ -273,26 +273,25 @@ async def test_qwen_tts_rejects_completed_response_without_audio() -> None:
 def test_sentence_buffer_prefers_natural_clause_over_mid_sentence_split() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("很抱歉，我无法直接获取实时时间，建议您查看") == [
-        "很抱歉，我无法直接获取实时时间，"
-    ]
-    assert buffer.flush() == "建议您查看"
+    assert buffer.feed("很抱歉，我无法直接获取实时时间，建议您查看") == []
+    assert buffer.feed("手机时钟。") == ["很抱歉，我无法直接获取实时时间，建议您查看手机时钟。"]
+    assert buffer.flush() is None
 
 
-def test_sentence_buffer_starts_unpunctuated_reply_without_waiting_for_full_sentence() -> None:
+def test_sentence_buffer_does_not_restart_prosody_after_eight_characters() -> None:
     buffer = SentenceBuffer()
 
     assert buffer.feed("短" * 7) == []
-    assert buffer.feed("句") == ["短" * 7 + "句"]
+    assert buffer.feed("句") == []
     assert buffer.feed("后续内容") == []
-    assert buffer.flush() == "后续内容"
+    assert buffer.flush() == "短" * 7 + "句后续内容"
 
 
 def test_sentence_buffer_keeps_hard_limit_after_first_chunk() -> None:
     buffer = SentenceBuffer()
 
-    assert buffer.feed("短" * 8) == ["短" * 8]
-    assert buffer.feed("句" * 32) == ["句" * 32]
+    assert buffer.feed("短" * 120) == ["短" * 120]
+    assert buffer.feed("句" * 120) == ["句" * 120]
 
 
 def test_story_request_gets_a_larger_spoken_budget_and_explicit_capability() -> None:
