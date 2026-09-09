@@ -1775,7 +1775,9 @@ void Application::StartListeningAudio() {
     // Play popup sound after ResetDecoder (in EnableVoiceProcessing) has been called
     if (play_popup_on_listening_) {
         play_popup_on_listening_ = false;
+#if !CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+#endif
     }
 }
 

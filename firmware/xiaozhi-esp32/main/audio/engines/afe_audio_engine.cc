@@ -269,6 +269,12 @@ void AfeAudioEngine::EnableWakeWordDetection(bool enable) {
 
 void AfeAudioEngine::EnableVoiceProcessing(bool enable) {
     if (enable) {
+        if ((xEventGroupGetBits(event_group_) & kVoiceProcessingEnabled) == 0) {
+            // Wake detection may keep AFE active between utterances. Start a
+            // fresh capture epoch even when the AFE itself never stopped.
+            reset_pending_ = true;
+            control_generation_.fetch_add(1);
+        }
         xEventGroupSetBits(event_group_, kVoiceProcessingEnabled);
     } else {
         xEventGroupClearBits(event_group_, kVoiceProcessingEnabled);
@@ -377,6 +383,8 @@ void AfeAudioEngine::ApplyPendingReset() {
     std::lock_guard<std::mutex> lock(input_buffer_mutex_);
     input_buffer_.clear();
     afe_iface_->reset_buffer(afe_data_);
+    afe_iface_->reset_vad(afe_data_);
+    is_speaking_ = false;
 }
 
 void AfeAudioEngine::ProcessingTask() {

@@ -15,6 +15,17 @@ EMOTES = BOARD / "standard_emotes"
 
 
 class HensunNoCamPilotBoardTests(unittest.TestCase):
+    def test_capture_resets_vad_and_does_not_play_into_its_microphone(self):
+        engine = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
+        enable = engine.split("void AfeAudioEngine::EnableVoiceProcessing", 1)[1].split("void ", 1)[0]
+        self.assertIn("reset_pending_ = true", enable)
+        self.assertIn("control_generation_.fetch_add(1)", enable)
+        reset = engine.split("void AfeAudioEngine::ApplyPendingReset", 1)[1].split("void ", 1)[0]
+        self.assertIn("afe_iface_->reset_vad(afe_data_)", reset)
+        application = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        self.assertIn("#if !CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1\n"
+                      "        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);\n#endif", application)
+
     def read_required(self, path: Path) -> str:
         self.assertTrue(path.is_file(), f"missing board file: {path}")
         return path.read_text(encoding="utf-8")
