@@ -35,6 +35,13 @@ def build_voice_reply_policy(
         "对普通无害请求直接完成，不要无故拒绝。"
     )
     normalized = "".join(transcript.split())
+    if "新闻" in normalized:
+        reply_rule = (
+            "用户正在请求新闻。播报最多三条有来源日期的简短新闻，"
+            "每条一句完整的话，总长度不超过220个汉字。"
+            "查询不到最新消息时明确说明，不要编造。"
+        )
+        return VoiceReplyPolicy(240, 3, "\n".join((trusted_time, capability, reply_rule)))
     story_requested = any(term in normalized for term in _STORY_TERMS)
     if story_requested:
         reply_rule = (

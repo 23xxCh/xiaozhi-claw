@@ -20,11 +20,20 @@ from backend.realtime.providers import (
     RealtimeProviderTimeout,
 )
 from backend.realtime.reply_policy import build_voice_reply_policy
+
+
 from backend.realtime.session import (
     SentenceBuffer,
     is_non_speech_filler,
     sanitize_spoken_text,
 )
+
+
+def test_news_reply_has_room_for_three_complete_items():
+    policy = build_voice_reply_policy("播报三条科技新闻")
+    assert policy.max_spoken_chars == 240
+    assert "最多三条" in policy.context
+    assert build_voice_reply_policy("你好").max_spoken_chars == 60
 
 
 @pytest.mark.asyncio

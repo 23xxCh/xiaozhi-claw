@@ -1427,6 +1427,10 @@ async def _process_turn(
             first_audio_latency_ms = int((time.perf_counter() - turn_started) * 1000)
 
         reply = "".join(spoken_parts).strip()
+        telemetry_logger.info(
+            "voice text budget turn_id=%s generated_chars=%d spoken_chars=%d limit=%d",
+            turn_id, len("".join(reply_parts)), len(reply), reply_policy.max_spoken_chars,
+        )
         llm_latency_ms = int(((first_sentence_at or time.perf_counter()) - llm_started) * 1000)
         tts_latency_ms = int((time.perf_counter() - (tts_started_at or llm_started)) * 1000)
 
