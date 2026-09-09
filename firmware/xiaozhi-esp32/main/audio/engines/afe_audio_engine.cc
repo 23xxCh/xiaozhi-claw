@@ -159,7 +159,12 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
     afe_config->vad_min_noise_ms = 700;
 #else
     afe_config->vad_mode = VAD_MODE_0;
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+    // Auto-stop ends the whole turn on a silence edge. Preserve normal pauses.
+    afe_config->vad_min_noise_ms = 700;
+#else
     afe_config->vad_min_noise_ms = 100;
+#endif
 #endif
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
@@ -454,9 +459,11 @@ void AfeAudioEngine::HandleVoiceResult(const afe_fetch_result_t* result) {
     if (vad_state_change_callback_) {
         if (result->vad_state == VAD_SPEECH && !is_speaking_) {
             is_speaking_ = true;
+            ESP_LOGI(TAG, "Voice activity started");
             vad_state_change_callback_(true);
         } else if (result->vad_state == VAD_SILENCE && is_speaking_) {
             is_speaking_ = false;
+            ESP_LOGI(TAG, "Voice activity ended");
             vad_state_change_callback_(false);
         }
     }
