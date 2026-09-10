@@ -38,12 +38,15 @@ class SpeechToSpeechInput:
         decoder: StreamingOpusToPcm,
         turn_id: str,
         input_accepted: asyncio.Event | None = None,
+        *,
+        pace_input: bool = True,
     ):
         self.backend = backend
         self.decoder = decoder
         self.turn_id = turn_id
         self.generation = backend.begin_turn(turn_id)
         self.input_accepted = input_accepted or asyncio.Event()
+        self._pace_input = pace_input
         self._upload_task = asyncio.create_task(self._upload())
         self._upload_error: Exception | None = None
         self._ended = False
@@ -55,6 +58,9 @@ class SpeechToSpeechInput:
         self._first_packet_at: float | None = None
         self._send_seconds = 0.0
         self._pacing_seconds = 0.0
+        telemetry_logger.info(
+            "voice input turn=%s pace_input=%s", self.turn_id, self._pace_input
+        )
 
     @property
     def endpoint_event(self) -> asyncio.Event:
@@ -75,7 +81,7 @@ class SpeechToSpeechInput:
                     )
                 self._pcm_bytes += len(pcm)
                 now = time.monotonic()
-                if target > now:
+                if self._pace_input and target > now:
                     await asyncio.sleep(target - now)
                     self._pacing_seconds += time.monotonic() - now
                 send_started = time.monotonic()

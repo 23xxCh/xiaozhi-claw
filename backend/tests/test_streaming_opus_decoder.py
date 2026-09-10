@@ -2,11 +2,54 @@ import asyncio
 import math
 import shutil
 import struct
+from types import SimpleNamespace
 
 import pytest
 
 from backend.app.audio_formats import IncrementalOggOpusMuxer, ogg_opus_packets
 from backend.realtime.media import StreamingOpusToPcm
+from backend.realtime.s2s import SpeechToSpeechInput
+
+
+async def test_unpaced_upload_preserves_every_decoded_sample_and_commits_last():
+    _, _, packets = await _encoded_audio()
+    muxer = IncrementalOggOpusMuxer(
+        input_sample_rate=16000, frame_duration_ms=60, pre_skip_samples=0,
+    )
+    reference = await _ffmpeg(
+        b"".join(muxer.add_packet(p) for p in packets),
+        "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1",
+    )
+    uploaded = []
+    committed = []
+
+    async def send(pcm, **kwargs):
+        assert not committed
+        uploaded.append(pcm)
+        await asyncio.sleep(0)  # real asynchronous handoff, preserve backpressure
+
+    async def commit(**kwargs):
+        committed.append(b"".join(uploaded))
+
+    backend = SimpleNamespace(
+        begin_turn=lambda turn: 1, send_audio=send, end_input=commit,
+        endpoint_detected=lambda: False, endpoint_event=asyncio.Event(),
+        config=SimpleNamespace(timeout_seconds=5),
+    )
+    decoder = StreamingOpusToPcm("ffmpeg")
+    await decoder.start()
+    source = SpeechToSpeechInput(backend, decoder, "buffered-audio", pace_input=False)
+    try:
+        for packet in packets:
+            await source.send_audio(packet)
+        await source.finish_input()
+        assert committed == [reference]
+        assert len(reference) == len(packets) * 960 * 2
+        assert source._pacing_seconds == 0
+    finally:
+        source._upload_task.cancel()
+        await asyncio.gather(source._upload_task, return_exceptions=True)
+        await decoder.cancel()
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is not installed")
 

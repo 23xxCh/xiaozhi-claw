@@ -2030,7 +2030,11 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 aliyun_previous = backend
                 decoder = StreamingOpusToPcm(settings.ffmpeg_path)
                 await decoder.start()
-                source = SpeechToSpeechInput(backend, decoder, str(uuid.uuid4()))
+                # Aliyun push2talk accepts buffered input after SendSpeech. Do not
+                # replay already captured audio at wall-clock speed a second time.
+                source = SpeechToSpeechInput(
+                    backend, decoder, str(uuid.uuid4()), pace_input=False
+                )
                 telemetry_logger.info("voice input turn=%s upstream_open_ms=%d", source.turn_id,
                             round((time.monotonic()-opening_at)*1000))
                 return source

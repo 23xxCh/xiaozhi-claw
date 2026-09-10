@@ -5,8 +5,10 @@ import pytest
 from backend.realtime import s2s
 
 
-async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch):
+@pytest.mark.parametrize("paced", [True, False])
+async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch, paced):
     now = 0.0
+    uploaded = []
 
     async def sleep(delay):
         nonlocal now
@@ -15,10 +17,11 @@ async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch):
     async def send(pcm, **kwargs):
         nonlocal now
         now += 0.005
+        uploaded.append(pcm)
 
     async def chunks():
-        for _ in range(100):
-            yield b"\0" * 640
+        for index in range(100):
+            yield bytes([index]) * 640
 
     monkeypatch.setattr(s2s, "time", SimpleNamespace(monotonic=lambda: now))
     monkeypatch.setattr(s2s.asyncio, "sleep", sleep)
@@ -31,8 +34,14 @@ async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch):
     source.turn_id = "pacing-test"
     source._send_seconds = 0.0
     source._pacing_seconds = 0.0
+    source._pace_input = paced
     await source._upload()
-    assert 1.98 <= now <= 2.02
+    if paced:
+        assert 1.98 <= now <= 2.02
+    else:
+        assert now == pytest.approx(0.5)
+        assert source._pacing_seconds == 0
+    assert uploaded == [bytes([index]) * 640 for index in range(100)]
     assert source._pcm_bytes == 64000
     assert source._send_seconds == pytest.approx(0.5)
     assert source._send_seconds + source._pacing_seconds == pytest.approx(now)
