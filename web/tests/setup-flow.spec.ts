@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { safeNext } from "../lib/onboarding";
 
+test("screen troubleshooting leads to setup and role configuration without claiming success", async ({ page }) => {
+  await page.goto("/setup");
+  await page.getByText("一直显示“登录服务器”或连接错误", { exact: true }).click();
+  await page.getByRole("button", { name: "查看重新配网步骤" }).click();
+  await expect(page.getByText("插电，等设备显示配网提示。", { exact: true })).toBeVisible();
+  await page.getByText("已经绑定，想换助手或音色", { exact: true }).click();
+  await expect(page.getByRole("link", { name: "配置我的助手" })).toHaveAttribute("href", "/console/agents");
+  await expect(page.getByText("设备在线，可以聊天", { exact: true })).toHaveCount(0);
+});
+
 test("next stays on this site, including encoded backslash attacks", () => {
   for (const value of ["//evil.example", "/\\evil.example", "/%5cevil.example", "javascript:alert(1)", "/\n/evil.example", "/%E0%A4%A"]) {
     expect(safeNext(value)).toBe("/console");
