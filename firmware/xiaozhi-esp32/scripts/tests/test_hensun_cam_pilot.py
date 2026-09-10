@@ -555,14 +555,14 @@ class HensunCamPilotBoardTests(unittest.TestCase):
             self.application_source.index(
                 "vad_speech_edge_pending_.store(true, std::memory_order_release)"
             ),
-            self.application_source.index("Schedule([this, speaking]()"),
+            self.application_source.index("Schedule([this, speaking, generation]()"),
         )
 
     def test_failed_cloud_turn_recovers_standby_and_wake_detection(self):
         self.assertIn("AbortDialogueToStandby", self.application_header)
         self.assertRegex(
             self.application_source,
-            r"kReplyPendingTimeoutTicks\s*=\s*12",
+            r"kReplyPendingTimeoutTicks\s*=\s*30",
         )
         self.assertIn(
             "reply_pending_ && clock_ticks_ >= kReplyPendingTimeoutTicks",

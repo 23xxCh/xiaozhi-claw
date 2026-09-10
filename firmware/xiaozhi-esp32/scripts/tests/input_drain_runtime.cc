@@ -25,6 +25,8 @@ struct AudioService {
     std::deque<int> audio_encode_queue_, audio_send_queue_;
     bool encode_in_flight_ = false;
     std::atomic<bool> send_queue_overflowed_{false};
+    std::atomic<uint32_t> capture_generation_{0};
+    uint32_t GetCaptureGeneration() const { return capture_generation_.load(); }
     bool FinishVoiceInput();
     void EnableAudioTesting(bool) {}
     std::unique_ptr<int> PopPacketFromSendQueue() {
@@ -36,6 +38,7 @@ struct AudioService {
     }
 };
 enum { kDeviceStateAudioTesting, kDeviceStateWifiConfiguring, kDeviceStateListening, kDeviceStateIdle };
+constexpr int kListeningModeAutoStop = 0;
 struct Protocol {
     std::vector<int> events;
     bool fail_send = false;
@@ -52,11 +55,21 @@ struct Application {
     Protocol* protocol_ = &transport;
     int state = kDeviceStateListening;
     std::string error;
+    std::atomic<uint32_t> stop_capture_generation_{0};
+    int listening_mode_ = kListeningModeAutoStop;
+    bool vad_speech_detected_ = false, reply_pending_ = false;
+    std::atomic<bool> vad_speech_edge_pending_{false};
+    int clock_ticks_ = 0, stop_calls = 0;
+    void StopListening() {
+        ++stop_calls;
+        stop_capture_generation_.store(audio_service_.GetCaptureGeneration());
+    }
     int GetDeviceState() { return state; }
     void SetDeviceState(int next) { state = next; }
     bool IsControlChannelReady() { return true; }
     void AbortDialogueToStandby(const char* reason, bool) { error = reason; state = kDeviceStateIdle; }
     void HandleStopListeningEvent();
+    void HandleVadChange(bool speaking, uint32_t generation);
 };
 struct LiteAudioEngine {
     std::mutex output_mutex_;
@@ -80,6 +93,23 @@ struct AfeAudioEngine {
 };
 // PRODUCTION_METHODS
 int main() {
+    Application epochs;
+    epochs.audio_service_.capture_generation_ = 2;
+    epochs.vad_speech_detected_ = true;
+    epochs.vad_speech_edge_pending_ = true;
+    epochs.HandleVadChange(false, 1); // old end cannot stop new capture
+    assert(epochs.vad_speech_detected_ && epochs.stop_calls == 0);
+    assert(epochs.vad_speech_edge_pending_);
+    epochs.vad_speech_detected_ = false;
+    epochs.HandleVadChange(true, 1); // old start cannot manufacture new speech
+    assert(!epochs.vad_speech_detected_);
+    epochs.HandleStopListeningEvent(); // queued stop from epoch zero
+    assert(epochs.state == kDeviceStateListening && epochs.transport.events.empty());
+    epochs.HandleVadChange(true, 2);
+    epochs.HandleVadChange(false, 2);
+    assert(epochs.stop_calls == 1 && epochs.reply_pending_);
+    assert(epochs.stop_capture_generation_ == 2);
+
     Application app;
     // Queue empty is not drained: last frame is still in the codec worker.
     app.audio_service_.encode_in_flight_ = true;

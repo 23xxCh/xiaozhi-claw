@@ -26,7 +26,8 @@ namespace {
 // bound an abnormal continuously-speaking VAD state.
 constexpr int kWaitForSpeechTimeoutTicks = 10;
 constexpr int kMaximumSpeechDurationTicks = 20;
-constexpr int kReplyPendingTimeoutTicks = 12;
+// Gateway first-audio deadline is 20 seconds; leave time for its error delivery.
+constexpr int kReplyPendingTimeoutTicks = 30;
 constexpr int64_t kReplySettleDurationUs = 800 * 1000;
 constexpr int64_t kTtsFirstPcmTimeoutUs = 6 * 1000 * 1000;
 constexpr int kHeartbeatIntervalTicks = 15;
@@ -124,28 +125,15 @@ void Application::Initialize() {
     callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
-    callbacks.on_vad_change = [this](bool speaking) {
+    callbacks.on_vad_change = [this](bool speaking, uint32_t generation) {
         if (speaking) {
             // The clock event and the scheduled VAD handler run on different
             // tasks. Latch the edge immediately so a 9.9-second utterance
             // cannot lose a race to the quiet-listening timeout.
             vad_speech_edge_pending_.store(true, std::memory_order_release);
         }
-        Schedule([this, speaking]() {
-            if (GetDeviceState() != kDeviceStateListening ||
-                listening_mode_ != kListeningModeAutoStop) {
-                vad_speech_edge_pending_.store(false, std::memory_order_release);
-                return;
-            }
-            if (speaking) {
-                vad_speech_detected_ = true;
-                clock_ticks_ = 0;
-            } else if (vad_speech_detected_) {
-                vad_speech_detected_ = false;
-                reply_pending_ = true;
-                StopListening();
-            }
-            vad_speech_edge_pending_.store(false, std::memory_order_release);
+        Schedule([this, speaking, generation]() {
+            HandleVadChange(speaking, generation);
         });
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
@@ -459,6 +447,8 @@ void Application::Run() {
             if (GetDeviceState() == kDeviceStateIdle &&
                 reply_pending_ && clock_ticks_ >= kReplyPendingTimeoutTicks) {
                 AbortDialogueToStandby("reply-timeout", true);
+                Board::GetInstance().GetDisplay()->ShowNotification(
+                    "回复超时，请重新唤醒后再试一次", 10000);
             }
 
             // Print debug info every 10 seconds
@@ -1093,6 +1083,8 @@ void Application::InitializeProtocol() {
             std::string reason = cJSON_IsString(code) ? code->valuestring : "gateway-error";
             Schedule([this, reason]() {
                 AbortDialogueToStandby(reason.c_str(), true);
+                Board::GetInstance().GetDisplay()->ShowNotification(
+                    "本次回复未完成，请重新唤醒后再试一次", 10000);
             });
         } else if (strcmp(type->valuestring, "listen") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
@@ -1342,7 +1334,29 @@ void Application::ToggleChatState() { xEventGroupSetBits(event_group_, MAIN_EVEN
 
 void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING); }
 
-void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
+void Application::StopListening() {
+    stop_capture_generation_.store(audio_service_.GetCaptureGeneration());
+    xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING);
+}
+
+void Application::HandleVadChange(bool speaking, uint32_t generation) {
+    // An old queued edge must not even clear the new capture's pending edge.
+    if (generation != audio_service_.GetCaptureGeneration()) {
+        return;
+    }
+    if (GetDeviceState() == kDeviceStateListening &&
+        listening_mode_ == kListeningModeAutoStop) {
+        if (speaking) {
+            vad_speech_detected_ = true;
+            clock_ticks_ = 0;
+        } else if (vad_speech_detected_) {
+            vad_speech_detected_ = false;
+            reply_pending_ = true;
+            StopListening();
+        }
+    }
+    vad_speech_edge_pending_.store(false, std::memory_order_release);
+}
 
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
@@ -1485,6 +1499,9 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
+        if (stop_capture_generation_.load() != audio_service_.GetCaptureGeneration()) {
+            return;
+        }
         if (!IsControlChannelReady() || !audio_service_.FinishVoiceInput()) {
             AbortDialogueToStandby("input-drain-failed", true);
             return;

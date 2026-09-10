@@ -96,7 +96,7 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_->OnVadStateChange([this](bool speaking) {
         voice_detected_ = speaking;
         if (callbacks_.on_vad_change) {
-            callbacks_.on_vad_change(speaking);
+            callbacks_.on_vad_change(speaking, GetCaptureGeneration());
         }
     });
     audio_engine_->OnWakeWordDetected([this](const std::string& wake_word) {
@@ -700,12 +700,16 @@ void AudioService::EnableVoiceProcessing(bool enable) {
                 esp_ae_rate_cvt_reset(input_resampler_);
             }
         }
+        if (!IsAudioProcessorRunning()) {
+            capture_generation_.fetch_add(1);
+        }
         audio_engine_->EnableVoiceProcessing(true);
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
         if (audio_engine_initialized_) {
             audio_engine_->EnableVoiceProcessing(false);
         }
+        capture_generation_.fetch_add(1);
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     }
 }
@@ -715,6 +719,7 @@ bool AudioService::FinishVoiceInput() {
         return false;
     }
     audio_engine_->FinishVoiceProcessing();
+    capture_generation_.fetch_add(1);
     xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     // Send queue insertion never waits for the network. Bound codec draining so

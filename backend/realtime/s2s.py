@@ -23,6 +23,11 @@ from .providers import RealtimeProviderError, RealtimeProviderTimeout
 logger = logging.getLogger(__name__)
 telemetry_logger = logging.getLogger("uvicorn.error")
 
+# Shorter than the firmware's 30-second last-resort reply guard. Status and
+# text events do not extend this: only delivered audio starts the response phase.
+FIRST_AUDIO_TIMEOUT_SECONDS = 20.0
+RESPONSE_TIMEOUT_SECONDS = 120.0
+
 
 class SpeechToSpeechInput:
     """Bridge one device input to one provider session; never switch providers on failure."""
@@ -303,10 +308,18 @@ async def process_s2s_turn(
         if not await manager.send_json_for_lease(lease, {"turn_id": turn_id, **payload}):
             raise ConnectionError("device lease expired")
 
+    response_started = False
+
     async def send_packet(packet):
+        nonlocal response_started
         delivered = await manager.send_bytes_for_lease(lease, packet)
         if delivered:
             timeline.mark("gateway_first_packet")
+            if not response_started and not response_deadline.expired():
+                response_started = True
+                response_deadline.reschedule(
+                    asyncio.get_running_loop().time() + RESPONSE_TIMEOUT_SECONDS
+                )
         return delivered
 
     pacer = OpusPacketPacer(send_packet, startup_burst_packets=5)
@@ -339,7 +352,7 @@ async def process_s2s_turn(
         # Finish input concurrently: the reader must keep consuming response/usage
         # even while the provider acknowledges the local input commit.
         finish_task = asyncio.create_task(source.finish_input())
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(FIRST_AUDIO_TIMEOUT_SECONDS) as response_deadline:
             async for event in source.backend.events():
                 if finish_task.done():
                     await finish_task
@@ -443,7 +456,9 @@ async def process_s2s_turn(
         error_code = "turn-cancelled"
         raise
     except Exception as exc:
-        error_code = getattr(exc, "code", "s2s-unavailable")
+        error_code = (
+            "response-timeout" if response_started else "response-first-audio-timeout"
+        ) if isinstance(exc, TimeoutError) else getattr(exc, "code", "s2s-unavailable")
         with contextlib.suppress(Exception):
             await send(
                 {

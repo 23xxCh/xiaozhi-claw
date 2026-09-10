@@ -268,6 +268,47 @@ async def test_s2s_requires_ready_then_drained_before_counting_success(turn):
     assert json.loads(row.usage_details_json)["provider_usage"] == {}
 
 
+@pytest.mark.parametrize("keep_events_flowing", [False, True])
+async def test_no_audio_has_absolute_deadline_and_cleans_up(turn, monkeypatch, keep_events_flowing):
+    monkeypatch.setattr(s2s, "FIRST_AUDIO_TIMEOUT_SECONDS", 0.1)
+    task = turn.start()
+
+    async def noise():
+        while not task.done():
+            turn.backend.emit("usage", usage={})
+            await asyncio.sleep(0.005)
+
+    chatter = asyncio.create_task(noise()) if keep_events_flowing else None
+    try:
+        assert await asyncio.wait_for(task, 2) is False
+    finally:
+        if chatter:
+            chatter.cancel()
+            await asyncio.gather(chatter, return_exceptions=True)
+    errors = [m for m in turn.socket.messages if m.get("type") == "error"]
+    assert errors[-1]["code"] == "response-first-audio-timeout"
+    assert turn.backend.cancelled and turn.backend.invalidated
+    assert turn.source.decoder.cancelled
+    assert not turn.socket.packets and not turn.history
+    (row,) = await usage_rows(turn)
+    assert row.error_code == "response-first-audio-timeout"
+
+
+async def test_first_delivered_audio_releases_initial_deadline(turn, monkeypatch):
+    monkeypatch.setattr(s2s, "FIRST_AUDIO_TIMEOUT_SECONDS", 0.15)
+    task = turn.start()
+    emit_reply(turn, done=False)
+    async with asyncio.timeout(1):
+        while not turn.socket.packets:
+            await asyncio.sleep(0.001)
+    await asyncio.sleep(0.2)
+    assert not task.done()
+    turn.backend.emit("done", response_id="response-1")
+    assert await asyncio.wait_for(task, 2) is False
+    assert len(turn.history) == 2
+    assert not any(m.get("type") == "error" for m in turn.socket.messages)
+
+
 async def test_audio_before_unsafe_transcript_is_never_sent_to_device(turn):
     task = turn.start()
     turn.backend.emit("audio", audio=b"\1\0" * 480)

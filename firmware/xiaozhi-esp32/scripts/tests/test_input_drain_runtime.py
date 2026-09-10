@@ -34,6 +34,8 @@ def test_production_input_drain_and_stop_order(tmp_path):
     methods = "\n".join([
         method("main/audio/audio_service.cc", "bool AudioService::FinishVoiceInput()"),
         method("main/application.cc", "void Application::HandleStopListeningEvent()"),
+        method("main/application.cc",
+               "void Application::HandleVadChange(bool speaking, uint32_t generation)"),
         method("main/audio/engines/lite_audio_engine.cc",
                "void LiteAudioEngine::FinishVoiceProcessing()"),
         method("main/audio/engines/afe_audio_engine.cc",

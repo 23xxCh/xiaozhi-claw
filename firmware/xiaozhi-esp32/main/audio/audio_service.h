@@ -78,7 +78,7 @@
 struct AudioServiceCallbacks {
     std::function<void(void)> on_send_queue_available;
     std::function<void(const std::string&)> on_wake_word_detected;
-    std::function<void(bool)> on_vad_change;
+    std::function<void(bool, uint32_t)> on_vad_change;
     std::function<void(void)> on_audio_testing_queue_full;
     // Fired when the decode/playback queues and their in-flight work are drained.
     std::function<void(void)> on_playback_drained;
@@ -130,6 +130,7 @@ public:
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);
     bool FinishVoiceInput();
+    uint32_t GetCaptureGeneration() const { return capture_generation_.load(); }
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
@@ -198,6 +199,7 @@ private:
     bool device_aec_enabled_ = false;
 #endif
     std::atomic<bool> service_stopped_{true};
+    std::atomic<uint32_t> capture_generation_{0};
     std::atomic<bool> audio_input_need_warmup_{false};
     std::atomic<bool> send_queue_overflowed_{false};
 

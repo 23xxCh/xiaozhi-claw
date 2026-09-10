@@ -163,6 +163,7 @@ private:
     bool vad_speech_detected_ = false;  // Auto-stop only after speech has actually started
     bool listening_capture_ready_ = false;  // Start the quiet timeout only when listen.start can accept audio
     bool reply_pending_ = false;  // User speech ended; keep the face awake while cloud reply is pending
+    std::atomic<uint32_t> stop_capture_generation_{0};
     int clock_ticks_ = 0;
     int heartbeat_ticks_ = 0;
     int heartbeat_missed_ = 0;
@@ -185,6 +186,7 @@ private:
     void HandleToggleChatEvent();
     void HandleStartListeningEvent();
     void HandleStopListeningEvent();
+    void HandleVadChange(bool speaking, uint32_t generation);
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();
