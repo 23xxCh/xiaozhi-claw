@@ -3,6 +3,7 @@ import json
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -968,6 +969,32 @@ def test_empty_transcript_reopens_listening_without_error_face(
 
     assert resume["type"] == "listen"
     assert resume["state"] == "resume"
+
+
+def test_adult_idle_connection_does_not_trigger_two_hour_alert(
+    client: TestClient, admin_headers: dict[str, str], monkeypatch,
+) -> None:
+    clock = realtime_session.time
+    elapsed = 0
+    monkeypatch.setattr(realtime_session, "time", SimpleNamespace(
+        perf_counter=lambda: clock.perf_counter() + elapsed,
+        monotonic=clock.monotonic,
+    ))
+    client.app.state.realtime_providers = EmptyTranscriptProviders()
+    owned = provision_owned_device(client, admin_headers, serial="HENSUN-IDLE-REMINDER")
+    headers = {
+        "Device-Id": owned["serial"],
+        "Authorization": f"Bearer {owned['device_secret']}",
+    }
+    with client.websocket_connect("/v1/device/ws", headers=headers) as websocket:
+        for offset in (0, 7201):
+            elapsed = offset
+            websocket.send_json({"type": "listen", "state": "start"})
+            websocket.send_bytes(b"silence")
+            websocket.send_json({"type": "listen", "state": "stop"})
+            response = websocket.receive_json()
+            assert response["type"] == "listen"
+            assert response["state"] == "resume"
 
 
 def test_asr_filler_silently_returns_device_to_followup_listening(

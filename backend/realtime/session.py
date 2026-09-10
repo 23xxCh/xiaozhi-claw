@@ -1914,7 +1914,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
     conversation_started_at: datetime | None = None
     history: list[dict[str, str]] = []
     aliyun_previous: AliyunDialogBackend | None = None
-    connected_at = time.perf_counter()
     cancelled = False
     heartbeat_timed_out = False
     continuous_reminder_sent = False
@@ -2613,16 +2612,6 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
                 continue
             await start_active_turn(message_received_at)
 
-            if time.perf_counter() - connected_at >= 7200:
-                await websocket.app.state.device_connections.send_json_for_lease(
-                    connection_lease,
-                    {
-                        "type": "alert",
-                        "status": "休息提醒",
-                        "message": "你已经连续使用超过两小时，建议休息一下。",
-                        "emotion": "reminder",
-                    },
-                )
     except WebSocketDisconnect:
         logger.info("device websocket disconnected serial=%s", serial)
     except asyncio.CancelledError:
