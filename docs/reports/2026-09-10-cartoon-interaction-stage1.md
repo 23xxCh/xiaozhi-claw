@@ -21,3 +21,11 @@ COM6 read-mac 确认 7c:4f:ad:2b:51:a8。对 ota0 的 460800 和 115200 备份�
 重新确认 COM6 / MAC 7c:4f:ad:2b:51:a8。完整备份 ota0 到 run/backups/20260910-cartoon-stage1/ota0-reconnected.bin，4128768 bytes，SHA256 7e39689e0b6c3b702c4acbddf0e035e2120b5175e02d974c09714c364d600ee7。此前两份失败读取文件仍不能作为备份。
 
 只向 0x20000 写入上述 2792944-byte 候选固件，esptool 返回 Hash of data verified 后硬复位。NVS、资产及分区表未写入。后端表情请求代码仍未加载，先单独验收播放自唤醒保护。连续追问及真机长稳尚未通过。
+
+## 撤回前次上线判断：启动地址配置错误
+
+首个候选使用 /v1/ota，设备实际启动接口是 /v1/device/xiaozhi-bootstrap。前次刷入校验虽成功，但启动失败并报 404，不能视为部署成功；当时使用未分时的历史 WebSocket accepted 判断重连是不充分证据。前次 soak-start 不作为新固件稳定性证明。已重新构建正确入口，后续以新启动串口和连接验证恢复。完整 ota0-reconnected.bin 仍是更新前有效回退备份。
+
+## 正确入口修正版
+
+CONFIG_OTA_URL 已核实为 http://192.168.1.20:8000/v1/device/xiaozhi-bootstrap。新应用 SHA256 1eaf0fd0ab1c098e180dbd386de7c45e8947dba4b052047429f37ffebb106b73，0x20000 写入 Hash of data verified。复位后新请求 192.168.1.21:49350 POST /v1/device/xiaozhi-bootstrap 返回 200，随后 :49351 WebSocket accepted/connection open。启动入口已恢复，仍不代表第二轮及整个交互计划已通过。
