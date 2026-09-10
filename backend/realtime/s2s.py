@@ -7,6 +7,7 @@ import json
 import logging
 import struct
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy import select
@@ -74,6 +75,10 @@ class SpeechToSpeechInput:
     async def _upload(self) -> None:
         target = time.monotonic()
         sample_count = absolute_sum = peak = 0
+        first_windows = []
+        last_windows = deque(maxlen=5)
+        window_count = window_sum = window_peak = 0
+        window_index = 0
         try:
             async for pcm in self.decoder.chunks():
                 if not self._pcm_bytes:
@@ -87,6 +92,16 @@ class SpeechToSpeechInput:
                     sample_count += 1
                     absolute_sum += magnitude
                     peak = max(peak, magnitude)
+                    window_count += 1
+                    window_sum += magnitude
+                    window_peak = max(window_peak, magnitude)
+                    if window_count == 3200:  # 200 ms at the input's 16 kHz rate.
+                        window = (window_index * 200, round(window_sum / window_count), window_peak)
+                        if len(first_windows) < 5:
+                            first_windows.append(window)
+                        last_windows.append(window)
+                        window_index += 1
+                        window_count = window_sum = window_peak = 0
                 self._pcm_bytes += len(pcm)
                 now = time.monotonic()
                 if self._pace_input and target > now:
@@ -105,10 +120,20 @@ class SpeechToSpeechInput:
             )
             self.backend.endpoint_event.set()
         finally:
+            if window_count:
+                window = (window_index * 200, round(window_sum / window_count), window_peak)
+                if len(first_windows) < 5:
+                    first_windows.append(window)
+                last_windows.append(window)
             telemetry_logger.info(
                 "voice input turn=%s decoded_samples=%d avg_abs=%d peak=%d",
                 self.turn_id, sample_count,
                 round(absolute_sum / sample_count) if sample_count else 0, peak,
+            )
+            # Numeric envelopes only; do not retain speech or infer VAD from amplitude.
+            telemetry_logger.info(
+                "voice input turn=%s pcm_envelope_ms_avg_peak first=%s last=%s",
+                self.turn_id, first_windows, list(last_windows),
             )
 
     async def send_audio(self, packet: bytes) -> None:
