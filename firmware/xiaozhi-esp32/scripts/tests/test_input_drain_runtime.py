@@ -49,3 +49,21 @@ def test_production_input_drain_and_stop_order(tmp_path):
         check=True, timeout=180,
     )
     subprocess.run([str(binary)], check=True, timeout=15)
+
+@pytest.mark.parametrize("board", ["HENSUN_CAM_PILOT_V1", "HENSUN_NOCAM_PILOT_V1"])
+def test_half_duplex_board_cannot_wake_on_own_reply(tmp_path, board):
+    source = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+    speaking = source.split("case kDeviceStateSpeaking:", 1)[1].split("case kDeviceStateWifiConfiguring:", 1)[0]
+    branch = speaking[speaking.index("#if"):speaking.index("#endif") + len("#endif")]
+    program = '''#include <cassert>
+struct Audio { bool wake = true; void EnableWakeWordDetection(bool enabled) { wake = enabled; }
+bool IsAfeWakeWord() { return true; } };
+int main() { Audio audio_service_;
+''' + branch + '\nassert(!audio_service_.wake); }\n'
+    compiler = shlex.split(os.environ.get("CXX", "g++"))
+    src = tmp_path / "speaking.cc"
+    binary = tmp_path / "speaking.exe"
+    src.write_text(program, encoding="utf-8")
+    subprocess.run([*compiler, "-std=c++17", "-DCONFIG_BOARD_TYPE_" + board + "=1",
+                    str(src), "-o", str(binary)], check=True, timeout=180)
+    subprocess.run([str(binary)], check=True, timeout=15)

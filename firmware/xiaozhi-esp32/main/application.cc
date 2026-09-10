@@ -1738,7 +1738,7 @@ void Application::HandleStateChangedEvent() {
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
-#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1
+#if CONFIG_BOARD_TYPE_HENSUN_CAM_PILOT_V1 || CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
                 // Hensun is half-duplex. Listening for the wake word while its
                 // own speaker is active can make the reply interrupt itself.
                 audio_service_.EnableWakeWordDetection(false);
