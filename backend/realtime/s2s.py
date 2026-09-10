@@ -477,19 +477,7 @@ async def process_s2s_turn(
             await manager.retire(lease, code=1011, reason="tts ready timeout")
         return False
     finally:
-        source.invalidate()
-        for task in (finish_task, packet_task):
-            if task is not None:
-                task.cancel()
-        if reply_id is not None and not stopped and playback.reply_id == reply_id:
-            with contextlib.suppress(Exception):
-                await playback.stop(websocket, lease, reply_id, turn_id, wait_for_drain=False)
-        await asyncio.gather(*(t for t in (finish_task, packet_task) if t), return_exceptions=True)
-        try:
-            await source.cancel()
-        finally:
-            if encoder is not None:
-                await encoder.cancel()
+        # Record before awaited cleanup: device disconnect may cancel cleanup again.
         task = asyncio.create_task(
             record_s2s_usage(
                 websocket.app.state.session_factory,
@@ -533,3 +521,16 @@ async def process_s2s_turn(
                 separators=(",", ":"),
             ),
         )
+        source.invalidate()
+        for task in (finish_task, packet_task):
+            if task is not None:
+                task.cancel()
+        if reply_id is not None and not stopped and playback.reply_id == reply_id:
+            with contextlib.suppress(Exception):
+                await playback.stop(websocket, lease, reply_id, turn_id, wait_for_drain=False)
+        await asyncio.gather(*(t for t in (finish_task, packet_task) if t), return_exceptions=True)
+        try:
+            await source.cancel()
+        finally:
+            if encoder is not None:
+                await encoder.cancel()

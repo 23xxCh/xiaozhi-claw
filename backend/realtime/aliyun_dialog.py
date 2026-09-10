@@ -256,12 +256,16 @@ class AliyunDialogBackend:
                     "RespondingEnded",
                 }:
                     telemetry_logger.info(
-                        "aliyun event turn=%s kind=%s finished=%s text_chars=%d pcm_sent=%d",
+                        "aliyun event turn=%s kind=%s finished=%s "
+                        "text_chars=%d pcm_sent=%d state=%s",
                         self._turn_id,
                         kind,
                         output.get("finished") is True,
                         len(output.get("text", "")) if isinstance(output.get("text"), str) else 0,
                         self._sent_pcm_bytes,
+                        output.get("state") if output.get("state") in {
+                            "Listening", "Thinking", "Responding", "Idle"
+                        } else "other",
                     )
                 if kind == "Started":
                     if not isinstance(output.get("dialog_id"), str) or not output["dialog_id"]:

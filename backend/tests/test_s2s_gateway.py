@@ -770,3 +770,23 @@ def test_cloud_endpoint_without_more_device_frames_and_late_stop(
         assert socket.receive_json()["type"] == "pong"
     open_backend.assert_awaited_once()
     assert backend.end_calls == 1
+
+async def test_timeout_outcome_survives_disconnect_during_cleanup(turn, monkeypatch, caplog):
+    monkeypatch.setattr(s2s, "FIRST_AUDIO_TIMEOUT_SECONDS", 0.01)
+    closing = asyncio.Event()
+
+    async def slow_close():
+        closing.set()
+        await asyncio.Event().wait()
+
+    turn.backend.close = slow_close
+    caplog.set_level("INFO", logger="uvicorn.error")
+    task = turn.start()
+    await asyncio.wait_for(closing.wait(), 1)
+    task.cancel()  # Device closes its socket immediately after receiving the error.
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    (row,) = await usage_rows(turn)
+    assert row.error_code == "response-first-audio-timeout"
+    assert any('"error_code":"response-first-audio-timeout"' in r.message
+               for r in caplog.records if "voice turn outcome" in r.message)
