@@ -30,6 +30,20 @@ if (-not (Test-Path -LiteralPath $statePath)) {
     return
 }
 
+$runtimeRoot = Split-Path -Parent $statePath
+New-Item -ItemType File -Path (Join-Path $runtimeRoot "supervisor.stop") -Force | Out-Null
+$supervisorPath = Join-Path $runtimeRoot "supervisor.json"
+if (Test-Path -LiteralPath $supervisorPath) {
+    $supervisor = Get-Content -Raw -LiteralPath $supervisorPath | ConvertFrom-Json
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($supervisor.pid)" -ErrorAction SilentlyContinue
+    if ($process -and $process.CommandLine -like '*local_pilot_supervisor.py*') {
+        Wait-Process -Id $supervisor.pid -Timeout 20 -ErrorAction SilentlyContinue
+        if (Get-Process -Id $supervisor.pid -ErrorAction SilentlyContinue) {
+            throw "Supervisor has not stopped; refusing to race automatic recovery."
+        }
+    }
+}
+# Re-read after the supervisor exits; a restart may have updated the tracked PID.
 $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
 $endedAt = Get-Date
 $startedAt = [DateTimeOffset]::Parse([string]$state.started_at)

@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,15 @@ ROOT = Path(__file__).resolve().parents[2]
 )
 def test_pilot_preflight_preserves_running_configuration(tmp_path: Path, case: str) -> None:
     (tmp_path / "scripts").mkdir()
-    shutil.copy(ROOT / "scripts/start_local_pilot.ps1", tmp_path / "scripts/start_local_pilot.ps1")
+    launcher = (ROOT / "scripts/start_local_pilot.ps1").read_text(encoding="utf-8-sig")
+    launcher = launcher.replace(
+        '$python = Join-Path $projectRoot ".venv\\Scripts\\python.exe"',
+        "$python = '" + sys.executable.replace("'", "''") + "'",
+    )
+    (tmp_path / "scripts/start_local_pilot.ps1").write_text(launcher, encoding="utf-8")
+    (tmp_path / "scripts/local_pilot_supervisor.py").write_text(
+        "import sys\nassert sys.argv[1:] == ['--ensure']\n", encoding="utf-8",
+    )
     (tmp_path / ".venv/Scripts").mkdir(parents=True)
     (tmp_path / ".venv/Scripts/python.exe").touch()
     (tmp_path / "web").mkdir()
@@ -59,7 +68,7 @@ try { & (Join-Path $env:PILOT_TEST_ROOT "scripts/start_local_pilot.ps1") -NoBrow
 catch { Write-Output $_.Exception.Message; exit 2 }
 '''],
         env={**os.environ, "PILOT_TEST_ROOT": str(tmp_path), "PILOT_TEST_CASE": case},
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     assert result.returncode == (0 if case == "running" else 2), result.stdout + result.stderr
     assert [p.read_bytes() for p in protected] == before

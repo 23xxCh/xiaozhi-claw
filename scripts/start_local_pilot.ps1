@@ -93,6 +93,8 @@ if (Test-Path -LiteralPath $statePath) {
             throw "Running services use an earlier configuration. Run scripts/stop_local_pilot.ps1, then start again. No settings were changed."
         }
         Write-Output "Hensun local pilot is already running."
+        & $python (Join-Path $PSScriptRoot "local_pilot_supervisor.py") --ensure
+        if ($LASTEXITCODE -ne 0) { throw "Local supervisor failed to start." }
         if (-not $NoBrowser) {
             Start-Process "http://$HostAddress`:3000"
         }
@@ -171,11 +173,11 @@ try {
     $webOut = Join-Path $runtimeRoot "web-$timestamp.log"
 
     $control = Start-Process -FilePath $python `
-        -ArgumentList @("-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000") `
+        -ArgumentList @("-X", "faulthandler", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000") `
         -WorkingDirectory $projectRoot -WindowStyle Hidden `
         -RedirectStandardOutput $controlOut -RedirectStandardError "$controlOut.err" -PassThru
     $gateway = Start-Process -FilePath $python `
-        -ArgumentList @("-m", "uvicorn", "backend.realtime.main:app", "--host", "0.0.0.0", "--port", "8001") `
+        -ArgumentList @("-X", "faulthandler", "-m", "uvicorn", "backend.realtime.main:app", "--host", "0.0.0.0", "--port", "8001") `
         -WorkingDirectory $projectRoot -WindowStyle Hidden `
         -RedirectStandardOutput $gatewayOut -RedirectStandardError "$gatewayOut.err" -PassThru
     $web = Start-Process -FilePath $node `
@@ -235,6 +237,8 @@ try {
     } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
     Write-Output "Hensun local pilot is ready: http://$HostAddress`:3000"
+    & $python (Join-Path $PSScriptRoot "local_pilot_supervisor.py") --ensure
+    if ($LASTEXITCODE -ne 0) { throw "Local supervisor failed to start." }
     Write-Output "Control API: http://$HostAddress`:8000/docs"
     Write-Output "Realtime gateway: ws://$HostAddress`:8001/v1/device/ws"
     if ($databaseBackup) {
