@@ -82,14 +82,14 @@ export default function DashboardPage() {
           <div className="split">
             <div className="stack">
               <div className="eyebrow">首次使用</div>
-              <h2>只差一步，就可以开始聊天</h2>
+              <h2>{currentIndex === 0 ? "连接你的第一台 Hensun" : currentIndex === 1 ? "已认领，等待设备连上服务" : "设备已准备好，试着说声你好"}</h2>
               <p className="muted" style={{ margin: 0 }}>系统会根据真实设备状态，只告诉你当前最需要完成的操作。</p>
             </div>
             <BrandFace />
           </div>
           <div className="checklist" style={{ marginTop: 16 }}>
             {journey.map(([key, title, description], index) => {
-              const done = currentIndex === -1 || index < currentIndex;
+              const done = currentIndex >= 0 && index < currentIndex;
               const current = key === data.onboarding.next_action;
               const href = key === "bind_device" ? "/setup" : key === "bring_device_online" ? "/setup?mode=wifi" : "/console/devices";
               return (

@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const controlApiProxyUrl = process.env.CONTROL_API_PROXY_URL?.replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
+  // Validate a candidate without replacing the running console's build.
+  distDir: process.env.HENSUN_NEXT_DIST_DIR || ".next",
   output: "standalone",
   // Playwright starts the development server on localhost while tests use
   // 127.0.0.1. Keep that local-only origin explicit so development and CI

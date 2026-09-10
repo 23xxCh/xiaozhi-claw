@@ -6,7 +6,7 @@ The customer console is calm, capable, and usable by adults of different ages. D
 
 ## Tokens
 
-- Light: page `#FFFDF7`, surface `#FFFFFF`, text `#242218`, muted `#625E52`.
+- Light: page `#F5F6F8`, surface `#FFFFFF`, text `#202631`, muted `#606976`.
 - Dark: page `#171713`, surface `#22211C`, text `#F7F4EA`.
 - Brand: duck yellow `#F4C542`; yellow buttons always use dark text.
 - Radius: 10 / 16 / 24 px. Touch targets are at least 44 px.
@@ -33,3 +33,7 @@ Interactive motion is limited to short translation and color transitions. `prefe
 ## Original face source
 
 `web/components/brand-face.tsx` is a CSS reconstruction of Hensun's company-owned idle/welcome face used by the ESP32 `HensunFaceDisplay` engine and the internal “HensunAI 60-scene expression development package V1.0”. It is used as brand identity, not sourced from the public Xiaozhi emoji set.
+
+## Setup and role workspace
+
+Setup separates device-local Wi-Fi configuration, account claiming, and observed online status. Manual steps are guidance, never proof of connectivity. Keep instructions available offline without collecting the Wi-Fi password. The role workspace uses a compact role list and sectioned editor; save applies to the selected role on the next turn.

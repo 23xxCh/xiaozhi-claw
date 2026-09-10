@@ -15,6 +15,7 @@ test("phone Wi-Fi help remains readable offline and never collects or submits a 
   await page.route("**/v1/**", (route) => { apiCalls += 1; return route.abort(); });
   await page.goto("/setup?mode=wifi");
   await expect(page.getByRole("heading", { name: "恢复设备联网" })).toBeVisible();
+  await page.getByRole("button", { name: /设置家庭网络/ }).click();
   const ap = page.getByRole("link", { name: "打开设备配网页" });
   await expect(ap).toHaveAttribute("href", "http://192.168.4.1");
   await expect(ap).toHaveAttribute("target", "_blank");
@@ -22,9 +23,11 @@ test("phone Wi-Fi help remains readable offline and never collects or submits a 
   await context.setOffline(true);
   await page.getByText("找不到热点或连接失败", { exact: true }).click();
   await expect(page.getByText(/手机仍连接设备热点时无法访问本网站属于正常情况/)).toBeVisible();
+  await page.getByRole("button", { name: /连接设备热点/ }).click();
   await expect(page.getByText(/Xiaozhi-XXXX/)).toBeVisible();
   const width = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
   expect(width.page).toBeLessThanOrEqual(width.viewport);
+  await page.getByRole("button", { name: /设置家庭网络/ }).click();
   const box = await ap.boundingBox();
   expect(box!.height).toBeGreaterThanOrEqual(44);
   expect(apiCalls).toBe(0);
@@ -67,4 +70,17 @@ test("progress explicitly requests the selected second device", async ({ page })
   await page.goto("/console?device_id=device-second");
   await expect(page.getByText("开始第一次对话", { exact: true })).toBeVisible();
   expect(requestedId).toBe("device-second");
+});
+
+
+test("setup keeps manual progress separate from connection and claim completion", async ({ page }) => {
+  await page.goto("/setup");
+  await expect(page.getByText("插电，等设备显示配网提示。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "下一步", exact: true }).click();
+  await expect(page.getByText("在手机的 Wi-Fi 设置中连接 Xiaozhi-XXXX。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "打开设备配网页" })).toBeHidden();
+  await page.getByRole("button", { name: /返回并确认/ }).click();
+  await expect(page.getByText(/配网成功还不代表云端在线/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "输入绑定码，认领设备" })).toHaveAttribute("href", "/claim");
+  await expect(page.getByText("设备在线，可以聊天", { exact: true })).toHaveCount(0);
 });

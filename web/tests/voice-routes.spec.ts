@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 import type { Agent, ModelPreset, VoicePreset } from "../lib/types";
@@ -84,7 +85,7 @@ test("managed application disables local persona without losing previous configu
   const { patches } = await mockCatalog(page);
   await page.getByLabel("语音方案", { exact: true }).selectOption("aliyun-dialog");
   await expect(page.getByLabel("性格", { exact: true })).toBeDisabled();
-  await expect(page.getByText(/当前方案每轮独立/)).toBeVisible();
+  await expect(page.getByText(/阿里应用负责对话服务/)).toBeVisible();
   await page.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect.poll(() => patches.length).toBe(1);
   expect(patches[0]).toMatchObject({ model_preset_id: "aliyun-dialog", voice_preset_id: "aliyun-app-default" });
@@ -92,4 +93,23 @@ test("managed application disables local persona without losing previous configu
   expect(patches[0]).not.toHaveProperty("tools");
   await page.getByLabel("语音方案", { exact: true }).selectOption("fast-chat");
   await expect(page.getByLabel("性格", { exact: true })).toBeEnabled();
+});
+
+
+test("redesigned workspace and setup fit phone and desktop with accessible controls", async ({ page }) => {
+  await mockCatalog(page);
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto("/console/agents");
+    await expect(page.getByRole("heading", { name: "定义你的助手" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const report = await new AxeBuilder({ page }).analyze();
+    expect(report.violations.filter((v) => ["serious", "critical"].includes(v.impact ?? ""))).toEqual([]);
+    await page.screenshot({ path: `../run/console-redesign-agents-${width}.png`, fullPage: true });
+    await page.goto("/setup");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const setup = await new AxeBuilder({ page }).analyze();
+    expect(setup.violations.filter((v) => ["serious", "critical"].includes(v.impact ?? ""))).toEqual([]);
+    await page.screenshot({ path: `../run/console-redesign-setup-${width}.png`, fullPage: true });
+  }
 });

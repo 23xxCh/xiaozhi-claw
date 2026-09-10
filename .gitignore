@@ -31,3 +31,6 @@ web/test-results/
 backups/
 build/
 run/
+
+# Isolated frontend verification builds
+web/.next-candidate/

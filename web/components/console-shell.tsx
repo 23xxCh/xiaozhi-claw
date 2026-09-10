@@ -50,7 +50,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
       <aside className="sidebar">
         <Link className="brand" href="/console" aria-label="Hensun AI 首页">
           <BrandFace small />
-          <span className="brand-copy">Hensun AI<small>Personal console</small></span>
+          <span className="brand-copy">Hensun AI<small>桌面陪伴 · 由你定义</small></span>
         </Link>
         <nav className="nav" aria-label="客户控制台">
           {desktopLinks.map((item) => {
@@ -68,7 +68,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           <small>当前公开版本仅供 18 岁以上用户使用</small>
         </div>
       </aside>
-      <main className="main"><div className="content">{children}</div></main>
+      <main className="main"><div className="console-topbar"><span>我的空间 <span aria-hidden="true"> / </span> {links.find((item) => active(pathname, item.href))?.label ?? "设置"}</span><Link href="/setup">连接新设备 ↗</Link></div><div className="content">{children}</div></main>
       <nav className="mobile-nav" aria-label="手机导航" ref={moreRef}>
         {mobileLinks.map((item) => {
           const Icon = item.icon;
