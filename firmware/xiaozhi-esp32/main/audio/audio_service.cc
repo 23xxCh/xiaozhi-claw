@@ -267,7 +267,20 @@ void AudioService::AudioInputTask() {
         }
 
         if (audio_input_need_warmup_.exchange(false)) {
+#if CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1
+            // RX keeps running during playback. Waiting without reading leaves
+            // old DMA audio queued for the newly reset VAD. Drain it and the
+            // settling interval in the input-owning task before feeding AFE.
+            const int64_t warmup_until = esp_timer_get_time() + 120000;
+            std::vector<int16_t> discarded;
+            while (esp_timer_get_time() < warmup_until) {
+                if (!ReadAudioData(discarded, 16000, 160)) {
+                    break;
+                }
+            }
+#else
             vTaskDelay(pdMS_TO_TICKS(120));
+#endif
             continue;
         }
 

@@ -15,6 +15,19 @@ EMOTES = BOARD / "standard_emotes"
 
 
 class HensunNoCamPilotBoardTests(unittest.TestCase):
+    def test_capture_warmup_drains_rx_before_feeding_new_turn(self):
+        source = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        warmup = source.split("if (audio_input_need_warmup_.exchange(false)) {", 1)[1]
+        nocam = warmup.split("#else", 1)[0]
+        self.assertIn("CONFIG_BOARD_TYPE_HENSUN_NOCAM_PILOT_V1", nocam)
+        self.assertIn("esp_timer_get_time() + 120000", nocam)
+        self.assertIn("while (esp_timer_get_time() < warmup_until)", nocam)
+        self.assertIn("if (!ReadAudioData(discarded, 16000, 160))", nocam)
+        self.assertIn("break;", nocam)
+        self.assertNotIn("vTaskDelay", nocam)
+        self.assertNotIn("Feed(", nocam)
+        self.assertIn("#endif\n            continue;", warmup)
+
     def test_capture_resets_vad_and_does_not_play_into_its_microphone(self):
         engine = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
         enable = engine.split("void AfeAudioEngine::EnableVoiceProcessing", 1)[1].split("void ", 1)[0]
