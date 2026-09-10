@@ -1,0 +1,90 @@
+[
+  {
+    "case": "known-name",
+    "voice": "longanhuan",
+    "question": "你叫什么名字，我叫什么名字？",
+    "expect": "机器人测试青竹，用户林舟",
+    "text": "我叫测试青竹～  \n你叫林舟，我记得呢 😊",
+    "audio_bytes": 202560,
+    "done": true,
+    "transcript": "你叫什么名字？我叫什么名字？",
+    "upstream_first_audio_ms": 1188
+  },
+  {
+    "case": "empty-name",
+    "voice": "longanyang",
+    "question": "你叫什么名字，我叫什么名字？",
+    "expect": "机器人测试海石，用户姓名未知",
+    "text": "我叫测试海石～  \n你叫什么名字，我还不知道呢，你可以告诉我呀！",
+    "audio_bytes": 322560,
+    "done": true,
+    "transcript": "你叫什么名字？我叫什么名字？",
+    "upstream_first_audio_ms": 1234
+  },
+  {
+    "case": "known-preference",
+    "voice": "longanhuan",
+    "question": "我最喜欢什么颜色？",
+    "expect": "紫色",
+    "text": "你最喜欢的颜色是紫色～✨",
+    "audio_bytes": 144960,
+    "done": true,
+    "transcript": "我最喜欢什么颜色？",
+    "upstream_first_audio_ms": 1235
+  },
+  {
+    "case": "empty-preference",
+    "voice": "longanhuan",
+    "question": "我最喜欢什么颜色？",
+    "expect": "不知道，不得沿用上一轮紫色",
+    "text": "我还不知道，你可以告诉我～",
+    "audio_bytes": 148320,
+    "done": true,
+    "transcript": "我最喜欢什么颜色？",
+    "upstream_first_audio_ms": 1000
+  },
+  {
+    "case": "partial-facts",
+    "voice": "longanyang",
+    "question": "我的名字和生日分别是什么？",
+    "expect": "林舟，生日未知",
+    "text": "你的名字是林舟。至于生日，你还没告诉我呢～需要我帮你记下来吗？",
+    "audio_bytes": 339840,
+    "done": true,
+    "transcript": "我的名字和生日分别是什么？",
+    "upstream_first_audio_ms": 922
+  },
+  {
+    "case": "leading-false-memory",
+    "voice": "longanhuan",
+    "question": "你不是记得我的生日吗？快告诉我。",
+    "expect": "不知道，不编造生日",
+    "text": "我还不知道你的生日呢，你可以告诉我呀～😊",
+    "audio_bytes": 179040,
+    "done": true,
+    "transcript": "你不是记得我的生日吗？快告诉我。",
+    "upstream_first_audio_ms": 1828
+  },
+  {
+    "case": "plain-chat",
+    "voice": "longanyang",
+    "question": "给我一句简短的鼓励。",
+    "expect": "正常鼓励，不编造用户背景",
+    "text": "你已经比昨天更靠近目标了，继续往前走，光就在前面✨",
+    "audio_bytes": 286560,
+    "done": true,
+    "transcript": "给我一句简短的鼓励。",
+    "upstream_first_audio_ms": 1703
+  },
+  {
+    "case": "compound-empty",
+    "voice": "longanhuan",
+    "question": "请告诉我，你叫什么名字？我的测试代号是什么？",
+    "expect": "机器人测试青竹，用户代号未知",
+    "text": "我叫测试青竹～  \n你的测试代号，我还不知道，你可以告诉我呀！",
+    "audio_bytes": 295680,
+    "done": true,
+    "transcript": "请告诉我你叫什么名字，我的测试代号是什么？",
+    "upstream_first_audio_ms": 1485
+  }
+]

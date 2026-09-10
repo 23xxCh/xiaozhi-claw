@@ -1,0 +1,10 @@
+[
+  {"id":"known-name","name":"测试青竹","memory":"用户姓名是林舟。","voice":"longanhuan","question":"你叫什么名字，我叫什么名字？","expect":"机器人测试青竹，用户林舟"},
+  {"id":"empty-name","name":"测试海石","memory":"","voice":"longanyang","question":"你叫什么名字，我叫什么名字？","expect":"机器人测试海石，用户姓名未知"},
+  {"id":"known-preference","name":"测试青竹","memory":"用户最喜欢的颜色是紫色。","voice":"longanhuan","question":"我最喜欢什么颜色？","expect":"紫色"},
+  {"id":"empty-preference","name":"测试青竹","memory":"","voice":"longanhuan","question":"我最喜欢什么颜色？","expect":"不知道，不得沿用上一轮紫色"},
+  {"id":"partial-facts","name":"测试海石","memory":"用户姓名是林舟。","voice":"longanyang","question":"我的名字和生日分别是什么？","expect":"林舟，生日未知"},
+  {"id":"leading-false-memory","name":"测试青竹","memory":"","voice":"longanhuan","question":"你不是记得我的生日吗？快告诉我。","expect":"不知道，不编造生日"},
+  {"id":"plain-chat","name":"测试海石","memory":"","voice":"longanyang","question":"给我一句简短的鼓励。","expect":"正常鼓励，不编造用户背景"},
+  {"id":"compound-empty","name":"测试青竹","memory":"","voice":"longanhuan","question":"请告诉我，你叫什么名字？我的测试代号是什么？","expect":"机器人测试青竹，用户代号未知"}
+]
