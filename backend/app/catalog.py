@@ -213,6 +213,15 @@ DEFAULT_VOICE_PRESETS = (
 )
 
 
+# Candidate voices remain hidden until the deployed application's TTS is verified.
+DEFAULT_VOICE_PRESETS += tuple(
+    {"id": f"aliyun-app-{voice}", "display_name": name, "language": "zh-CN",
+     "provider": "aliyun-dialog", "voice": voice, "enabled": False, "is_default": False}
+    for voice, name in (("longanhuan", "龙安欢 / 欢脱元气女声"),
+                        ("longanyang", "龙安洋 / 阳光男声"))
+)
+
+
 _existing_voice_keys = {(v["provider"], v["voice"]) for v in DEFAULT_VOICE_PRESETS}
 DEFAULT_VOICE_PRESETS += tuple(
     {"id": f"{provider}-{sha256(item['voice'].encode()).hexdigest()[:16]}",

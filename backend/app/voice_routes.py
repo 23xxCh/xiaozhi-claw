@@ -56,13 +56,15 @@ def validate_model_route(model: ModelPreset) -> None:
         raise ValueError("voice route is unsupported")
 
 
-def route_capabilities(model: ModelPreset) -> RouteCapabilities:
+def route_capabilities(
+    model: ModelPreset, *, managed_role_overrides: bool = False,
+) -> RouteCapabilities:
     cascade = model.route_kind == "cascade"
     return RouteCapabilities(
         llm_temperature=cascade,
-        tts_speech_rate=cascade,
+        tts_speech_rate=cascade or model.route_kind == "managed_app",
         tools=model.route_kind != "managed_app",
-        system_prompt=model.route_kind != "managed_app",
+        system_prompt=model.route_kind != "managed_app" or managed_role_overrides,
         history=model.route_kind != "managed_app",
         supported_tool_ids=list(CASCADE_TOOL_IDS) if model.route_kind != "managed_app" else [],
     )
@@ -70,7 +72,9 @@ def route_capabilities(model: ModelPreset) -> RouteCapabilities:
 
 def voice_is_compatible(model: ModelPreset, voice: VoicePreset) -> bool:
     if model.route_kind == "managed_app":
-        return voice.provider == "aliyun-dialog" and voice.voice == "application-default"
+        return voice.provider == "aliyun-dialog" and voice.voice in {
+            "application-default", "longanhuan", "longanyang",
+        }
     if model.route_kind == "realtime_s2s":
         return (
             model.realtime_provider == voice.provider == "doubao"

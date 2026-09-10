@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,9 +77,11 @@ async def _validate_presets(
 
 
 def _validate_parameters(
-    model: ModelPreset, payload: AgentCreateRequest | AgentUpdateRequest, agent: Agent | None = None
+    model: ModelPreset, payload: AgentCreateRequest | AgentUpdateRequest,
+    agent: Agent | None = None,
+    *, managed_role_overrides: bool = False,
 ) -> None:
-    capabilities = route_capabilities(model)
+    capabilities = route_capabilities(model, managed_role_overrides=managed_role_overrides)
     if not capabilities.system_prompt and "system_prompt" in payload.model_fields_set:
         if agent is None or payload.system_prompt != agent.system_prompt:
             raise HTTPException(status_code=422, detail="selected route uses application persona")
@@ -129,6 +131,7 @@ async def list_agents(
 @router.post("", response_model=AgentResponse)
 async def create_agent(
     payload: AgentCreateRequest,
+    request: Request,
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> AgentResponse:
@@ -136,7 +139,10 @@ async def create_agent(
     model, voice = await _validate_presets(
         session, payload.model_preset_id, payload.voice_preset_id
     )
-    _validate_parameters(model, payload)
+    _validate_parameters(
+        model, payload,
+        managed_role_overrides=request.app.state.settings.aliyun_dialog_role_overrides,
+    )
     if payload.usage_profile_id is None:
         profile_id = (await ensure_adult_profile(session, user)).id
     else:
@@ -181,6 +187,7 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     payload: AgentUpdateRequest,
+    request: Request,
     user: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> AgentResponse:
@@ -188,7 +195,10 @@ async def update_agent(
     model_id = payload.model_preset_id or agent.model_preset_id
     voice_id = payload.voice_preset_id or agent.voice_preset_id
     model, _ = await _validate_presets(session, model_id, voice_id)
-    _validate_parameters(model, payload, agent)
+    _validate_parameters(
+        model, payload, agent,
+        managed_role_overrides=request.app.state.settings.aliyun_dialog_role_overrides,
+    )
     if payload.name is not None:
         agent.name = payload.name
     if payload.avatar_url is not None:

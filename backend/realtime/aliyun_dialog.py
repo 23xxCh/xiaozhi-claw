@@ -1,8 +1,8 @@
 """Managed Aliyun application: one push-to-talk turn per upstream session.
 
-The application owns persona, voice and cloud tools. Hensun never forwards
-device commands from this provider. Completed dialogs can resume by ID without
-overriding the application's persona or uploading transcript history.
+The application owns cloud tools. Verified templates can accept connection-level
+role variables and compatible voices. Hensun never forwards device commands from
+this provider. Completed dialogs can resume by ID.
 """
 
 import asyncio
@@ -32,6 +32,11 @@ class AliyunDialogConfig:
     timeout_seconds: float = 15.0
     dialog_id: str = ""
     client_id: str = ""
+    voice: str = "application-default"
+    speech_rate: float = 1.0
+    persona: str = field(default="", repr=False)
+    memory_context: str = field(default="", repr=False)
+    name: str = ""
 
 
 class AliyunDialogBackend:
@@ -69,6 +74,11 @@ class AliyunDialogBackend:
             or url.query
             or url.fragment
             or config.timeout_seconds <= 0
+            or not 0.5 <= config.speech_rate <= 2.0
+            or config.voice not in {"application-default", "longanhuan", "longanyang"}
+            or len(config.persona) > 8000
+            or len(config.memory_context) > 4000
+            or len(config.name) > 80
             or not all(
                 x.strip() and "\n" not in x and "\r" not in x
                 for x in (config.api_key, config.workspace_id, config.app_id)
@@ -110,7 +120,17 @@ class AliyunDialogBackend:
                             "audio_format": "pcm",
                             "sample_rate": 16000,
                         },
-                        "downstream": {"audio_format": "pcm", "sample_rate": 24000},
+                        "downstream": {
+                            "audio_format": "pcm", "sample_rate": 24000,
+                            "speech_rate": round(config.speech_rate * 100),
+                            **({"voice": config.voice}
+                               if config.voice != "application-default" else {}),
+                        },
+                        **({"biz_params": {"user_prompt_params": {
+                            "hensun_persona": config.persona,
+                            "hensun_name": config.name,
+                            "hensun_memory": config.memory_context,
+                        }}} if config.persona else {}),
                         "client_info": {
                             "user_id": config.client_id or backend.task_id.replace("-", ""),
                             "device": {"uuid": config.client_id or backend.task_id},

@@ -49,23 +49,30 @@ async def voice_library(
     }
 
 
-def _model_response(item: ModelPreset, voices: list[VoicePreset]) -> ModelPresetResponse:
+def _model_response(
+    item: ModelPreset, voices: list[VoicePreset], *, managed_role_overrides: bool = False,
+) -> ModelPresetResponse:
     compatible = compatible_voices(item, voices)
     return ModelPresetResponse(
         id=item.id,
         display_name=item.display_name,
-        description=item.description,
+        description=("阿里托管对话；可修改项以当前开放能力为准。"
+                     if item.route_kind == "managed_app" else item.description),
         is_default=item.is_default,
         route_kind=item.route_kind,
-        capabilities=route_capabilities(item),
+        capabilities=route_capabilities(item, managed_role_overrides=managed_role_overrides),
         compatible_voice_ids=[voice.id for voice in compatible],
         default_voice_preset_id=compatible[0].id if compatible else None,
     )
 
 
-def _admin_model_response(item: ModelPreset, voices: list[VoicePreset]) -> AdminModelPresetResponse:
+def _admin_model_response(
+    item: ModelPreset, voices: list[VoicePreset], *, managed_role_overrides: bool = False,
+) -> AdminModelPresetResponse:
     return AdminModelPresetResponse(
-        **_model_response(item, voices).model_dump(),
+        **_model_response(
+            item, voices, managed_role_overrides=managed_role_overrides,
+        ).model_dump(),
         realtime_provider=item.realtime_provider,
         realtime_model=item.realtime_model,
         asr_provider=item.asr_provider,
@@ -84,6 +91,7 @@ def _admin_model_response(item: ModelPreset, voices: list[VoicePreset]) -> Admin
 
 @router.get("/model-presets", response_model=list[ModelPresetResponse])
 async def list_model_presets(
+    request: Request,
     _: User = Depends(require_adult_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[ModelPresetResponse]:
@@ -97,7 +105,10 @@ async def list_model_presets(
         )
     )
     voices = list(await session.scalars(select(VoicePreset).where(VoicePreset.enabled.is_(True))))
-    return [_model_response(item, voices) for item in presets]
+    return [_model_response(
+        item, voices,
+        managed_role_overrides=request.app.state.settings.aliyun_dialog_role_overrides,
+    ) for item in presets]
 
 
 @router.get("/voice-presets", response_model=list[VoicePresetResponse])
@@ -144,6 +155,7 @@ async def list_voice_presets(
 
 @router.get("/admin/model-presets", response_model=list[AdminModelPresetResponse])
 async def admin_model_presets(
+    request: Request,
     _: StaffUser = Depends(require_staff(StaffRole.SUPERADMIN, StaffRole.ENGINEERING)),
     session: AsyncSession = Depends(get_session),
 ) -> list[AdminModelPresetResponse]:
@@ -151,7 +163,10 @@ async def admin_model_presets(
     await session.commit()
     presets = list(await session.scalars(select(ModelPreset).order_by(ModelPreset.display_name)))
     voices = list(await session.scalars(select(VoicePreset).where(VoicePreset.enabled.is_(True))))
-    return [_admin_model_response(item, voices) for item in presets]
+    return [_admin_model_response(
+        item, voices,
+        managed_role_overrides=request.app.state.settings.aliyun_dialog_role_overrides,
+    ) for item in presets]
 
 
 @router.patch("/admin/model-presets/{preset_id}", response_model=AdminModelPresetResponse)
@@ -201,4 +216,7 @@ async def update_model_preset(
         payload={"preset_id": preset.id, "fields": sorted(changes)},
     )
     await session.commit()
-    return _admin_model_response(preset, voices)
+    return _admin_model_response(
+        preset, voices,
+        managed_role_overrides=request.app.state.settings.aliyun_dialog_role_overrides,
+    )

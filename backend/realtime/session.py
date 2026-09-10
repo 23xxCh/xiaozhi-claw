@@ -227,6 +227,7 @@ class AgentSnapshot:
     realtime_provider: str | None = None
     realtime_model: str | None = None
     memory_epoch: int = 0
+    name: str = ""
 
 
 class _UnavailableRealtimeAsrSession:
@@ -333,6 +334,7 @@ async def _load_snapshot(session: AsyncSession, device: Device) -> AgentSnapshot
         usage_profile_kind=profile.kind,
         config_version=agent.config_version,
         memory_epoch=agent.memory_epoch,
+        name=agent.name,
         system_prompt=agent.system_prompt,
         memory_consent=agent.memory_consent and profile_memory_allowed,
         asr_provider=model.asr_provider,
@@ -376,7 +378,9 @@ async def _load_context_sources(
     async with session_factory() as session:
         agent = await session.get(Agent, snapshot.agent_id)
         profile = await session.get(UsageProfile, snapshot.usage_profile_id)
-        if agent is None or profile is None:
+        if (agent is None or profile is None
+                or agent.usage_profile_id != profile.id
+                or agent.memory_epoch != snapshot.memory_epoch):
             return [], []
         profile_memory_allowed = (
             profile.kind == UsageProfileKind.ADULT.value or profile.memory_consent
@@ -2017,15 +2021,42 @@ async def serve_device_websocket(websocket: WebSocket) -> None:
             decoder = None
             try:
                 opening_at = time.monotonic()
+                memory_context = ""
+                if settings.aliyun_dialog_role_overrides and snapshot.memory_consent:
+                    try:
+                        async with asyncio.timeout(0.5):
+                            memories, summaries = await _load_context_sources(
+                                session_factory, snapshot, settings,
+                            )
+                        context = ContextBuilder().build(
+                            system_prompt="", current_question="", history=[],
+                            memories=memories, summaries=summaries, tools=None,
+                        )
+                        memory_context = "\n".join(str(item["content"]) for item in context.messages
+                                                   if item["role"] == "system")[:4000]
+                    except Exception:
+                        telemetry_logger.warning(
+                            "Aliyun memory context unavailable; continuing without memory"
+                        )
                 backend = await AliyunDialogBackend.open(AliyunDialogConfig(
                     api_key=settings.aliyun_dialog_api_key, url=settings.aliyun_dialog_url,
                     workspace_id=settings.aliyun_dialog_workspace_id,
                     app_id=settings.aliyun_dialog_app_id,
                     timeout_seconds=settings.provider_timeout_seconds,
+                    voice=snapshot.voice,
+                    speech_rate=snapshot.tts_speech_rate,
+                    persona=snapshot.system_prompt if settings.aliyun_dialog_role_overrides else "",
+                    name=snapshot.name,
+                    memory_context=memory_context,
                     dialog_id=(aliyun_previous.completed_dialog_id
                                if aliyun_previous is not None and history else ""),
-                    client_id=(aliyun_previous.config.client_id
-                               if aliyun_previous is not None and history else uuid.uuid4().hex),
+                    client_id=(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps([
+                        settings.aliyun_dialog_workspace_id, settings.aliyun_dialog_app_id,
+                        user_id, snapshot.usage_profile_id, snapshot.agent_id,
+                        snapshot.memory_epoch,
+                    ])).hex if settings.aliyun_dialog_role_overrides else
+                        (aliyun_previous.config.client_id
+                         if aliyun_previous is not None and history else uuid.uuid4().hex)),
                 ))
                 aliyun_previous = backend
                 decoder = StreamingOpusToPcm(settings.ffmpeg_path)

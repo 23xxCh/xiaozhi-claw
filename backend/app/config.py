@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     aliyun_dialog_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     aliyun_dialog_workspace_id: str = ""
     aliyun_dialog_app_id: str = ""
+    # Enable only after the cloud template variables are verified and native memory is off.
+    aliyun_dialog_role_overrides: bool = False
     doubao_realtime_enabled: bool = False
     doubao_realtime_validated: bool = False
     doubao_api_key: str = Field(default="", repr=False)

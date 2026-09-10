@@ -244,7 +244,7 @@ def test_complete_voice_library_keeps_candidates_gated_and_models_separate(clien
     assert response.status_code == 200
     voices = response.json()["voices"]
     assert Counter(v["provider"] for v in voices) == {
-        "dashscope": 48, "volc-tts": 444, "doubao": 294, "aliyun-dialog": 1,
+        "dashscope": 48, "volc-tts": 444, "doubao": 294, "aliyun-dialog": 3,
     }
     assert len({v["id"] for v in voices}) == len(voices)
     assert len(VOLC_S2S_VOICES) == 293 and len(VOLC_TTS_VOICES) == 444

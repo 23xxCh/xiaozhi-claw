@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import select
 
-from backend.app.models import Agent, Device, ModelPreset, ProviderUsage
+from backend.app.models import Agent, AgentMemory, Device, ModelPreset, ProviderUsage
+from backend.app.security import encrypt_memory
 from backend.realtime import aliyun_dialog, s2s
 from backend.realtime.aliyun_dialog import AliyunDialogBackend, AliyunDialogConfig
 from backend.realtime.providers import RealtimeProviderError
@@ -178,11 +179,15 @@ def test_catalog_gate_and_atomic_switch(client, admin_headers):
     }).status_code == 200
 
 
-def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, monkeypatch):
+@pytest.mark.parametrize("role_overrides", [False, True])
+def test_gateway_uses_ali_protocol_and_records_ali_usage(
+    client, admin_headers, monkeypatch, role_overrides,
+):
     from backend.realtime import session as realtime_session
 
     owned = provision_owned_device(client, admin_headers)
     enable_settings(client.app.state.settings)
+    client.app.state.settings.aliyun_dialog_role_overrides = role_overrides
     sockets = [AliSocket() for _ in range(3)]
     socket = sockets[0]
     monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(side_effect=sockets))
@@ -197,6 +202,12 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
             agent = await db.get(Agent, device.active_agent_id)
             agent.model_preset_id = model.id
             agent.voice_preset_id = "aliyun-app-default"
+            if role_overrides:
+                agent.memory_consent = True
+                db.add(AgentMemory(user_id=device.owner_user_id, agent_id=agent.id,
+                                   key="preferred-name",
+                                   encrypted_value=encrypt_memory(
+                                       "请叫我小林", client.app.state.settings)))
             await db.commit()
 
     client.portal.call(configure)
@@ -215,6 +226,12 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
         device.send_json({"type": "listen", "state": "stop"})
         receive_one_turn(device)
         first_start = json.loads(sockets[0].sent[0])["payload"]
+        if role_overrides:
+            assert first_start["parameters"]["biz_params"]["user_prompt_params"]["hensun_persona"]
+            params = first_start["parameters"]["biz_params"]["user_prompt_params"]
+            assert "小林" in params["hensun_memory"]
+        else:
+            assert "biz_params" not in first_start["parameters"]
         second_start = json.loads(sockets[1].sent[0])["payload"]
         assert "dialog_id" not in first_start["input"]
         assert second_start["input"]["dialog_id"] == "ali-session"
@@ -225,13 +242,21 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
                 row = await db.get(Device, owned["device_id"])
                 agent = await db.get(Agent, row.active_agent_id)
                 agent.config_version += 1
+                agent.memory_consent = False
+                agent.memory_epoch += 1
                 await db.commit()
         client.portal.call(change_configuration)
         device.send_json({"type": "listen", "state": "start"})
         device.send_bytes(b"fake-opus")
         device.send_json({"type": "listen", "state": "stop"})
         receive_one_turn(device)
-        assert "dialog_id" not in json.loads(sockets[2].sent[0])["payload"]["input"]
+        third_start = json.loads(sockets[2].sent[0])["payload"]
+        assert "dialog_id" not in third_start["input"]
+        if role_overrides:
+            params = third_start["parameters"]["biz_params"]["user_prompt_params"]
+            assert params["hensun_memory"] == ""
+            assert (third_start["parameters"]["client_info"]["user_id"]
+                    != first_start["parameters"]["client_info"]["user_id"])
     assert packets
     assert socket.directives().index("LocalRespondingEnded") < socket.directives().index("Stop")
 
@@ -245,3 +270,56 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(client, admin_headers, 
     assert rows[0].provider == "aliyun-dialog"
     assert rows[0].operation == "managed_dialog"
     assert rows[0].cost_status == "unknown"
+
+
+async def test_role_parameters_are_connection_scoped_and_not_logged(monkeypatch, caplog):
+    for voice, persona, rate in (("longanhuan", "温和可靠", .8), ("longanyang", "高效直接", 1.2)):
+        socket = AliSocket()
+        monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(return_value=socket))
+        backend = await AliyunDialogBackend.open(config(
+            voice=voice, persona=persona, name="小灿", speech_rate=rate,
+            memory_context="用户喜欢简短回答",
+        ))
+        params = json.loads(socket.sent[0])["payload"]["parameters"]
+        assert params["downstream"]["voice"] == voice
+        assert params["downstream"]["speech_rate"] == round(rate * 100)
+        assert params["biz_params"]["user_prompt_params"] == {
+            "hensun_persona": persona, "hensun_name": "小灿",
+            "hensun_memory": "用户喜欢简短回答",
+        }
+        assert persona not in caplog.text and "用户喜欢简短回答" not in caplog.text
+        await backend.close()
+
+
+@pytest.mark.parametrize("params", [{"speech_rate": 3}, {"voice": "Cherry"},
+                                    {"persona": "x" * 8001}])
+async def test_invalid_role_parameters_never_open_upstream(monkeypatch, params):
+    connect = AsyncMock()
+    monkeypatch.setattr(aliyun_dialog, "connect", connect)
+    with pytest.raises(RealtimeProviderError, match="invalid-config"):
+        await AliyunDialogBackend.open(config(**params))
+    connect.assert_not_called()
+
+
+def test_role_override_gate_and_ownership(client, admin_headers):
+    owner = _user_headers(client)
+    agent = client.get("/v1/agents", headers=owner).json()[0]
+    enable_settings(client.app.state.settings)
+    staff = _staff_headers(client, admin_headers)
+    assert client.patch("/v1/admin/model-presets/aliyun-dialog", headers=staff,
+                        json={"enabled": True, "confirm": True}).status_code == 200
+    client.app.state.settings.aliyun_dialog_role_overrides = True
+    route = next(m for m in client.get("/v1/model-presets", headers=owner).json()
+                 if m["id"] == "aliyun-dialog")
+    assert route["capabilities"]["system_prompt"] and route["capabilities"]["tts_speech_rate"]
+    payload = {"model_preset_id": "aliyun-dialog", "voice_preset_id": "aliyun-app-default",
+               "system_prompt": "新的角色", "tts_speech_rate": 1.2}
+    response = client.patch(f"/v1/agents/{agent['id']}", headers=owner, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["system_prompt"] == "新的角色"
+    stranger = client.post("/v1/auth/dev-login", json={
+        "openid": "different-owner", "adult_confirmed": True,
+    }).json()["access_token"]
+    assert client.patch(f"/v1/agents/{agent['id']}",
+                        headers={"Authorization": f"Bearer {stranger}"},
+                        json=payload).status_code == 404
