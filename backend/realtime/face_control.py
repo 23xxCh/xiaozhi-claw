@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -110,3 +111,20 @@ class FaceControlParser:
         if not stripped:
             return
         self._at_sentence_boundary = stripped[-1] in _SENTENCE_BOUNDARIES
+
+
+_REQUESTED_EMOTIONS = {
+    "开心": "happy", "惊讶": "surprised", "疑惑": "confused",
+    "关心": "caring", "难过": "sad", "害羞": "shy", "生气": "angry",
+}
+
+
+def requested_face_emotion(text: str) -> str | None:
+    """Only standalone explicit requests, never infer mood from a mentioned emotion."""
+    text = text.strip().rstrip("。！？!?，,").replace(" ", "")
+    match = re.fullmatch(
+        r"(?:请)?(?:你)?(?:做(?:一个|个)|表现(?:得)?|装作|来(?:一个|个))?"
+        r"(开心|惊讶|疑惑|关心|难过|害羞|生气)"
+        r"(?:一点|一些|的表情|表情)(?:吧|看看)?", text,
+    )
+    return _REQUESTED_EMOTIONS[match[1]] if match else None

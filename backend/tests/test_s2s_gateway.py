@@ -790,3 +790,20 @@ async def test_timeout_outcome_survives_disconnect_during_cleanup(turn, monkeypa
     assert row.error_code == "response-first-audio-timeout"
     assert any('"error_code":"response-first-audio-timeout"' in r.message
                for r in caplog.records if "voice turn outcome" in r.message)
+
+@pytest.mark.parametrize('text,expected', [
+    ('做个生气的表情', 'angry'), ('开心一点', 'happy'),
+    ('请你表现得害羞一点。', 'shy'), ('我今天很生气', None),
+    ('不要做个生气的表情', None), ('他说开心一点', None),
+])
+async def test_managed_expression_request_survives_audio_start(turn, text, expected):
+    turn.kwargs['snapshot'].route_kind = 'managed_app'
+    task = turn.start()
+    turn.backend.emit('transcript_final', text=text)
+    turn.backend.emit('text_final', text='好的。')
+    turn.backend.emit('audio', audio=b'\1\0' * 480)
+    turn.backend.emit('done', response_id='response-1')
+    await asyncio.wait_for(task, 2)
+    emotions = [m['emotion'] for m in turn.socket.messages if m.get('type') == 'llm']
+    assert emotions[-1] == (expected or 'neutral')
+    assert turn.socket.packets

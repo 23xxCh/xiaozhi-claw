@@ -17,6 +17,7 @@ from backend.app.safety import evaluate_text
 from backend.app.schemas import ProviderUsageDetails
 
 from .conversation_backend import ConversationBackend
+from .face_control import requested_face_emotion
 from .media import OpusPacketPacer, StreamingOpusToPcm, StreamingPcmToOpus
 from .playback import PlaybackReadyTimeout
 from .providers import RealtimeProviderError, RealtimeProviderTimeout
@@ -313,6 +314,7 @@ async def process_s2s_turn(
     transcript = ""
     reply = ""
     transcript_ready = False
+    speech_emotion = "neutral"
     pending_audio: list[bytes] = []
     pending_audio_bytes = 0
     audio_bytes = 0
@@ -360,7 +362,7 @@ async def process_s2s_turn(
             encoder = StreamingPcmToOpus(settings.ffmpeg_path)
             await encoder.start()
             packet_task = asyncio.create_task(pump_packets())
-            await send({"type": "llm", "emotion": "neutral"})
+            await send({"type": "llm", "emotion": speech_emotion})
         if packet_task.done():
             await packet_task
         await encoder.write(pcm)
@@ -402,6 +404,8 @@ async def process_s2s_turn(
                         error_code = "asr-no-speech"
                         await send({"type": "listen", "state": "resume"})
                         return False
+                    if snapshot.route_kind == "managed_app":
+                        speech_emotion = requested_face_emotion(transcript) or "neutral"
                     transcript_ready = True
                     source.input_accepted.set()
                     await send({"type": "stt", "text": transcript, "emotion": "neutral"})
