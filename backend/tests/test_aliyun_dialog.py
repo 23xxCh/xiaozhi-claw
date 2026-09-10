@@ -188,6 +188,8 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(
     owned = provision_owned_device(client, admin_headers)
     enable_settings(client.app.state.settings)
     client.app.state.settings.aliyun_dialog_role_overrides = role_overrides
+    other_owner = _user_headers(client, "ali-memory-other-owner")
+    other_agent_id = client.get("/v1/agents", headers=other_owner).json()[0]["id"]
     sockets = [AliSocket() for _ in range(3)]
     socket = sockets[0]
     monkeypatch.setattr(aliyun_dialog, "connect", AsyncMock(side_effect=sockets))
@@ -200,10 +202,22 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(
             model.enabled = True
             device = await db.get(Device, owned["device_id"])
             agent = await db.get(Agent, device.active_agent_id)
+            owned["agent_id"] = agent.id
             agent.model_preset_id = model.id
             agent.voice_preset_id = "aliyun-app-default"
             if role_overrides:
                 agent.memory_consent = True
+                sibling = Agent(owner_user_id=agent.owner_user_id,
+                                usage_profile_id=agent.usage_profile_id, name="另一个角色")
+                db.add(sibling)
+                await db.flush()
+                other_agent = await db.get(Agent, other_agent_id)
+                for row, value in ((sibling, "同账户其他角色秘密"),
+                                   (other_agent, "其他账户秘密")):
+                    db.add(AgentMemory(user_id=row.owner_user_id, agent_id=row.id,
+                                       key="isolation-check",
+                                       encrypted_value=encrypt_memory(
+                                           value, client.app.state.settings)))
                 db.add(AgentMemory(user_id=device.owner_user_id, agent_id=agent.id,
                                    key="preferred-name",
                                    encrypted_value=encrypt_memory(
@@ -230,6 +244,8 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(
             assert first_start["parameters"]["biz_params"]["user_prompt_params"]["hensun_persona"]
             params = first_start["parameters"]["biz_params"]["user_prompt_params"]
             assert "小林" in params["hensun_memory"]
+            assert "同账户其他角色秘密" not in params["hensun_memory"]
+            assert "其他账户秘密" not in params["hensun_memory"]
         else:
             assert "biz_params" not in first_start["parameters"]
         second_start = json.loads(sockets[1].sent[0])["payload"]
@@ -245,7 +261,13 @@ def test_gateway_uses_ali_protocol_and_records_ali_usage(
                 agent.memory_consent = False
                 agent.memory_epoch += 1
                 await db.commit()
-        client.portal.call(change_configuration)
+        if role_overrides:
+            response = client.patch(f"/v1/agents/{owned['agent_id']}",
+                                    headers={"Authorization": f"Bearer {owned['user_token']}"},
+                                    json={"memory_consent": False})
+            assert response.status_code == 200, response.text
+        else:
+            client.portal.call(change_configuration)
         device.send_json({"type": "listen", "state": "start"})
         device.send_bytes(b"fake-opus")
         device.send_json({"type": "listen", "state": "stop"})
