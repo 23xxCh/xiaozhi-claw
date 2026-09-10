@@ -1485,9 +1485,17 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
-        if (IsControlChannelReady()) {
-            protocol_->SendStopListening();
+        if (!IsControlChannelReady() || !audio_service_.FinishVoiceInput()) {
+            AbortDialogueToStandby("input-drain-failed", true);
+            return;
         }
+        while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+            if (!protocol_->SendAudio(std::move(packet))) {
+                AbortDialogueToStandby("input-send-failed", true);
+                return;
+            }
+        }
+        protocol_->SendStopListening();
         SetDeviceState(kDeviceStateIdle);
     }
 }

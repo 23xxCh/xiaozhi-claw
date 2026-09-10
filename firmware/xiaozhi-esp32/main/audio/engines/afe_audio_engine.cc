@@ -268,6 +268,7 @@ void AfeAudioEngine::EnableWakeWordDetection(bool enable) {
 }
 
 void AfeAudioEngine::EnableVoiceProcessing(bool enable) {
+    std::lock_guard<std::mutex> lock(voice_output_mutex_);
     if (enable) {
         if ((xEventGroupGetBits(event_group_) & kVoiceProcessingEnabled) == 0) {
             // Wake detection may keep AFE active between utterances. Start a
@@ -280,6 +281,19 @@ void AfeAudioEngine::EnableVoiceProcessing(bool enable) {
         xEventGroupClearBits(event_group_, kVoiceProcessingEnabled);
         is_speaking_ = false;
     }
+    UpdateActiveState();
+}
+
+void AfeAudioEngine::FinishVoiceProcessing() {
+    // Serialize with PCM/VAD production, including the frame that signalled VAD end.
+    std::lock_guard<std::mutex> lock(voice_output_mutex_);
+    xEventGroupClearBits(event_group_, kVoiceProcessingEnabled);
+    if (!output_reset_pending_.load() && !output_buffer_.empty() && output_callback_) {
+        output_buffer_.resize(frame_samples_, 0);
+        output_callback_(std::move(output_buffer_));
+    }
+    output_buffer_.clear();
+    is_speaking_ = false;
     UpdateActiveState();
 }
 
@@ -375,6 +389,7 @@ void AfeAudioEngine::ApplyAfeControls() {
 }
 
 void AfeAudioEngine::ApplyPendingReset() {
+    std::lock_guard<std::mutex> output_lock(voice_output_mutex_);
     if (!reset_pending_.exchange(false)) {
         return;
     }
@@ -419,8 +434,11 @@ void AfeAudioEngine::ProcessingTask() {
         if (bits & kWakeWordEnabled) {
             HandleWakeWordResult(result);
         }
-        if (kUseAfeForVoiceProcessing && (bits & kVoiceProcessingEnabled)) {
-            HandleVoiceResult(result);
+        if (kUseAfeForVoiceProcessing) {
+            std::lock_guard<std::mutex> lock(voice_output_mutex_);
+            if (generation == control_generation_.load() && IsVoiceProcessingEnabled()) {
+                HandleVoiceResult(result);
+            }
         }
     }
 }
@@ -495,6 +513,10 @@ void AfeAudioEngine::HandleVoiceResult(const afe_fetch_result_t* result) {
 }
 
 void AfeAudioEngine::OutputRawAudio(const std::vector<int16_t>& data) {
+    std::lock_guard<std::mutex> lock(voice_output_mutex_);
+    if (!IsVoiceProcessingEnabled()) {
+        return;
+    }
     if (!output_callback_ || codec_ == nullptr) {
         return;
     }

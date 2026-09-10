@@ -169,6 +169,7 @@ jobs:
       - name: Run Hensun firmware checks
         working-directory: firmware/xiaozhi-esp32
         run: |
+          python -m pytest scripts/tests/test_input_drain_runtime.py
           python -m pytest scripts/tests/test_hensun_cam_pilot.py scripts/tests/test_hensun_dialogue_faces.py scripts/tests/test_hensun_emote_formal.py scripts/tests/test_hensun_emote_lab.py scripts/tests/test_build.py
       - name: Run release configuration gate
         run: python scripts/release_gate.py

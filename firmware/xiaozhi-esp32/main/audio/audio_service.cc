@@ -445,6 +445,7 @@ void AudioService::OpusCodecTask() {
         if (!audio_encode_queue_.empty()) {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
+            encode_in_flight_ = true;
             audio_queue_cv_.notify_all();
             lock.unlock();
 
@@ -489,12 +490,20 @@ void AudioService::OpusCodecTask() {
                     debug_statistics_.encode_count++;
                 } else {
                     ESP_LOGE(TAG, "Failed to encode audio, error code: %d", ret);
+                    if (task->type == kAudioTaskTypeEncodeToSendQueue) {
+                        send_queue_overflowed_.store(true, std::memory_order_release);
+                    }
                 }
             } else {
+                if (task->type == kAudioTaskTypeEncodeToSendQueue) {
+                    send_queue_overflowed_.store(true, std::memory_order_release);
+                }
                 ESP_LOGE(TAG, "Failed to encode audio: encoder not configured or invalid frame size (got %u, expected %u)",
                          task->pcm.size(), encoder_frame_size_);
             }
             lock.lock();
+            encode_in_flight_ = false;
+            audio_queue_cv_.notify_all();
         }
     }
 
@@ -562,6 +571,9 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
          * whole input pipeline when the send queue stops being drained (e.g. network
          * congestion or a failed UDP send). */
         if (audio_encode_queue_.size() >= MAX_ENCODE_TASKS_IN_QUEUE) {
+            if (audio_encode_queue_.front()->type == kAudioTaskTypeEncodeToSendQueue) {
+                send_queue_overflowed_.store(true, std::memory_order_release);
+            }
             audio_encode_queue_.pop_front();
             dropped_total = ++debug_statistics_.encode_drop_count;
         }
@@ -696,6 +708,20 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         }
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     }
+}
+
+bool AudioService::FinishVoiceInput() {
+    if (!audio_engine_initialized_) {
+        return false;
+    }
+    audio_engine_->FinishVoiceProcessing();
+    xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    // Send queue insertion never waits for the network. Bound codec draining so
+    // a failed codec cannot freeze the main task or silently submit partial input.
+    return audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(1000), [this]() {
+        return audio_encode_queue_.empty() && !encode_in_flight_;
+    }) && !send_queue_overflowed_.load(std::memory_order_acquire);
 }
 
 void AudioService::EnableAudioTesting(bool enable) {

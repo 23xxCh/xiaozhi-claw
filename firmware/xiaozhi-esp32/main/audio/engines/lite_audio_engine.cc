@@ -63,11 +63,21 @@ void LiteAudioEngine::EnableWakeWordDetection(bool enable) {
 }
 
 void LiteAudioEngine::EnableVoiceProcessing(bool enable) {
+    std::lock_guard<std::mutex> lock(output_mutex_);
     voice_processing_enabled_ = enable;
     if (!enable) {
-        std::lock_guard<std::mutex> lock(output_mutex_);
         output_buffer_.clear();
     }
+}
+
+void LiteAudioEngine::FinishVoiceProcessing() {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    voice_processing_enabled_ = false;
+    if (!output_buffer_.empty() && output_callback_) {
+        output_buffer_.resize(frame_samples_, 0);
+        output_callback_(std::move(output_buffer_));
+    }
+    output_buffer_.clear();
 }
 
 void LiteAudioEngine::EnableDeviceAec(bool enable) {
@@ -127,6 +137,9 @@ void LiteAudioEngine::OutputRawAudio(const std::vector<int16_t>& data) {
     }
 
     std::lock_guard<std::mutex> lock(output_mutex_);
+    if (!voice_processing_enabled_) {
+        return;
+    }
     const size_t channels = codec_->input_channels();
     if (channels <= 1) {
         output_buffer_.insert(output_buffer_.end(), data.begin(), data.end());

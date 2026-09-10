@@ -129,6 +129,7 @@ public:
 
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);
+    bool FinishVoiceInput();
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
@@ -182,6 +183,7 @@ private:
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
     bool decode_in_flight_ = false;
+    bool encode_in_flight_ = false;
     bool output_in_flight_ = false;
     bool playback_drained_notified_ = true;
     uint32_t playback_generation_ = 0;

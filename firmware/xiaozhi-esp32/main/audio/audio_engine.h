@@ -20,6 +20,8 @@ public:
 
     virtual void EnableWakeWordDetection(bool enable) = 0;
     virtual void EnableVoiceProcessing(bool enable) = 0;
+    // Stop producing PCM and zero-pad a partial final codec frame before returning.
+    virtual void FinishVoiceProcessing() = 0;
     virtual void EnableDeviceAec(bool enable) = 0;
 
     virtual bool HasWakeWord() const = 0;
