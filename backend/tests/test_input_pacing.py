@@ -6,7 +6,8 @@ from backend.realtime import s2s
 
 
 @pytest.mark.parametrize("paced", [True, False])
-async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch, paced):
+async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch, paced, caplog):
+    caplog.set_level("INFO", logger="uvicorn.error")
     now = 0.0
     uploaded = []
 
@@ -45,3 +46,5 @@ async def test_upload_does_not_accumulate_send_and_timer_overhead(monkeypatch, p
     assert source._pcm_bytes == 64000
     assert source._send_seconds == pytest.approx(0.5)
     assert source._send_seconds + source._pacing_seconds == pytest.approx(now)
+
+    assert "decoded_samples=32000 avg_abs=12722 peak=25443" in caplog.text

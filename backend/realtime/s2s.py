@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import struct
 import time
 from collections.abc import Awaitable, Callable
 
@@ -71,6 +72,7 @@ class SpeechToSpeechInput:
 
     async def _upload(self) -> None:
         target = time.monotonic()
+        sample_count = absolute_sum = peak = 0
         try:
             async for pcm in self.decoder.chunks():
                 if not self._pcm_bytes:
@@ -79,6 +81,11 @@ class SpeechToSpeechInput:
                         self.turn_id,
                         round((time.monotonic() - self._started_at) * 1000),
                     )
+                for (sample,) in struct.iter_unpack("<h", pcm):
+                    magnitude = abs(sample)
+                    sample_count += 1
+                    absolute_sum += magnitude
+                    peak = max(peak, magnitude)
                 self._pcm_bytes += len(pcm)
                 now = time.monotonic()
                 if self._pace_input and target > now:
@@ -96,6 +103,12 @@ class SpeechToSpeechInput:
                 "voice input turn=%s upload_error=%s", self.turn_id, type(exc).__name__
             )
             self.backend.endpoint_event.set()
+        finally:
+            telemetry_logger.info(
+                "voice input turn=%s decoded_samples=%d avg_abs=%d peak=%d",
+                self.turn_id, sample_count,
+                round(absolute_sum / sample_count) if sample_count else 0, peak,
+            )
 
     async def send_audio(self, packet: bytes) -> None:
         if self._upload_error is not None:

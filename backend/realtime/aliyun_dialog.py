@@ -252,6 +252,7 @@ class AliyunDialogBackend:
                     "Started",
                     "DialogStateChanged",
                     "SpeechContent",
+                    "SpeechStarted",
                     "SpeechEnded",
                     "RespondingEnded",
                 }:
